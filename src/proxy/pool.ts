@@ -309,15 +309,6 @@ export function resolveAccountEgress(
   };
 }
 
-/** @deprecated use resolveAccountEgress */
-export function resolveAccountProxy(
-  account: { proxyId?: string | null; proxy?: AccountProxy },
-  pool: PoolProxy[],
-  bridge?: ClashBridgeConfig | null
-): AccountProxy {
-  return resolveAccountEgress(account, pool, bridge).proxy;
-}
-
 /**
  * Merge subscription-imported proxies into the pool:
  * - remove previous entries from the same subscriptionId

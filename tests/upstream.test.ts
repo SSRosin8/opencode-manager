@@ -276,6 +276,55 @@ describe("UpstreamClient chatCompletions", () => {
     expect(events[1].accountId).not.toBe(events[0].accountId);
   });
 
+  it.each([401, 403, 429, 500])(
+    "returns the final HTTP %i response body after all workers are exhausted",
+    async (status) => {
+      const events: UpstreamAttemptEvent[] = [];
+      const fetchImpl = vi.fn(async () =>
+        jsonResponse(status, { error: { message: `final-${status}` } })
+      );
+      const client = new UpstreamClient(baseSettings(), fetchImpl);
+      client.setAttemptObserver((event) => events.push(event));
+
+      const result = await client.chatCompletions({
+        body: { model: "big-pickle" },
+        stream: false,
+      });
+
+      expect(result.status).toBe(status);
+      expect(await new Response(result.body).json()).toEqual({
+        error: { message: `final-${status}` },
+      });
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(events).toHaveLength(2);
+      expect(events.at(-1)?.willRetry).toBe(false);
+      expect(events.every((event) => event.maxAttempts === 2)).toBe(true);
+    }
+  );
+
+  it("does not retry an unbound worker after the normal attempt loop", async () => {
+    const events: UpstreamAttemptEvent[] = [];
+    const fetchImpl = vi.fn(async () => {
+      throw new Error("direct route failed");
+    });
+    const client = new UpstreamClient(
+      baseSettings({
+        accounts: [{ id: "direct", apiKey: "key", proxyId: null, proxy: null }],
+      }),
+      fetchImpl
+    );
+    client.setAttemptObserver((event) => events.push(event));
+
+    await expect(client.chatCompletions({
+      body: { model: "big-pickle" },
+      stream: false,
+    })).rejects.toThrow("direct route failed");
+
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ attempt: 1, maxAttempts: 1, willRetry: false });
+  });
+
   it("observes a transport failure and the successful retry as one request", async () => {
     const events: UpstreamAttemptEvent[] = [];
     let calls = 0;

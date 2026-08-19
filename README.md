@@ -33,6 +33,8 @@ The service listens on `127.0.0.1:9876` by default. For first-time setup, Clash/
 
 > **[Local usage guide](docs/USAGE.md)**
 
+Development boundaries and module ownership are defined in [AGENTS.md](AGENTS.md) and [the architecture guide](docs/ARCHITECTURE.zh-CN.md). `npm run validate` enforces the structure limit, strict types, build, and tests.
+
 - Admin UI: http://127.0.0.1:9876/
 - Chat: `POST http://127.0.0.1:9876/v1/chat/completions`
 - Models: `GET http://127.0.0.1:9876/v1/models`

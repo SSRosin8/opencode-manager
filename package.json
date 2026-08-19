@@ -9,7 +9,10 @@
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "check:structure": "node scripts/check-structure.mjs",
+    "check:types": "tsc --noEmit --noUnusedLocals --noUnusedParameters",
+    "validate": "npm run check:structure && npm run check:types && npm run build && npm test"
   },
   "engines": {
     "node": ">=20.18.1"

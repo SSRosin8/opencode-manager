@@ -343,10 +343,6 @@ export class UpstreamClient {
     const transformed = transformRequestBody(model, opts.body, opts.stream);
     const url = buildChatCompletionsUrl(this.settings.baseUrl);
     const maxAttempts = Math.max(1, this.rotator.getAccounts().length);
-    const directFallbackAllowed = this.rotator
-      .getAccounts()
-      .some((account) => !account.proxyId && !account.proxy);
-    const totalAttempts = maxAttempts + (directFallbackAllowed ? 1 : 0);
     const requestId = randomUUID();
     let last: UpstreamResult | null = null;
     let lastError: Error | null = null;
@@ -395,14 +391,12 @@ export class UpstreamClient {
           clashNodeName: account.clashNodeName,
           model: model || null,
           attempt: attempt + 1,
-          maxAttempts: totalAttempts,
+          maxAttempts,
           status: response.status,
           outcome: responseOutcome(response.status),
           error: response.ok ? null : `Upstream returned HTTP ${response.status}`,
           latencyMs: Date.now() - startedAt,
-          willRetry: Boolean(
-            retry && (attempt + 1 < maxAttempts || directFallbackAllowed)
-          ),
+          willRetry: Boolean(retry && attempt + 1 < maxAttempts),
           at: new Date().toISOString(),
         });
         if (retry) {
@@ -414,12 +408,14 @@ export class UpstreamClient {
           } else {
             this.rotator.markCooldown(account);
           }
-          try {
-            await response.arrayBuffer();
-          } catch {
-            /* ignore */
+          if (attempt + 1 < maxAttempts) {
+            try {
+              await response.arrayBuffer();
+            } catch {
+              /* ignore */
+            }
+            last.body = null;
           }
-          last.body = null;
           continue;
         }
 
@@ -436,12 +432,12 @@ export class UpstreamClient {
           clashNodeName: account.clashNodeName,
           model: model || null,
           attempt: attempt + 1,
-          maxAttempts: totalAttempts,
+          maxAttempts,
           status: null,
           outcome: "transport_error",
           error: safeErrorMessage(err, account.apiKey),
           latencyMs: Date.now() - startedAt,
-          willRetry: attempt + 1 < maxAttempts || directFallbackAllowed,
+          willRetry: attempt + 1 < maxAttempts,
           at: new Date().toISOString(),
         });
         // Clash/proxy failure → try next worker
@@ -452,81 +448,13 @@ export class UpstreamClient {
 
     if (last) return last;
 
-    if (this.rotator.getAccounts().every((account) => Boolean(account.proxyId))) {
-      throw lastError ?? new Error("All bound worker egress routes failed");
-    }
-
-    // Last resort: direct (no proxy) so a misconfigured Clash doesn't total black-hole chat
-    const fallbackStartedAt = Date.now();
-    const fallbackAccount = this.rotator
-      .getAccounts()
-      .find((account) => !account.proxyId && !account.proxy);
-    if (!fallbackAccount) throw lastError ?? new Error("All bound worker egress routes failed");
-    try {
-      const headers = this.buildHeaders(
-        effectiveApiKey(
-          fallbackAccount?.apiKey || "",
-          fallbackAccount?.kind ?? "anonymous_zen"
-        ),
-        opts.stream,
-        opts.clientHeaders
-      );
-      const response = await this.rawFetch(
-        url,
-        { method: "POST", headers, body: JSON.stringify(transformed) },
-        null
-      );
-      this.emitAttempt({
-        requestId,
-        operation: "chat",
-        accountId: fallbackAccount.id,
-        accountKind: fallbackAccount.kind,
-        proxyId: null,
-        clashNodeName: null,
-        model: model || null,
-        attempt: maxAttempts + 1,
-        maxAttempts: totalAttempts,
-        status: response.status,
-        outcome: responseOutcome(response.status),
-        error: response.ok ? null : `Upstream returned HTTP ${response.status}`,
-        latencyMs: Date.now() - fallbackStartedAt,
-        willRetry: false,
-        at: new Date().toISOString(),
-      });
-      return {
-        status: response.status,
-        headers: response.headers,
-        body: response.body,
-        accountId: fallbackAccount.id,
-        proxyId: null,
-        clashNodeName: null,
-      };
-    } catch (error) {
-      this.emitAttempt({
-        requestId,
-        operation: "chat",
-        accountId: fallbackAccount.id,
-        accountKind: fallbackAccount.kind,
-        proxyId: null,
-        clashNodeName: null,
-        model: model || null,
-        attempt: maxAttempts + 1,
-        maxAttempts: totalAttempts,
-        status: null,
-        outcome: "transport_error",
-        error: safeErrorMessage(error, fallbackAccount.apiKey),
-        latencyMs: Date.now() - fallbackStartedAt,
-        willRetry: false,
-        at: new Date().toISOString(),
-      });
-      throw lastError ?? new Error("All upstream chat attempts failed");
-    }
+    throw lastError ?? new Error("All upstream chat attempts failed");
   }
 
   /**
    * Models list: prefer success over sticky proxy.
    * 1) Try each worker (with Clash if bound)
-   * 2) Fall back to direct GET (OpenCode models often works without account proxy)
+   * Unbound workers are already direct routes and participate in the same loop.
    */
   async listModels(clientHeaders?: Record<string, string>): Promise<UpstreamResult> {
     if (!this.rotator.getAccounts().length) {
@@ -534,10 +462,6 @@ export class UpstreamClient {
     }
     const url = buildModelsUrl(this.settings.baseUrl);
     const maxAttempts = Math.max(1, this.rotator.getAccounts().length);
-    const directFallbackAllowed = this.rotator
-      .getAccounts()
-      .some((account) => !account.proxyId && !account.proxy);
-    const totalAttempts = maxAttempts + (directFallbackAllowed ? 1 : 0);
     const requestId = randomUUID();
     let lastError: Error | null = null;
 
@@ -573,14 +497,12 @@ export class UpstreamClient {
           clashNodeName: account.clashNodeName,
           model: null,
           attempt: attempt + 1,
-          maxAttempts: totalAttempts,
+          maxAttempts,
           status: response.status,
           outcome: responseOutcome(response.status),
           error: response.ok ? null : `Upstream returned HTTP ${response.status}`,
           latencyMs: Date.now() - startedAt,
-          willRetry: Boolean(
-            retry && (attempt + 1 < maxAttempts || directFallbackAllowed)
-          ),
+          willRetry: Boolean(retry && attempt + 1 < maxAttempts),
           at: new Date().toISOString(),
         });
         if (retry) {
@@ -592,17 +514,14 @@ export class UpstreamClient {
           } else {
             this.rotator.markCooldown(account);
           }
-          try {
-            await response.arrayBuffer();
-          } catch {
-            /* ignore */
+          if (attempt + 1 < maxAttempts) {
+            try {
+              await response.arrayBuffer();
+            } catch {
+              /* ignore */
+            }
+            continue;
           }
-          continue;
-        }
-
-        // Proxy path returned something HTTP-shaped — pass through (even 401/403)
-        if (response.status < 500) {
-          if (response.ok) this.rotator.markSuccess(account);
           return {
             status: response.status,
             headers: response.headers,
@@ -613,13 +532,15 @@ export class UpstreamClient {
           };
         }
 
-        // 5xx via proxy → try next / direct
-        try {
-          await response.arrayBuffer();
-        } catch {
-          /* ignore */
-        }
-        this.rotator.markCooldown(account);
+        if (response.ok) this.rotator.markSuccess(account);
+        return {
+          status: response.status,
+          headers: response.headers,
+          body: response.body,
+          accountId: account.id,
+          proxyId: account.proxyId,
+          clashNodeName: account.clashNodeName,
+        };
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
         this.emitAttempt({
@@ -631,87 +552,18 @@ export class UpstreamClient {
           clashNodeName: account.clashNodeName,
           model: null,
           attempt: attempt + 1,
-          maxAttempts: totalAttempts,
+          maxAttempts,
           status: null,
           outcome: "transport_error",
           error: safeErrorMessage(err, account.apiKey),
           latencyMs: Date.now() - startedAt,
-          willRetry: attempt + 1 < maxAttempts || directFallbackAllowed,
+          willRetry: attempt + 1 < maxAttempts,
           at: new Date().toISOString(),
         });
         this.rotator.markCooldown(account);
       }
     }
 
-    if (this.rotator.getAccounts().every((account) => Boolean(account.proxyId))) {
-      throw lastError ?? new Error("All bound worker egress routes failed");
-    }
-
-    // Direct fallback is allowed only when at least one worker is intentionally unbound.
-    const fallbackAccount = this.rotator
-      .getAccounts()
-      .find((account) => !account.proxyId && !account.proxy);
-    if (!fallbackAccount) throw lastError ?? new Error("All bound worker egress routes failed");
-    const headers = this.buildHeaders(
-      effectiveApiKey(fallbackAccount.apiKey, fallbackAccount.kind),
-      false,
-      clientHeaders
-    );
-    headers["Accept"] = "application/json";
-
-    const fallbackStartedAt = Date.now();
-    try {
-      const response = await this.rawFetch(url, { method: "GET", headers }, null);
-      this.emitAttempt({
-        requestId,
-        operation: "models",
-        accountId: fallbackAccount.id,
-        accountKind: fallbackAccount.kind,
-        proxyId: null,
-        clashNodeName: null,
-        model: null,
-        attempt: maxAttempts + 1,
-        maxAttempts: totalAttempts,
-        status: response.status,
-        outcome: responseOutcome(response.status),
-        error: response.ok ? null : `Upstream returned HTTP ${response.status}`,
-        latencyMs: Date.now() - fallbackStartedAt,
-        willRetry: false,
-        at: new Date().toISOString(),
-      });
-      return {
-        status: response.status,
-        headers: response.headers,
-        body: response.body,
-        accountId: fallbackAccount.id,
-        proxyId: null,
-        clashNodeName: null,
-      };
-    } catch (err) {
-      this.emitAttempt({
-        requestId,
-        operation: "models",
-        accountId: fallbackAccount.id,
-        accountKind: fallbackAccount.kind,
-        proxyId: null,
-        clashNodeName: null,
-        model: null,
-        attempt: maxAttempts + 1,
-        maxAttempts: totalAttempts,
-        status: null,
-        outcome: "transport_error",
-        error: safeErrorMessage(err, fallbackAccount.apiKey),
-        latencyMs: Date.now() - fallbackStartedAt,
-        willRetry: false,
-        at: new Date().toISOString(),
-      });
-      const message =
-        (err instanceof Error ? err.message : String(err)) ||
-        lastError?.message ||
-        "models fetch failed";
-      throw new Error(
-        lastError ? `${message} (also: ${lastError.message})` : message
-      );
-    }
+    throw lastError ?? new Error("All upstream model attempts failed");
   }
 }

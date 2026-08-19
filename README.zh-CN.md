@@ -33,6 +33,8 @@ npm start
 
 > **[本机使用指南](docs/USAGE.zh-CN.md)**
 
+开发边界和模块职责见 [AGENTS.md](AGENTS.md) 与 [架构说明](docs/ARCHITECTURE.zh-CN.md)。`npm run validate` 会统一执行结构限制、严格类型检查、构建和测试。
+
 - 管理后台：http://127.0.0.1:9876/
 - 对话：`POST http://127.0.0.1:9876/v1/chat/completions`
 - 模型列表：`GET http://127.0.0.1:9876/v1/models`

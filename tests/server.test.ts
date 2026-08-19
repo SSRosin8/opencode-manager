@@ -68,6 +68,25 @@ describe("gateway HTTP entry", () => {
     }
   });
 
+  it("rejects request bodies larger than one MiB", async () => {
+    const { port, dir } = await bootMocked(async () => {
+      throw new Error("oversized requests must not reach upstream");
+    });
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "x".repeat(1024 * 1024 + 1),
+      });
+      expect(response.status).toBe(413);
+      expect(await response.json()).toMatchObject({
+        error: { type: "request_body_too_large" },
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("protects all relay route aliases with X-OC-Relay-Key when configured", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ocfr-"));
     const store = new SettingsStore(join(dir, "settings.json"));
