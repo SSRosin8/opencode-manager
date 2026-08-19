@@ -496,6 +496,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
       border: 1px solid var(--border); border-radius: var(--radius);
       background: var(--bg); padding: 12px 14px; margin-bottom: 10px;
     }
+    .worker-card.disabled-worker { opacity: 0.68; }
     .worker-card .hd {
       display: flex; justify-content: space-between; align-items: center;
       margin-bottom: 10px; font-weight: 600;
@@ -1011,6 +1012,14 @@ export const ADMIN_HTML = `<!DOCTYPE html>
               <p class="sub" data-i18n="workersSub">API keys and proxy pool bindings for IP isolation.</p>
             </div>
             <div class="page-actions">
+              <label class="field" style="margin:0;display:flex;align-items:center;gap:8px">
+                <span data-i18n="routingStrategy">Routing strategy</span>
+                <select class="select" id="routing-strategy" style="width:auto;min-width:170px">
+                  <option value="anonymous_first" data-i18n="anonymousFirst">Anonymous first</option>
+                  <option value="authenticated_first" data-i18n="authenticatedFirst">Signed-in first</option>
+                  <option value="mixed" data-i18n="mixedStrategy">Mixed</option>
+                </select>
+              </label>
               <button type="button" class="btn" id="btn-assign-proxies" data-i18n="assignHealthyProxies">Assign healthy proxies</button>
               <button type="button" class="btn" id="btn-add-account" data-i18n="addWorker">Add worker</button>
               <button type="button" class="btn btn-primary" id="btn-save-accounts" data-i18n="saveWorkers">Save workers</button>
@@ -1156,6 +1165,8 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         colRequests: "Requests",
         colChat: "Chat",
         colModels: "Models",
+        modelsUsed: "Models used",
+        modelsEndpoint: "Model-list requests",
         colPromptTok: "Prompt tokens",
         colCompletionTok: "Completion tokens",
         colTotalTok: "Total tokens",
@@ -1211,6 +1222,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         colActions: "Actions", clashBridge: "Clash Bridge",
         timeout: "Timeout", notTested: "—",
         toastBatchDone: (ok, fail, skip) => "Batch test done · ok " + ok + " · fail " + fail + (skip ? " · skip " + skip : ""),
+        toastBatchWorkers: (n) => n + " anonymous worker(s) added",
         toastTestOk: (name, ms) => "Proxy test succeeded · " + name + " · " + ms + "ms",
         toastTestFail: (name, err) => "Proxy test failed · " + name + (err ? " · " + err : ""),
         toastTesting: "Testing nodes…",
@@ -1232,6 +1244,9 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         toastAssignFail: "Auto-assign failed",
         remove: "Remove", idLabel: "Id / label", apiKey: "API key (Bearer)",
         workerKind: "Zen access", anonymousZen: "Anonymous Zen (public)", authenticatedZen: "Signed-in Zen key",
+        routingStrategy: "Routing strategy", anonymousFirst: "Anonymous first",
+        authenticatedFirst: "Signed-in first", mixedStrategy: "Mixed",
+        workerEnabled: "Receive traffic", disabledState: "Disabled",
         bindProxy: "Bind pool node",
         directNoProxy: "(direct / no proxy)",
         tagDirect: "[direct] ", tagBridge: "[Clash bridge] ",
@@ -1310,6 +1325,8 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         colRequests: "请求次数",
         colChat: "Chat",
         colModels: "Models",
+        modelsUsed: "使用模型",
+        modelsEndpoint: "模型列表请求",
         colPromptTok: "输入 tokens",
         colCompletionTok: "输出 tokens",
         colTotalTok: "总 tokens",
@@ -1365,6 +1382,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         colActions: "操作", clashBridge: "Clash 桥接",
         timeout: "超时", notTested: "—",
         toastBatchDone: (ok, fail, skip) => "批量测试完成 · 成功 " + ok + " · 失败 " + fail + (skip ? " · 跳过 " + skip : ""),
+        toastBatchWorkers: (n) => "已自动添加 " + n + " 个匿名 Worker",
         toastTestOk: (name, ms) => "代理测试成功 · " + name + " · " + ms + "ms",
         toastTestFail: (name, err) => "代理测试失败 · " + name + (err ? " · " + err : ""),
         toastTesting: "正在测试节点…",
@@ -1386,6 +1404,9 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         toastAssignFail: "一键分配失败",
         remove: "移除", idLabel: "Id / 标签", apiKey: "API Key（Bearer）",
         workerKind: "Zen 访问类型", anonymousZen: "匿名 Zen（public）", authenticatedZen: "登录 Zen Key",
+        routingStrategy: "调度策略", anonymousFirst: "匿名优先",
+        authenticatedFirst: "登录 Zen 优先", mixedStrategy: "混合轮询",
+        workerEnabled: "参与流量调度", disabledState: "已禁用",
         bindProxy: "绑定代理池节点",
         directNoProxy: "（直连 / 无代理）",
         tagDirect: "[直连] ", tagBridge: "[Clash桥接] ",
@@ -1667,14 +1688,15 @@ export const ADMIN_HTML = `<!DOCTYPE html>
       const total = pool.length;
       const ready = st.readyAccountCount ?? 0;
       const workers = st.accountCount ?? (settings.accounts || []).length;
-      const busy = Math.max(0, workers - ready);
-      const pct = workers ? Math.round((ready / workers) * 100) : 0;
+      const enabledWorkers = st.enabledAccountCount ?? workers;
+      const busy = Math.max(0, enabledWorkers - ready);
+      const pct = enabledWorkers ? Math.round((ready / enabledWorkers) * 100) : 0;
       const running = !!st.running;
       const clashOn = !!st.clashBridgeEnabled || bridgeOn();
 
       const html = [
         { k: t("metricGateway"), v: running ? t("running") : t("stopped"), vcls: running ? "ok" : "", foot: running ? '<span class="tag ok">' + escapeHtml(t("healthy")) + '</span>' + sparkSvg(1, "#22c55e") : '<span class="tag err">' + escapeHtml(t("stopped")) + '</span>' },
-        { k: t("metricWorkers"), v: workers + " " + t("total") + ", " + ready + " " + t("ready"), vcls: "", foot: '<div class="donut-wrap"><div class="donut" style="--p:' + pct + '%" data-pct="' + pct + '%"></div><div class="legend-dots"><span class="r">' + ready + " " + t("ready") + '</span><span class="b">' + busy + " " + t("busy") + '</span></div></div>' },
+        { k: t("metricWorkers"), v: workers + " " + t("total") + ", " + enabledWorkers + " " + t("enabled"), vcls: "", foot: '<div class="donut-wrap"><div class="donut" style="--p:' + pct + '%" data-pct="' + pct + '%"></div><div class="legend-dots"><span class="r">' + ready + " " + t("ready") + '</span><span class="b">' + busy + " " + t("busy") + '</span></div></div>' },
         { k: t("metricProxyNodes"), v: total + " " + t("total"), vcls: "blue", foot: sparkSvg(2, "#3b82f6") },
         { k: t("metricDirect"), v: String(direct), vcls: "blue", foot: sparkSvg(3, "#60a5fa") },
         { k: t("metricBridged"), v: String(bridged), vcls: "blue", foot: sparkSvg(4, "#3b82f6") },
@@ -2046,6 +2068,8 @@ export const ADMIN_HTML = `<!DOCTYPE html>
     function renderAccounts() {
       const root = $("accounts");
       const list = settings.accounts || [];
+      const strategy = $("routing-strategy");
+      if (strategy) strategy.value = settings.routingStrategy || "anonymous_first";
       root.innerHTML = list.map((a, idx) => {
         const kind = a.kind === "authenticated_zen" || (!a.kind && String(a.apiKey || "").trim())
           ? "authenticated_zen"
@@ -2061,9 +2085,11 @@ export const ADMIN_HTML = `<!DOCTYPE html>
           (testResult.egressIp ? ' · ' + escapeHtml(testResult.egressIp) : '') +
           (!testResult.ok && testResult.error?.message ? ' · ' + escapeHtml(testResult.error.message) : '') +
           '</div>';
-        return '<div class="worker-card" data-idx="' + idx + '">' +
-          '<div class="hd"><span>Worker ' + (idx + 1) + '</span>' +
-          '<div class="worker-actions"><button type="button" class="btn btn-sm btn-test-worker" data-idx="' + idx + '"' + (testing ? ' disabled' : '') + '>' + escapeHtml(testing ? t("testingWorker") : t("testWorker")) + '</button>' +
+        const enabled = a.enabled !== false;
+        return '<div class="worker-card' + (enabled ? '' : ' disabled-worker') + '" data-idx="' + idx + '">' +
+          '<div class="hd"><span>Worker ' + (idx + 1) + (enabled ? '' : ' · ' + escapeHtml(t("disabledState"))) + '</span>' +
+          '<div class="worker-actions"><label class="field" style="margin:0;display:flex;align-items:center;gap:6px"><span>' + escapeHtml(t("workerEnabled")) + '</span><span class="toggle"><input class="acc-enabled" type="checkbox"' + (enabled ? ' checked' : '') + ' /><span></span></span></label>' +
+          '<button type="button" class="btn btn-sm btn-test-worker" data-idx="' + idx + '"' + (testing ? ' disabled' : '') + '>' + escapeHtml(testing ? t("testingWorker") : t("testWorker")) + '</button>' +
           '<button type="button" class="btn btn-sm btn-danger btn-remove-acc" data-idx="' + idx + '">' + escapeHtml(t("remove")) + '</button></div></div>' +
           '<div class="row two"><div><label class="field">' + escapeHtml(t("idLabel")) + '</label>' +
           '<input class="input acc-id" type="text" value="' + escapeAttr(a.id || "") + '" /></div>' +
@@ -2098,12 +2124,13 @@ export const ADMIN_HTML = `<!DOCTYPE html>
           const card = cards[idx];
           const draft = {
             id: card.querySelector(".acc-id").value.trim() || "account",
+            enabled: card.querySelector(".acc-enabled").checked,
             kind: card.querySelector(".acc-kind").value,
             apiKey: card.querySelector(".acc-kind").value === "anonymous_zen" ? "" : card.querySelector(".acc-key").value,
             proxyId: card.querySelector(".acc-proxy-id").value || null,
           };
           const saved = settings.accounts[idx];
-          if (!saved || draft.id !== saved.id || draft.kind !== saved.kind || draft.apiKey !== saved.apiKey || draft.proxyId !== (saved.proxyId || null)) {
+          if (!saved || draft.id !== saved.id || draft.enabled !== (saved.enabled !== false) || draft.kind !== saved.kind || draft.apiKey !== saved.apiKey || draft.proxyId !== (saved.proxyId || null)) {
             toast(t("saveBeforeWorkerTest"), false);
             return;
           }
@@ -2132,6 +2159,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
     function collectAccounts() {
       return Array.from(document.querySelectorAll("#accounts .worker-card")).map((el) => ({
         id: el.querySelector(".acc-id").value.trim() || "account",
+        enabled: el.querySelector(".acc-enabled").checked,
         kind: el.querySelector(".acc-kind").value,
         apiKey: el.querySelector(".acc-kind").value === "anonymous_zen" ? "" : el.querySelector(".acc-key").value,
         proxyId: el.querySelector(".acc-proxy-id").value || null,
@@ -2182,18 +2210,20 @@ export const ADMIN_HTML = `<!DOCTYPE html>
           const kindLabel = t(w.kind === "authenticated_zen" ? "authenticatedZen" : "anonymousZen");
           const routeName = w.proxyName || (w.proxyId ? w.proxyId : t("directEgress"));
           const egress = w.egressIp || t("unknownEgress");
-          const stateLabel = w.ready ? t("readyState") : t("coolingState");
+          const stateLabel = !w.enabled ? t("disabledState") : w.ready ? t("readyState") : t("coolingState");
           const statusText = w.lastStatus == null
             ? (w.lastRequestAt ? t("outcomeTransportError") : "—")
             : "HTTP " + w.lastStatus;
           return '<tr>' +
             '<td><strong>' + escapeHtml(w.accountId) + '</strong><div style="margin-top:4px"><span class="tag ' + (w.kind === "anonymous_zen" ? "blue" : "info") + '">' + escapeHtml(kindLabel) + '</span></div><div class="muted mono" style="margin-top:4px">' + escapeHtml(w.credentialLabel || "—") + '</div></td>' +
             '<td><strong>' + escapeHtml(routeName) + '</strong><div class="muted mono">' + escapeHtml(egress) + '</div></td>' +
-            '<td class="mono"><strong>' + fmtNum(w.requestCount) + '</strong><div class="muted">Chat ' + fmtNum(w.chatCount) + ' · Models ' + fmtNum(w.modelsCount) + '</div></td>' +
+            '<td class="mono"><strong>' + fmtNum(w.requestCount) + '</strong><div class="muted">Chat ' + fmtNum(w.chatCount) + ' · ' + escapeHtml(t("modelsUsed")) + ' ' + fmtNum(w.distinctModelCount) + '</div>' +
+              (Object.keys(w.modelUsage || {}).length ? '<div class="muted" style="margin-top:4px">' + Object.entries(w.modelUsage).sort((a, b) => Number(b[1]) - Number(a[1])).map(([model, count]) => escapeHtml(model) + ' ×' + fmtNum(count)).join(' · ') + '</div>' : '') +
+              (w.modelsCount ? '<div class="muted">' + escapeHtml(t("modelsEndpoint")) + ' ' + fmtNum(w.modelsCount) + '</div>' : '') + '</td>' +
             '<td><span class="ok mono">' + fmtNum(w.successCount) + '</span> / <span class="err mono">' + fmtNum(w.errorCount) + '</span><div class="muted">' + escapeHtml(statusText) + '</div></td>' +
             '<td class="mono"><strong>' + fmtNum(w.totalTokens) + '</strong><div class="muted">in ' + fmtNum(w.promptTokens) + ' · out ' + fmtNum(w.completionTokens) + '</div></td>' +
             '<td class="mono">' + escapeHtml(fmtRate(w.cacheRate)) + '<div class="muted">read ' + fmtNum(w.cacheReadTokens) + ' · write ' + fmtNum(w.cacheWriteTokens) + '</div></td>' +
-            '<td><span class="tag ' + (w.ready ? "ok" : "warn") + '">' + escapeHtml(stateLabel) + '</span>' + (!w.ready && w.cooldownUntil ? '<div class="muted">' + escapeHtml(relTime(new Date(w.cooldownUntil).toISOString())) + '</div>' : '') + '</td>' +
+            '<td><span class="tag ' + (!w.enabled ? "" : w.ready ? "ok" : "warn") + '">' + escapeHtml(stateLabel) + '</span>' + (w.enabled && !w.ready && w.cooldownUntil ? '<div class="muted">' + escapeHtml(relTime(new Date(w.cooldownUntil).toISOString())) + '</div>' : '') + '</td>' +
             '<td class="muted">' + escapeHtml(w.lastRequestAt ? relTime(w.lastRequestAt) : "—") + '</td>' +
             '</tr>';
         }).join("");
@@ -2360,6 +2390,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         const data = await res.json();
         if (!res.ok) throw new Error(data.error?.message || ("HTTP " + res.status));
         if (data.probeResults) probeResults = data.probeResults;
+        if (data.settings) settings = data.settings;
         else if (data.result) probeResults[id] = data.result;
         const result = data.result || probeResults[id];
         if (result) pushProbeEvent(result, name || result.id);
@@ -2397,7 +2428,10 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         for (const p of pool) byId[p.id] = p.name;
         for (const r of data.results || []) pushProbeEvent(r, byId[r.id] || r.id);
         const s = data.summary || { ok: 0, fail: 0, skip: 0 };
-        toast(t("toastBatchDone")(s.ok || 0, s.fail || 0, s.skip || 0), (s.fail || 0) === 0);
+        const added = data.autoWorkers?.added || 0;
+        await loadStatus();
+        renderAll();
+        toast(t("toastBatchDone")(s.ok || 0, s.fail || 0, s.skip || 0) + (added ? " · " + t("toastBatchWorkers")(added) : ""), (s.fail || 0) === 0);
       } catch (e) {
         toast(String(e.message || e), false);
       } finally {
@@ -2474,6 +2508,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
     $("btn-save-gateway").onclick = async () => {
       const body = {
         ...settings,
+        routingStrategy: $("routing-strategy")?.value || settings.routingStrategy || "anonymous_first",
         baseUrl: $("baseUrl").value.trim(),
         relayAccessToken: $("relayAccessToken").value.trim(),
         port: Number($("port").value) || 9876,
@@ -2495,7 +2530,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
     };
 
     $("btn-save-accounts").onclick = async () => {
-      const body = { ...settings, accounts: collectAccounts() };
+      const body = { ...settings, routingStrategy: $("routing-strategy").value, accounts: collectAccounts() };
       const res = await fetch("/admin/api/settings", {
         method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
       });
@@ -2539,7 +2574,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
     $("btn-add-account").onclick = () => {
       settings.accounts.push({
         id: "worker-" + (settings.accounts.length + 1),
-        kind: "anonymous_zen", apiKey: "", proxyId: null, proxy: null,
+        kind: "anonymous_zen", enabled: true, apiKey: "", proxyId: null, proxy: null,
       });
       renderAccounts();
     };

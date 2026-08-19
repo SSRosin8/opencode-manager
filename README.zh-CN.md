@@ -9,7 +9,8 @@
 - 接受 **OpenAI 兼容**的客户端请求（`/v1/chat/completions`、`/v1/models`）
 - **透明转发**到 `https://opencode.ai/zen/v1`（可配置）
 - **仅免费模型**：自动抓取 Zen 定价页面，只提供免费模型（列表 + 对话）；付费模型永不暴露
-- 匿名 Zen（自动使用 `Bearer public`）与登录 Zen Key 分池统计，匿名池优先
+- 匿名 Zen（自动使用 `Bearer public`）与登录 Zen Key 分池统计，可配置匿名优先、登录优先或混合调度
+- 每个 Worker 可单独禁用，保留配置但不参与流量调度
 - 按 OpenCode 会话粘性绑定 Worker；429、无效 Key 和临时上游故障自动切换
 - 可选 **OpenCode CLI 身份请求头**合成（Cloudflare / VPS）
 - 最小化的免费模型请求体修复（去除 `client_metadata`、思考模型的 `reasoning_content`、effort 别名等）
@@ -97,7 +98,11 @@ OpenCode 免费账号经常受 **IP 限制**。将每个 Worker 绑定到不同�
 
 导入后先测试候选节点。测试会先记录公网出口 IP，再用 `Bearer public` 发起一次真实匿名 Zen 免费模型请求；只有匿名 Zen 成功的出口才参与自动分配。节点按真实出口 IP 去重，同一出口最多承载一个匿名 Worker和一个登录 Worker。单个 mixed-port 使用共享选择组，网关会串行完成“切换节点 + 建立连接”；运行期间不要在其他客户端中切换同一个选择组。需要多个节点永久并行独占端口时，应为每个 Worker 配置独立的 Mihomo 入站或实例。
 
-“批量测试”先通过 Mihomo 节点延迟接口筛选，再对每个不同公网出口执行匿名 Zen 验证。保存 Worker 后，可点击卡片中的“测试连接”；登录 Worker 会依次验证匿名 Zen 与自身 Key。结果会显示 HTTP 状态、总耗时、节点和公网出口 IP。
+“批量测试”先通过 Mihomo 节点延迟接口筛选，再对每个不同公网出口执行匿名 Zen 验证。每个验证可用的唯一出口都会自动添加为匿名 Worker；你只需要手动添加登录 Zen 账号。重复或局部批测只会补充缺少的 Worker，不会重复创建或删除现有配置。
+
+Worker 页面可以设置调度策略，并控制每个 Worker 是否参与流量。默认“匿名优先”会在所有匿名 Worker 都不可用后才使用登录 Zen；“登录 Zen 优先”顺序相反；“混合轮询”按配置顺序调度。匿名探测和 Worker 连接测试都使用单 token 输入并限制 `max_tokens: 1`，尽量减少免费额度消耗。保存登录 Worker 后，可点击卡片中的“测试连接”验证具体 Key 和路由，结果包含 HTTP 状态、总延迟、节点和公网出口 IP。
+
+总览页会按 Worker 统计真实 Chat 模型使用情况；`/v1/models` 模型列表请求会单独记录，不再与实际使用模型混淆。
 
 ## 测试
 

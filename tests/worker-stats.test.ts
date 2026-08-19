@@ -123,7 +123,8 @@ describe("usage parsers", () => {
 describe("WorkerStatsStore", () => {
   it("accumulates requests and tokens", () => {
     const s = new WorkerStatsStore({ persist: false });
-    s.recordRequest("w1", { kind: "chat", status: 200 });
+    s.recordRequest("w1", { kind: "chat", status: 200, model: "model-a" });
+    s.recordRequest("w1", { kind: "chat", status: 200, model: "model-b" });
     s.recordRequest("w1", { kind: "models", status: 200 });
     s.addTokens("w1", {
       promptTokens: 100,
@@ -133,9 +134,11 @@ describe("WorkerStatsStore", () => {
       cacheWriteTokens: 60,
     });
     const snap = s.get("w1");
-    expect(snap.requestCount).toBe(2);
-    expect(snap.chatCount).toBe(1);
+    expect(snap.requestCount).toBe(3);
+    expect(snap.chatCount).toBe(2);
     expect(snap.modelsCount).toBe(1);
+    expect(snap.modelUsage).toEqual({ "model-a": 1, "model-b": 1 });
+    expect(snap.distinctModelCount).toBe(2);
     expect(snap.totalTokens).toBe(120);
     expect(snap.cacheReadTokens).toBe(40);
     expect(snap.cacheWriteTokens).toBe(60);
@@ -186,6 +189,8 @@ describe("WorkerStatsStore", () => {
       requestCount: 2,
       chatCount: 1,
       modelsCount: 1,
+      modelUsage: { "big-pickle": 1 },
+      distinctModelCount: 1,
       successCount: 1,
       errorCount: 1,
       lastStatus: null,
@@ -243,6 +248,8 @@ describe("WorkerStatsStore", () => {
       await b.load();
       expect(b.get("acc").totalTokens).toBe(7);
       expect(b.get("acc").chatCount).toBe(2);
+      expect(b.get("acc").modelUsage).toEqual({ "big-pickle": 1 });
+      expect(b.get("acc").distinctModelCount).toBe(1);
       expect(b.get("acc").cacheReadTokens).toBe(1);
       expect(b.get("acc").cacheWriteTokens).toBe(2);
       expect(b.recentAttempts()).toEqual([
@@ -278,6 +285,8 @@ describe("WorkerStatsStore", () => {
       const s = new WorkerStatsStore({ path, persist: true });
       await s.load();
       expect(s.get("legacy").requestCount).toBe(3);
+      expect(s.get("legacy").modelUsage).toEqual({});
+      expect(s.get("legacy").distinctModelCount).toBe(0);
       expect(s.recentAttempts()).toEqual([]);
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -373,6 +382,8 @@ describe("worker stats HTTP", () => {
         requestCount: number;
         chatCount: number;
         modelsCount: number;
+        modelUsage: Record<string, number>;
+        distinctModelCount: number;
         totalTokens: number;
         promptTokens: number;
         cacheReadTokens: number;
@@ -397,6 +408,8 @@ describe("worker stats HTTP", () => {
     expect(st.usageTotals.cacheReadTokens).toBe(4);
     expect(st.usageTotals.cacheWriteTokens).toBe(7);
     expect(st.usageTotals.cacheRate).toBeCloseTo(4 / 11);
+    expect(st.workers.some((w) => w.modelUsage["big-pickle"] === 1)).toBe(true);
+    expect(st.workers.some((w) => w.distinctModelCount === 1)).toBe(true);
 
     // reset
     const reset = await fetch(`${base}/admin/api/worker-stats/reset`, {

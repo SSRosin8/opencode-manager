@@ -9,6 +9,7 @@ import {
   inferAccountKind,
   type AccountConfig,
   type AccountProxy,
+  type WorkerRoutingStrategy,
 } from "../relay/index.js";
 import {
   DEFAULT_CLASH_BRIDGE,
@@ -31,6 +32,8 @@ export type GatewaySettings = {
   cliClient: string;
   cliProject: string;
   accounts: AccountConfig[];
+  /** Controls which enabled Zen worker pool is exhausted first. */
+  routingStrategy: WorkerRoutingStrategy;
   /** Shared proxy pool — workers bind via account.proxyId. */
   proxyPool: PoolProxy[];
   /** Clash subscription sources that feed the proxy pool. */
@@ -46,6 +49,7 @@ export type RuntimeStatus = {
   startedAt: string | null;
   baseUrl: string;
   accountCount: number;
+  enabledAccountCount: number;
   readyAccountCount: number;
   proxyPoolCount: number;
   proxyPoolUsable: number;
@@ -66,7 +70,15 @@ const DEFAULT_SETTINGS: GatewaySettings = {
   cliUserAgent: "opencode-cli/1.0.0",
   cliClient: "cli",
   cliProject: "default",
-  accounts: [{ id: "default", apiKey: "", proxyId: null, proxy: null }],
+  accounts: [{
+    id: "default",
+    apiKey: "",
+    kind: "anonymous_zen",
+    enabled: true,
+    proxyId: null,
+    proxy: null,
+  }],
+  routingStrategy: "anonymous_first",
   proxyPool: [],
   proxySubscriptions: [],
   clashBridge: { ...DEFAULT_CLASH_BRIDGE },
@@ -92,7 +104,14 @@ function normalizeProxy(raw: unknown): AccountProxy {
 
 function normalizeAccounts(raw: unknown): AccountConfig[] {
   if (!Array.isArray(raw) || raw.length === 0) {
-    return [{ id: "default", apiKey: "", proxyId: null, proxy: null }];
+    return [{
+      id: "default",
+      apiKey: "",
+      kind: "anonymous_zen",
+      enabled: true,
+      proxyId: null,
+      proxy: null,
+    }];
   }
   return raw.map((item, i) => {
     const a = (item && typeof item === "object" ? item : {}) as Record<string, unknown>;
@@ -112,6 +131,7 @@ function normalizeAccounts(raw: unknown): AccountConfig[] {
             ? a.kind
             : undefined,
       }),
+      enabled: a.enabled !== false,
       proxyId,
       proxy: normalizeProxy(a.proxy),
     };
@@ -141,6 +161,10 @@ export function normalizeSettings(raw: Partial<GatewaySettings> | null | undefin
         ? s.cliProject.trim()
         : DEFAULT_SETTINGS.cliProject,
     accounts: normalizeAccounts(s.accounts),
+    routingStrategy:
+      s.routingStrategy === "authenticated_first" || s.routingStrategy === "mixed"
+        ? s.routingStrategy
+        : "anonymous_first",
     proxyPool: normalizeProxyPool(s.proxyPool),
     proxySubscriptions: normalizeSubscriptions(s.proxySubscriptions),
     clashBridge: normalizeClashBridge(s.clashBridge),
@@ -161,6 +185,9 @@ export class SettingsStore {
       startedAt: null,
       baseUrl: this.settings.baseUrl,
       accountCount: this.settings.accounts.length,
+      enabledAccountCount: this.settings.accounts.filter(
+        (account) => account.enabled !== false
+      ).length,
       readyAccountCount: this.settings.accounts.length,
       proxyPoolCount: 0,
       proxyPoolUsable: 0,
@@ -207,7 +234,7 @@ export class SettingsStore {
 
   updateReadyCount(ready: number, total: number): void {
     this.status.readyAccountCount = ready;
-    this.status.accountCount = total;
+    this.status.enabledAccountCount = total;
     this.syncStatusFromSettings();
   }
 
@@ -273,6 +300,9 @@ export class SettingsStore {
   private syncStatusFromSettings(): void {
     this.status.baseUrl = this.settings.baseUrl;
     this.status.accountCount = this.settings.accounts.length;
+    this.status.enabledAccountCount = this.settings.accounts.filter(
+      (account) => account.enabled !== false
+    ).length;
     this.status.proxyPoolCount = this.settings.proxyPool.length;
     this.status.proxyPoolUsable = this.settings.proxyPool.filter(
       (p) => p.enabled && p.usable

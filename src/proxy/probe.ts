@@ -300,7 +300,9 @@ export async function probeAnonymousZenProxy(
         },
         body: JSON.stringify({
           model,
-          messages: [{ role: "user", content: "Reply exactly OK" }],
+          // One input token and one output token are sufficient to prove that
+          // this IP can reach an anonymous Zen model.
+          messages: [{ role: "user", content: "x" }],
           stream: false,
           max_tokens: 1,
         }),

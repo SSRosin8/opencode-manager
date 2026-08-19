@@ -18,6 +18,7 @@ function baseSettings(over: Partial<GatewaySettings> = {}): GatewaySettings {
     cliUserAgent: "opencode-cli/1.0.0",
     cliClient: "cli",
     cliProject: "default",
+    routingStrategy: "anonymous_first",
     accounts: [
       { id: "k1", apiKey: "key-one", proxyId: null, proxy: null },
       { id: "k2", apiKey: "key-two", proxyId: null, proxy: null },
@@ -60,6 +61,91 @@ describe("UpstreamClient chatCompletions", () => {
 
     await client.chatCompletions({ body: { model: "big-pickle" }, stream: false });
     expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it("uses a one-token payload for manual Worker connection tests", async () => {
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      expect(JSON.parse(String(init?.body))).toMatchObject({
+        messages: [{ role: "user", content: "x" }],
+        max_tokens: 1,
+        stream: false,
+      });
+      return jsonResponse(200, { choices: [] });
+    });
+    const client = new UpstreamClient(
+      baseSettings({
+        accounts: [{ id: "manual-test", apiKey: "key", kind: "authenticated_zen" }],
+      }),
+      fetchImpl
+    );
+
+    const result = await client.testAccountConnection("manual-test", "big-pickle");
+
+    expect(result.status).toBe(200);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it("honors routing strategy and skips disabled workers", async () => {
+    const authHeaders: string[] = [];
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      authHeaders.push((init?.headers as Record<string, string>).Authorization);
+      return jsonResponse(200, { choices: [] });
+    });
+    const client = new UpstreamClient(
+      baseSettings({
+        routingStrategy: "authenticated_first",
+        accounts: [
+          { id: "anon", apiKey: "", kind: "anonymous_zen" },
+          { id: "disabled-login", apiKey: "disabled", enabled: false },
+          { id: "login", apiKey: "enabled", kind: "authenticated_zen" },
+        ],
+      }),
+      fetchImpl
+    );
+
+    const result = await client.chatCompletions({
+      body: { model: "big-pickle" },
+      stream: false,
+    });
+
+    expect(result.accountId).toBe("login");
+    expect(authHeaders).toEqual(["Bearer enabled"]);
+  });
+
+  it("exhausts anonymous workers before falling back to signed-in Zen", async () => {
+    const events: UpstreamAttemptEvent[] = [];
+    let calls = 0;
+    const fetchImpl = vi.fn(async () => {
+      calls++;
+      if (calls === 1) throw new Error("anonymous route unavailable");
+      if (calls === 2) return jsonResponse(429, { error: { message: "quota used" } });
+      return jsonResponse(200, { choices: [] });
+    });
+    const client = new UpstreamClient(
+      baseSettings({
+        routingStrategy: "anonymous_first",
+        accounts: [
+          { id: "login", apiKey: "signed-in", kind: "authenticated_zen" },
+          { id: "anon-a", apiKey: "", kind: "anonymous_zen" },
+          { id: "anon-b", apiKey: "", kind: "anonymous_zen" },
+        ],
+      }),
+      fetchImpl
+    );
+    client.setAttemptObserver((event) => events.push(event));
+
+    const result = await client.chatCompletions({
+      body: { model: "big-pickle" },
+      stream: false,
+      sessionKey: "fallback",
+    });
+
+    expect(result.accountId).toBe("login");
+    expect(events.map((event) => event.accountId)).toEqual([
+      "anon-a",
+      "anon-b",
+      "login",
+    ]);
   });
 
   it("sends transformed body to zen chat URL with Bearer key", async () => {

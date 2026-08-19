@@ -9,7 +9,8 @@ Standalone **OpenCode free-worker** LLM gateway: an OpenAI-compatible relay that
 - Accepts **OpenAI-compatible** client requests (`/v1/chat/completions`, `/v1/models`)
 - **Transparent passthrough** to `https://opencode.ai/zen/v1` (configurable)
 - **Free-only models**: auto-scrapes the Zen pricing page and serves ONLY free models (list + chat); paid models are never exposed
-- Separate anonymous Zen (`Bearer public`) and signed-in Zen pools, with anonymous capacity first
+- Separate anonymous Zen (`Bearer public`) and signed-in Zen pools, with configurable anonymous-first, signed-in-first, or mixed routing
+- Per-worker enable/disable controls keep a Worker configured without sending it traffic
 - Per-OpenCode-session worker affinity with failover on 429, invalid keys, and temporary upstream errors
 - Optional **OpenCode CLI identity header** synthesis (Cloudflare / VPS)
 - Minimal free-model body fixes (strip `client_metadata`, thinking-model `reasoning_content`, effort aliases)
@@ -97,7 +98,11 @@ OpenCode free accounts are often **IP-limited**. Bind each worker to a different
 
 Probe candidate nodes after importing. A probe records the public egress IP and then sends a real anonymous Zen free-model request with `Bearer public`; only successful egress routes are eligible for automatic assignment. Nodes are deduplicated by public IP, and one egress may host at most one anonymous worker plus one signed-in worker. A single mixed-port uses one shared selector; the gateway serializes node selection and connection setup. Do not switch that selector from another client while the gateway is running. Use separate Mihomo inbounds or instances when workers must permanently own concurrent ports.
 
-**Batch Test** first screens nodes through Mihomo's delay API, then verifies every distinct public IP against anonymous Zen. After saving a worker, click **Test connection** on its card; signed-in workers are checked with both anonymous Zen and their own key. Results include HTTP status, total latency, node, and public egress IP.
+**Batch Test** first screens nodes through Mihomo's delay API, then verifies every distinct public IP against anonymous Zen. Each verified unique egress is automatically added as an anonymous Worker; you only need to add signed-in Zen accounts manually. Re-running or partially running the batch test only adds missing Workers and never duplicates or removes existing ones.
+
+The Worker page controls routing strategy and whether each Worker receives traffic. The default `Anonymous first` strategy exhausts all usable anonymous Workers before signed-in keys. `Signed-in first` reverses that preference, while `Mixed` follows the configured Worker order. Connection probes use a one-token input and `max_tokens: 1` to minimize free-quota consumption. After saving a signed-in Worker, click **Test connection** on its card to verify the exact key and route. Results include HTTP status, total latency, node, and public egress IP.
+
+The Overview page reports actual chat model usage per Worker. `/v1/models` list requests are tracked separately from models used by chat requests.
 
 ## Tests
 

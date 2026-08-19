@@ -30,7 +30,12 @@ export type WorkerStatSnapshot = {
   /** All counted upstream attempts (chat + models). */
   requestCount: number;
   chatCount: number;
+  /** Requests made to the /models endpoint (kept for persisted/API compatibility). */
   modelsCount: number;
+  /** Chat attempts grouped by the requested model name. */
+  modelUsage: Record<string, number>;
+  /** Number of distinct models represented in modelUsage. */
+  distinctModelCount: number;
   successCount: number;
   errorCount: number;
   promptTokens: number;
@@ -56,7 +61,10 @@ export type WorkerAttemptEnrichment = {
 export type WorkerAttemptRecord = UpstreamAttemptEvent & WorkerAttemptEnrichment;
 
 type PersistShape = {
-  workers: Record<string, Omit<WorkerStatSnapshot, "accountId" | "cacheRate">>;
+  workers: Record<
+    string,
+    Omit<WorkerStatSnapshot, "accountId" | "cacheRate" | "distinctModelCount">
+  >;
   attempts?: WorkerAttemptRecord[];
 };
 
@@ -68,6 +76,8 @@ function emptyStat(accountId: string): WorkerStatSnapshot {
     requestCount: 0,
     chatCount: 0,
     modelsCount: 0,
+    modelUsage: {},
+    distinctModelCount: 0,
     successCount: 0,
     errorCount: 0,
     promptTokens: 0,
@@ -98,9 +108,41 @@ function computeCacheRate(cacheRead: number, prompt: number): number | null {
   return cacheRead / prompt;
 }
 
+function parseModelUsage(v: unknown): Record<string, number> {
+  const raw = asRecord(v);
+  const usage: Record<string, number> = {};
+  if (!raw) return usage;
+  for (const [model, count] of Object.entries(raw)) {
+    const name = model.trim();
+    const safeCount = num(count);
+    if (name && safeCount) {
+      Object.defineProperty(usage, name, {
+        value: safeCount,
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+    }
+  }
+  return usage;
+}
+
+function recordModelUsage(s: WorkerStatSnapshot, model: string | null | undefined): void {
+  const name = model?.trim();
+  if (!name) return;
+  const current = Object.hasOwn(s.modelUsage, name) ? s.modelUsage[name] : 0;
+  Object.defineProperty(s.modelUsage, name, {
+    value: current + 1,
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  });
+}
+
 function withDerived(s: WorkerStatSnapshot): WorkerStatSnapshot {
   return {
     ...s,
+    distinctModelCount: Object.keys(s.modelUsage).length,
     cacheRate: computeCacheRate(s.cacheReadTokens, s.promptTokens),
   };
 }
@@ -228,6 +270,8 @@ export class WorkerStatsStore {
               requestCount: num(r.requestCount),
               chatCount: num(r.chatCount),
               modelsCount: num(r.modelsCount),
+              modelUsage: parseModelUsage(r.modelUsage),
+              distinctModelCount: 0,
               successCount: num(r.successCount),
               errorCount: num(r.errorCount),
               promptTokens: num(r.promptTokens),
@@ -275,7 +319,12 @@ export class WorkerStatsStore {
     if (!this.persistEnabled) return;
     const workers: PersistShape["workers"] = {};
     for (const [id, s] of this.stats) {
-      const { accountId: _a, cacheRate: _r, ...rest } = s;
+      const {
+        accountId: _a,
+        cacheRate: _r,
+        distinctModelCount: _d,
+        ...rest
+      } = s;
       workers[id] = rest;
     }
     await mkdir(dirname(this.path), { recursive: true });
@@ -302,12 +351,16 @@ export class WorkerStatsStore {
    */
   recordRequest(
     accountId: string,
-    opts: { kind: "chat" | "models"; status: number }
+    opts: { kind: "chat" | "models"; status: number; model?: string | null }
   ): void {
     const s = this.ensure(accountId);
     s.requestCount += 1;
-    if (opts.kind === "chat") s.chatCount += 1;
-    else s.modelsCount += 1;
+    if (opts.kind === "chat") {
+      s.chatCount += 1;
+      recordModelUsage(s, opts.model);
+    } else {
+      s.modelsCount += 1;
+    }
     if (opts.status >= 200 && opts.status < 400) s.successCount += 1;
     else s.errorCount += 1;
     s.lastStatus = opts.status;
@@ -333,8 +386,12 @@ export class WorkerStatsStore {
     if (event.operation === "chat" || event.operation === "models") {
       const s = this.ensure(event.accountId);
       s.requestCount += 1;
-      if (event.operation === "chat") s.chatCount += 1;
-      else s.modelsCount += 1;
+      if (event.operation === "chat") {
+        s.chatCount += 1;
+        recordModelUsage(s, event.model);
+      } else {
+        s.modelsCount += 1;
+      }
       if (event.status !== null && event.status >= 200 && event.status < 400) {
         s.successCount += 1;
       } else {
@@ -385,6 +442,8 @@ export class WorkerStatsStore {
     requestCount: number;
     chatCount: number;
     modelsCount: number;
+    modelUsage: Record<string, number>;
+    distinctModelCount: number;
     promptTokens: number;
     completionTokens: number;
     totalTokens: number;
@@ -398,6 +457,15 @@ export class WorkerStatsStore {
         a.requestCount += s.requestCount;
         a.chatCount += s.chatCount;
         a.modelsCount += s.modelsCount;
+        for (const [model, count] of Object.entries(s.modelUsage)) {
+          const current = Object.hasOwn(a.modelUsage, model) ? a.modelUsage[model] : 0;
+          Object.defineProperty(a.modelUsage, model, {
+            value: current + count,
+            enumerable: true,
+            configurable: true,
+            writable: true,
+          });
+        }
         a.promptTokens += s.promptTokens;
         a.completionTokens += s.completionTokens;
         a.totalTokens += s.totalTokens;
@@ -409,6 +477,7 @@ export class WorkerStatsStore {
         requestCount: 0,
         chatCount: 0,
         modelsCount: 0,
+        modelUsage: {} as Record<string, number>,
         promptTokens: 0,
         completionTokens: 0,
         totalTokens: 0,
@@ -418,6 +487,7 @@ export class WorkerStatsStore {
     );
     return {
       ...acc,
+      distinctModelCount: Object.keys(acc.modelUsage).length,
       cacheRate: computeCacheRate(acc.cacheReadTokens, acc.promptTokens),
     };
   }

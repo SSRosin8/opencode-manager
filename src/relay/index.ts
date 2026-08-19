@@ -12,6 +12,7 @@ export {
   type AccountKind,
   type AccountProxy,
   type AccountState,
+  type WorkerRoutingStrategy,
 } from "./accounts.js";
 export {
   transformRequestBody,

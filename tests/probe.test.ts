@@ -1,7 +1,7 @@
 /**
  * Proxy latency probe unit + HTTP API tests.
  */
-import { describe, expect, it, afterEach } from "vitest";
+import { describe, expect, it, afterEach, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -252,6 +252,7 @@ describe("probeAnonymousZenProxy", () => {
     expect(requestInit?.dispatcher).toBeTruthy();
     expect(JSON.parse(String(requestInit?.body))).toMatchObject({
       model: "deepseek-v4-flash-free",
+      messages: [{ role: "user", content: "x" }],
       stream: false,
       max_tokens: 1,
     });
@@ -471,6 +472,74 @@ describe("admin proxy probe HTTP APIs", () => {
     expect(data.summary.ok).toBe(1);
     expect(data.summary.skip).toBe(1);
     expect(data.results.find((r) => r.id === "b")?.skipped).toBe(true);
+  });
+
+  it("batch test creates one anonymous worker per usable egress without duplicates", async () => {
+    dir = await mkdtemp(join(tmpdir(), "ocfr-probe-workers-"));
+    const store = new SettingsStore(join(dir, "settings.json"));
+    await store.save({
+      baseUrl: "https://opencode.ai/zen/v1",
+      accounts: [
+        { id: "login", kind: "authenticated_zen", apiKey: "zen-key", proxyId: null, proxy: null },
+      ],
+      proxyPool: [
+        px({ id: "usable", name: "Mexico", type: "http", host: "10.0.0.10", port: 8080 }),
+        px({ id: "same-egress", name: "Mexico 2", type: "http", host: "10.0.0.12", port: 8080 }),
+        px({ id: "disabled", name: "US", type: "http", host: "10.0.0.11", port: 8080, enabled: false }),
+      ],
+    });
+    const probeFetch = vi.fn(async (_url: string, init: RequestInit & { dispatcher?: unknown }) =>
+      init.method === "POST"
+        ? new Response(JSON.stringify({ choices: [] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          })
+        : new Response("203.0.113.80", { status: 200 }));
+    app = await createApp({ store, port: 0, probeFetch });
+    await listen(app);
+    const addr = app.server.address();
+    if (!addr || typeof addr === "string") throw new Error("no addr");
+    const url = `http://127.0.0.1:${addr.port}/admin/api/proxy-pool/test-batch`;
+
+    const first = await fetch(url, { method: "POST", body: "{}" });
+    expect(first.status).toBe(200);
+    const firstBody = (await first.json()) as {
+      autoWorkers: { added: number; addedIds: string[] };
+      settings: GatewaySettings;
+    };
+    expect(firstBody.autoWorkers).toEqual({
+      added: 1,
+      addedIds: ["anonymous-zen-usable"],
+    });
+    expect(firstBody.settings.accounts).toEqual([
+      expect.objectContaining({ id: "login", kind: "authenticated_zen" }),
+      expect.objectContaining({
+        id: "anonymous-zen-usable",
+        kind: "anonymous_zen",
+        apiKey: "",
+        proxyId: "usable",
+      }),
+    ]);
+    expect(probeFetch.mock.calls.filter(([, init]) => init.method === "POST")).toHaveLength(1);
+
+    const disabledAccounts = firstBody.settings.accounts.map((account) =>
+      account.id === "anonymous-zen-usable" ? { ...account, enabled: false } : account
+    );
+    await store.save({ accounts: disabledAccounts });
+
+    const second = await fetch(url, { method: "POST", body: JSON.stringify({ ids: ["usable"] }) });
+    const secondBody = (await second.json()) as {
+      autoWorkers: { added: number; addedIds: string[] };
+      settings: GatewaySettings;
+    };
+    expect(secondBody.autoWorkers).toEqual({ added: 0, addedIds: [] });
+    expect(secondBody.settings.accounts).toHaveLength(2);
+    expect(
+      secondBody.settings.accounts.find((account) => account.id === "anonymous-zen-usable")?.enabled
+    ).toBe(false);
+    expect(app.upstream.rotator.getAccounts().map((account) => account.id)).toContain(
+      "anonymous-zen-usable"
+    );
   });
 
   it("GET /admin/api/proxy-pool includes probeResults after test", async () => {

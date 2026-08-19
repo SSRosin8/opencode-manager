@@ -152,8 +152,10 @@ export class UpstreamClient {
   private syncFromSettings(settings: GatewaySettings): void {
     const pool = settings.proxyPool ?? [];
     const bridge = settings.clashBridge;
-    this.rotator.sync(settings.accounts, (c: AccountConfig) =>
-      resolveAccountEgress(c, pool, bridge)
+    this.rotator.sync(
+      settings.accounts,
+      (c: AccountConfig) => resolveAccountEgress(c, pool, bridge),
+      settings.routingStrategy
     );
   }
 
@@ -178,9 +180,9 @@ export class UpstreamClient {
       model,
       {
         model,
-        messages: [{ role: "user", content: "Reply exactly OK" }],
+        messages: [{ role: "user", content: "x" }],
         stream: false,
-        max_tokens: 16,
+        max_tokens: 1,
       },
       false
     );
@@ -334,6 +336,9 @@ export class UpstreamClient {
     /** Stable OpenCode conversation id used for per-session worker affinity. */
     sessionKey?: string;
   }): Promise<UpstreamResult> {
+    if (!this.rotator.getAccounts().length) {
+      throw new Error("No enabled workers configured");
+    }
     const model =
       opts.body && typeof opts.body === "object" && !Array.isArray(opts.body)
         ? String((opts.body as Record<string, unknown>).model ?? "")
@@ -524,6 +529,9 @@ export class UpstreamClient {
    * 2) Fall back to direct GET (OpenCode models often works without account proxy)
    */
   async listModels(clientHeaders?: Record<string, string>): Promise<UpstreamResult> {
+    if (!this.rotator.getAccounts().length) {
+      throw new Error("No enabled workers configured");
+    }
     const url = buildModelsUrl(this.settings.baseUrl);
     const maxAttempts = Math.max(1, this.rotator.getAccounts().length);
     const directFallbackAllowed = this.rotator

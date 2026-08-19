@@ -213,6 +213,51 @@ describe("multi-key sticky affinity / 429 cooldown", () => {
     expect(rot.pick("session-a", 100).id).toBe("anonymous");
   });
 
+  it("supports authenticated-first and falls back after all signed-in workers fail", () => {
+    const rot = new AccountRotator();
+    rot.sync(
+      [
+        { id: "anon", apiKey: "", kind: "anonymous_zen" },
+        { id: "login-a", apiKey: "a", kind: "authenticated_zen" },
+        { id: "login-b", apiKey: "b", kind: "authenticated_zen" },
+      ],
+      undefined,
+      "authenticated_first"
+    );
+
+    const first = rot.pick("session", 1_000);
+    expect(first.id).toBe("login-a");
+    rot.markCooldown(first, 1_000, 0);
+    const second = rot.pick("session", 1_000);
+    expect(second.id).toBe("login-b");
+    rot.markCooldown(second, 1_000, 0);
+    expect(rot.pick("session", 1_000).id).toBe("anon");
+  });
+
+  it("uses configured order for mixed routing and excludes disabled workers", () => {
+    const rot = new AccountRotator();
+    rot.sync(
+      [
+        { id: "login", apiKey: "key", enabled: true },
+        { id: "disabled", apiKey: "", enabled: false },
+        { id: "anon", apiKey: "", enabled: true },
+      ],
+      undefined,
+      "mixed"
+    );
+
+    expect(rot.getAccounts().map((account) => account.id)).toEqual(["login", "anon"]);
+    expect(rot.pick("session-a", 1_000).id).toBe("login");
+    expect(rot.pick("session-b", 1_000).id).toBe("anon");
+  });
+
+  it("reports an explicit error when every worker is disabled", () => {
+    const rot = new AccountRotator();
+    rot.sync([{ id: "disabled", apiKey: "", enabled: false }]);
+    expect(rot.readyCount()).toBe(0);
+    expect(() => rot.pick()).toThrow("No enabled workers configured");
+  });
+
   it("keeps affinity per session and distributes new sessions", () => {
     const rot = new AccountRotator();
     rot.sync([

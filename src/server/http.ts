@@ -173,12 +173,64 @@ function anonymousZenSummary(results: ProbeResult[]) {
   return summary;
 }
 
+function autoAnonymousWorkerId(proxyId: string, occupiedIds: Set<string>): string {
+  const base = `anonymous-zen-${proxyId}`;
+  if (!occupiedIds.has(base)) return base;
+  let suffix = 2;
+  while (occupiedIds.has(`${base}-${suffix}`)) suffix++;
+  return `${base}-${suffix}`;
+}
+
+/**
+ * Add one anonymous Worker for each newly verified public egress. Existing
+ * accounts are never changed, so re-tests and partial batch tests are safe.
+ */
+function syncAnonymousWorkers(
+  settings: GatewaySettings,
+  results: ProbeResult[],
+  probes: ProbeResultCache
+): { accounts: GatewaySettings["accounts"]; addedIds: string[] } {
+  const accounts = [...settings.accounts];
+  const occupiedIds = new Set(accounts.map((account) => account.id));
+  const boundProxyIds = new Set(
+    accounts
+      .filter((account) => inferAccountKind(account) === "anonymous_zen")
+      .map((account) => account.proxyId)
+      .filter((proxyId): proxyId is string => Boolean(proxyId))
+  );
+  const usedEgressIps = new Set<string>();
+  for (const proxyId of boundProxyIds) {
+    const egressIp = probes.get(proxyId)?.egressIp;
+    if (egressIp) usedEgressIps.add(egressIp);
+  }
+
+  const addedIds: string[] = [];
+  for (const result of results) {
+    if (!result.ok || !result.anonymousZen?.ok || !result.egressIp) continue;
+    if (boundProxyIds.has(result.id) || usedEgressIps.has(result.egressIp)) continue;
+    const id = autoAnonymousWorkerId(result.id, occupiedIds);
+    accounts.push({
+      id,
+      kind: "anonymous_zen",
+      apiKey: "",
+      proxyId: result.id,
+      proxy: null,
+    });
+    occupiedIds.add(id);
+    boundProxyIds.add(result.id);
+    usedEgressIps.add(result.egressIp);
+    addedIds.push(id);
+  }
+  return { accounts, addedIds };
+}
+
 function duplicateWorkerEgress(
   accounts: GatewaySettings["accounts"],
   probes: ProbeResultCache
 ): { kind: string; route: string; accountIds: string[] } | null {
   const groups = new Map<string, string[]>();
   for (const account of accounts) {
+    if (account.enabled === false) continue;
     if (!account.proxyId) continue;
     const route = probes.get(account.proxyId)?.egressIp || `proxy:${account.proxyId}`;
     const kind = inferAccountKind(account);
@@ -386,7 +438,7 @@ async function handleRequest(
     res.writeHead(204, {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Headers": "*",
-      "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+      "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
     });
     res.end();
     return;
@@ -488,6 +540,7 @@ async function handleRequest(
       return {
         ...worker,
         kind,
+        enabled: account?.enabled !== false,
         credentialLabel: credentialLabel(kind, account?.apiKey ?? ""),
         proxyId: account?.proxyId ?? null,
         proxyName: proxy?.name ?? state?.clashNodeName ?? null,
@@ -504,6 +557,7 @@ async function handleRequest(
       .map((account) => account.id);
     sendJson(res, 200, {
       ...store.getStatus(),
+      routingStrategy: store.get().routingStrategy,
       workers,
       usageTotals: workerStats.totals(accountIds),
       usageTotalsByKind: {
@@ -511,6 +565,54 @@ async function handleRequest(
         authenticated_zen: workerStats.totals(authenticatedIds),
       },
       recentAttempts: workerStats.recentAttempts(100),
+    });
+    return;
+  }
+
+  // PATCH /admin/api/workers/:id — enable or disable one configured worker.
+  if (method === "PATCH" && path.match(/^\/admin\/api\/workers\/[^/]+$/)) {
+    const id = decodeURIComponent(path.slice("/admin/api/workers/".length));
+    const raw = await readBody(req);
+    let enabled: boolean;
+    try {
+      const body = JSON.parse(raw.toString("utf8") || "{}") as { enabled?: unknown };
+      if (typeof body.enabled !== "boolean") throw new Error("enabled must be boolean");
+      enabled = body.enabled;
+    } catch (error) {
+      sendJson(res, 400, {
+        error: { message: error instanceof Error ? error.message : "Invalid JSON" },
+      });
+      return;
+    }
+    const current = store.get();
+    const index = current.accounts.findIndex((account) => account.id === id);
+    if (index < 0) {
+      sendJson(res, 404, { error: { message: `Worker not found: ${id}` } });
+      return;
+    }
+    const accounts = current.accounts.map((account, accountIndex) =>
+      accountIndex === index ? { ...account, enabled } : account
+    );
+    const duplicate = enabled ? duplicateWorkerEgress(accounts, probes) : null;
+    if (duplicate) {
+      sendJson(res, 400, {
+        error: {
+          type: "duplicate_worker_egress",
+          message: `${duplicate.kind} workers ${duplicate.accountIds.join(", ")} share ${duplicate.route}`,
+        },
+      });
+      return;
+    }
+    const saved = await store.save({ accounts });
+    upstream.updateSettings(saved);
+    store.updateReadyCount(
+      upstream.rotator.readyCount(),
+      upstream.rotator.getAccounts().length
+    );
+    sendJson(res, 200, {
+      ok: true,
+      worker: saved.accounts[index],
+      routingStrategy: saved.routingStrategy,
     });
     return;
   }
@@ -824,11 +926,27 @@ async function handleRequest(
       }
     }
     probes.setMany(results);
+    const synced = syncAnonymousWorkers(s, results, probes);
+    const saved = synced.addedIds.length
+      ? await store.save({ accounts: synced.accounts })
+      : store.get();
+    if (synced.addedIds.length) {
+      upstream.updateSettings(saved);
+      store.updateReadyCount(
+        upstream.rotator.readyCount(),
+        upstream.rotator.getAccounts().length
+      );
+    }
     sendJson(res, 200, {
       results,
       summary: summarizeProbeResults(results),
       anonymousSummary: anonymousZenSummary(results),
       probeResults: probes.getAll(),
+      autoWorkers: {
+        added: synced.addedIds.length,
+        addedIds: synced.addedIds,
+      },
+      settings: saved,
     });
     return;
   }

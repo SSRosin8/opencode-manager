@@ -181,6 +181,65 @@ describe("gateway HTTP entry", () => {
     }
   });
 
+  it("persists routing strategy and enables or disables one worker", async () => {
+    const { port, dir } = await bootMocked(async () => new Response("{}", { status: 200 }));
+    try {
+      const settingsRes = await fetch(`http://127.0.0.1:${port}/admin/api/settings`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          routingStrategy: "authenticated_first",
+          accounts: [
+            { id: "login", apiKey: "signed-in", kind: "authenticated_zen" },
+            { id: "anon", apiKey: "", kind: "anonymous_zen", enabled: false },
+          ],
+        }),
+      });
+      expect(settingsRes.status).toBe(200);
+      expect(await settingsRes.json()).toMatchObject({
+        routingStrategy: "authenticated_first",
+        accounts: [
+          { id: "login", enabled: true },
+          { id: "anon", enabled: false },
+        ],
+      });
+
+      const enableRes = await fetch(`http://127.0.0.1:${port}/admin/api/workers/anon`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: true }),
+      });
+      expect(enableRes.status).toBe(200);
+      expect(await enableRes.json()).toMatchObject({
+        ok: true,
+        worker: { id: "anon", enabled: true },
+        routingStrategy: "authenticated_first",
+      });
+
+      const statusRes = await fetch(`http://127.0.0.1:${port}/admin/api/status`);
+      const status = (await statusRes.json()) as {
+        routingStrategy: string;
+        workers: Array<{ accountId: string; enabled: boolean }>;
+      };
+      expect(status.routingStrategy).toBe("authenticated_first");
+      expect(status.workers).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ accountId: "login", enabled: true }),
+          expect.objectContaining({ accountId: "anon", enabled: true }),
+        ])
+      );
+
+      const invalidRes = await fetch(`http://127.0.0.1:${port}/admin/api/workers/anon`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: "no" }),
+      });
+      expect(invalidRes.status).toBe(400);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("proxies models and non-stream chat with OpenAI-shaped bodies", async () => {
     const { port, dir } = await bootMocked(async (url, init) => {
       if (String(url).endsWith("/models")) {

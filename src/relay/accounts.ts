@@ -20,6 +20,8 @@ export type AccountConfig = {
   apiKey: string;
   /** Worker pool. Legacy configs infer anonymous from an empty key. */
   kind?: AccountKind;
+  /** Disabled workers remain configured but never receive relay traffic. */
+  enabled?: boolean;
   /**
    * Bind this worker to a proxy-pool entry id (preferred).
    * Resolved against GatewaySettings.proxyPool at request time.
@@ -30,6 +32,11 @@ export type AccountConfig = {
 };
 
 export type AccountKind = "anonymous_zen" | "authenticated_zen";
+
+export type WorkerRoutingStrategy =
+  | "anonymous_first"
+  | "authenticated_first"
+  | "mixed";
 
 export function inferAccountKind(config: Pick<AccountConfig, "apiKey" | "kind">): AccountKind {
   if (config.kind === "anonymous_zen" || config.kind === "authenticated_zen") {
@@ -64,20 +71,10 @@ export type ResolvedAccountEgress = {
 };
 
 export class AccountRotator {
-  private accounts: AccountState[] = [
-    {
-      id: "",
-      apiKey: "",
-      kind: "anonymous_zen",
-      proxy: null,
-      proxyId: null,
-      clashNodeName: null,
-      cooldownUntil: 0,
-      consecutiveFails: 0,
-    },
-  ];
+  private accounts: AccountState[] = [];
   private nextIdx = 0;
   private sessionAccounts = new Map<string, string>();
+  private strategy: WorkerRoutingStrategy = "anonymous_first";
 
   /**
    * Replace account list; preserve cooldown state for matching ids.
@@ -85,7 +82,8 @@ export class AccountRotator {
    */
   sync(
     configs: AccountConfig[],
-    resolve?: (config: AccountConfig) => AccountProxy | ResolvedAccountEgress
+    resolve?: (config: AccountConfig) => AccountProxy | ResolvedAccountEgress,
+    strategy: WorkerRoutingStrategy = "anonymous_first"
   ): void {
     const resolveFull = (
       c: AccountConfig
@@ -104,26 +102,8 @@ export class AccountRotator {
       };
     };
 
-    if (!configs.length) {
-      this.accounts = [
-        {
-          id: "",
-          apiKey: "",
-          kind: "anonymous_zen",
-          proxy: null,
-          proxyId: null,
-          clashNodeName: null,
-          cooldownUntil: 0,
-          consecutiveFails: 0,
-        },
-      ];
-      this.nextIdx = 0;
-      this.sessionAccounts.clear();
-      return;
-    }
-
     const previous = new Map(this.accounts.map((a) => [a.id, a] as const));
-    this.accounts = configs.map((c) => {
+    this.accounts = configs.filter((c) => c.enabled !== false).map((c) => {
       const prior = previous.get(c.id);
       const egress = resolveFull(c);
       return {
@@ -137,10 +117,18 @@ export class AccountRotator {
         consecutiveFails: prior?.consecutiveFails ?? 0,
       };
     });
-    // Anonymous exits are consumed first; authenticated keys are fallback capacity.
-    this.accounts.sort((a, b) =>
-      a.kind === b.kind ? 0 : a.kind === "anonymous_zen" ? -1 : 1
-    );
+    if (strategy !== "mixed") {
+      const preferred =
+        strategy === "authenticated_first" ? "authenticated_zen" : "anonymous_zen";
+      this.accounts.sort((a, b) =>
+        a.kind === b.kind ? 0 : a.kind === preferred ? -1 : 1
+      );
+    }
+    if (this.strategy !== strategy) {
+      this.sessionAccounts.clear();
+      this.nextIdx = 0;
+    }
+    this.strategy = strategy;
     const ids = new Set(this.accounts.map((account) => account.id));
     for (const [sessionKey, accountId] of this.sessionAccounts) {
       if (!ids.has(accountId)) this.sessionAccounts.delete(sessionKey);
@@ -173,23 +161,38 @@ export class AccountRotator {
   pick(now?: number): AccountState;
   pick(sessionKey?: string, now?: number): AccountState;
   pick(sessionKeyOrNow: string | number = "", maybeNow = Date.now()): AccountState {
+    if (!this.accounts.length) throw new Error("No enabled workers configured");
     const sessionKey =
       typeof sessionKeyOrNow === "string" ? sessionKeyOrNow || "__default__" : "__default__";
     const now = typeof sessionKeyOrNow === "number" ? sessionKeyOrNow : maybeNow;
+    const preferredKind =
+      this.strategy === "anonymous_first"
+        ? "anonymous_zen"
+        : this.strategy === "authenticated_first"
+          ? "authenticated_zen"
+          : null;
+    const hasReadyPreferred = preferredKind
+      ? this.accounts.some(
+          (candidate) => candidate.kind === preferredKind && this.isReady(candidate, now)
+        )
+      : false;
     const boundId = this.sessionAccounts.get(sessionKey);
     if (boundId) {
       const bound = this.accounts.find((account) => account.id === boundId);
-      if (bound && this.isReady(bound, now)) return bound;
+      if (
+        bound &&
+        this.isReady(bound, now) &&
+        (!hasReadyPreferred || bound.kind === preferredKind)
+      ) {
+        return bound;
+      }
       this.sessionAccounts.delete(sessionKey);
     }
 
-    const hasReadyAnonymous = this.accounts.some(
-      (candidate) => candidate.kind === "anonymous_zen" && this.isReady(candidate, now)
-    );
     for (let i = 0; i < this.accounts.length; i++) {
       const idx = (this.nextIdx + i) % this.accounts.length;
       const acct = this.accounts[idx];
-      if (hasReadyAnonymous && acct.kind !== "anonymous_zen") continue;
+      if (hasReadyPreferred && acct.kind !== preferredKind) continue;
       if (this.isReady(acct, now)) {
         this.nextIdx = (idx + 1) % this.accounts.length;
         this.bindSession(sessionKey, acct.id);
