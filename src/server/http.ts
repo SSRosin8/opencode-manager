@@ -17,16 +17,20 @@ import {
   mergeControllerProxies,
   mergeSubscriptionProxies,
   newProxyId,
+  type PoolProxy,
   type ProxySubscription,
 } from "../proxy/pool.js";
 import {
   ProbeResultCache,
+  probeAnonymousZenProxy,
   probePoolProxies,
   probePoolProxy,
   summarizeProbeResults,
   type ProbeResult,
+  type AnonymousZenProbeResult,
 } from "../proxy/probe.js";
 import { SettingsStore, type GatewaySettings } from "../settings/store.js";
+import { inferAccountKind } from "../relay/index.js";
 import { FreeModelRegistry } from "../proxy/freeModels.js";
 import {
   parseUsageFromObject,
@@ -98,6 +102,7 @@ function clientHeadersFrom(req: IncomingMessage): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(req.headers)) {
     if (v == null) continue;
+    if (k.toLowerCase() === "x-oc-relay-key") continue;
     out[k] = Array.isArray(v) ? v.join(", ") : v;
   }
   return out;
@@ -111,6 +116,79 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
     "Access-Control-Allow-Origin": "*",
   });
   res.end(data);
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  const workers = Array.from(
+    { length: Math.min(Math.max(1, concurrency), Math.max(1, items.length)) },
+    async () => {
+      while (true) {
+        const index = cursor++;
+        if (index >= items.length) return;
+        results[index] = await fn(items[index]);
+      }
+    }
+  );
+  if (items.length) await Promise.all(workers);
+  return results;
+}
+
+function attachAnonymousZenResult(
+  probe: ProbeResult,
+  anonymousZen: AnonymousZenProbeResult | null
+): ProbeResult {
+  if (!anonymousZen) return { ...probe, anonymousZen: null };
+  const health = anonymousZen.ok
+    ? "healthy"
+    : anonymousZen.status === "rate_limited" || anonymousZen.status === "temporary_failure"
+      ? "warn"
+      : "bad";
+  return { ...probe, health, anonymousZen };
+}
+
+function anonymousZenSummary(results: ProbeResult[]) {
+  const summary = {
+    usable: 0,
+    rateLimited: 0,
+    blocked: 0,
+    temporaryFailure: 0,
+    unreachable: 0,
+    unverified: 0,
+  };
+  for (const result of results) {
+    const status = result.anonymousZen?.status;
+    if (status === "usable") summary.usable++;
+    else if (status === "rate_limited") summary.rateLimited++;
+    else if (status === "blocked") summary.blocked++;
+    else if (status === "temporary_failure") summary.temporaryFailure++;
+    else if (status === "unreachable") summary.unreachable++;
+    else summary.unverified++;
+  }
+  return summary;
+}
+
+function duplicateWorkerEgress(
+  accounts: GatewaySettings["accounts"],
+  probes: ProbeResultCache
+): { kind: string; route: string; accountIds: string[] } | null {
+  const groups = new Map<string, string[]>();
+  for (const account of accounts) {
+    if (!account.proxyId) continue;
+    const route = probes.get(account.proxyId)?.egressIp || `proxy:${account.proxyId}`;
+    const kind = inferAccountKind(account);
+    const key = `${kind}\0${route}`;
+    const ids = groups.get(key) ?? [];
+    ids.push(account.id);
+    groups.set(key, ids);
+    if (ids.length > 1) return { kind, route, accountIds: ids };
+  }
+  return null;
 }
 
 async function readStreamFully(
@@ -294,6 +372,21 @@ async function handleRequest(
     return;
   }
 
+  const relayAccessToken = store.get().relayAccessToken;
+  if (
+    path.startsWith("/v1/") &&
+    relayAccessToken &&
+    req.headers["x-oc-relay-key"] !== relayAccessToken
+  ) {
+    sendJson(res, 401, {
+      error: {
+        message: "Invalid or missing relay access token",
+        type: "authentication_error",
+      },
+    });
+    return;
+  }
+
   if (method === "GET" && (path === "/" || path === "/admin" || path === "/admin/")) {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(ADMIN_HTML);
@@ -332,6 +425,18 @@ async function handleRequest(
         sendJson(res, 400, { error: { message: "Invalid JSON" } });
         return;
       }
+      if (Array.isArray(parsed.accounts)) {
+        const duplicate = duplicateWorkerEgress(parsed.accounts, probes);
+        if (duplicate) {
+          sendJson(res, 400, {
+            error: {
+              type: "duplicate_worker_egress",
+              message: `${duplicate.kind} workers ${duplicate.accountIds.join(", ")} share ${duplicate.route}`,
+            },
+          });
+          return;
+        }
+      }
       const saved = await store.save(parsed);
       upstream.updateSettings(saved);
       store.updateReadyCount(
@@ -348,12 +453,27 @@ async function handleRequest(
       upstream.rotator.readyCount(),
       upstream.rotator.getAccounts().length
     );
-    const accountIds = store.get().accounts.map((a) => a.id);
-    const workers = workerStats.listForAccounts(accountIds);
+    const accounts = store.get().accounts;
+    const accountIds = accounts.map((a) => a.id);
+    const kinds = new Map(accounts.map((account) => [account.id, account.kind] as const));
+    const workers = workerStats.listForAccounts(accountIds).map((worker) => ({
+      ...worker,
+      kind: kinds.get(worker.accountId) ?? "anonymous_zen",
+    }));
+    const anonymousIds = accounts
+      .filter((account) => account.kind === "anonymous_zen")
+      .map((account) => account.id);
+    const authenticatedIds = accounts
+      .filter((account) => account.kind === "authenticated_zen")
+      .map((account) => account.id);
     sendJson(res, 200, {
       ...store.getStatus(),
       workers,
       usageTotals: workerStats.totals(accountIds),
+      usageTotalsByKind: {
+        anonymous_zen: workerStats.totals(anonymousIds),
+        authenticated_zen: workerStats.totals(authenticatedIds),
+      },
     });
     return;
   }
@@ -459,11 +579,23 @@ async function handleRequest(
     }
     const started = performance.now();
     try {
-      const probe = await probePoolProxy(proxy, s.clashBridge, {
+      const networkProbe = await probePoolProxy(proxy, s.clashBridge, {
         fetchImpl: ctx?.probeFetch,
         bridgeFetch: subscriptionFetch ?? globalThis.fetch,
         clashQueue: clashProbeQueue,
       });
+      const probe = networkProbe.ok
+        ? attachAnonymousZenResult(
+            networkProbe,
+            await probeAnonymousZenProxy(proxy, s.clashBridge, {
+              baseUrl: s.baseUrl,
+              model: freeModels.has("big-pickle") ? "big-pickle" : freeModels.ids()[0],
+              fetchImpl: ctx?.probeFetch,
+              bridgeFetch: subscriptionFetch ?? globalThis.fetch,
+              clashQueue: clashProbeQueue,
+            })
+          )
+        : attachAnonymousZenResult(networkProbe, null);
       probes.set(probe);
       if (!probe.ok) {
         sendJson(res, 502, {
@@ -477,8 +609,40 @@ async function handleRequest(
         });
         return;
       }
+      if (!probe.anonymousZen?.ok) {
+        sendJson(res, 502, {
+          ok: false,
+          workerId: id,
+          proxyId: proxy.id,
+          proxyName: proxy.name,
+          egressIp: probe.egressIp ?? null,
+          anonymousZen: probe.anonymousZen,
+          latencyMs: Math.round(performance.now() - started),
+          error: {
+            message: `Anonymous Zen probe failed: ${probe.anonymousZen?.error || "unknown error"}`,
+          },
+        });
+        return;
+      }
       const model = freeModels.has("big-pickle") ? "big-pickle" : freeModels.ids()[0];
       if (!model) throw new Error("No free model available for worker test");
+      if (account.kind === "anonymous_zen") {
+        sendJson(res, 200, {
+          ok: true,
+          workerId: id,
+          workerKind: account.kind,
+          proxyId: proxy.id,
+          proxyName: proxy.name,
+          egressIp: probe.egressIp ?? null,
+          model,
+          upstreamStatus: probe.anonymousZen.httpStatus,
+          latencyMs: Math.round(performance.now() - started),
+          anonymousZen: probe.anonymousZen,
+          reply: null,
+          error: null,
+        });
+        return;
+      }
       const result = await upstream.testAccountConnection(id, model);
       let reply: string | null = null;
       let upstreamError: string | null = null;
@@ -509,6 +673,7 @@ async function handleRequest(
         proxyName: proxy.name,
         clashNodeName: result.clashNodeName,
         egressIp: probe.egressIp ?? null,
+        anonymousZen: probe.anonymousZen,
         model,
         upstreamStatus: result.status,
         latencyMs: Math.round(performance.now() - started),
@@ -576,10 +741,43 @@ async function handleRequest(
         bridgeFetch,
         clashQueue: clashProbeQueue,
         fastController: true,
-        verifyEgressCount: Math.max(1, s.accounts.length),
+        // Anonymous quotas are IP-sensitive, so every candidate needs a verified egress IP.
+        verifyEgressCount: Math.max(1, targets.length),
         verifyProxyIds: s.accounts
           .map((account) => account.proxyId)
           .filter((id): id is string => Boolean(id)),
+      });
+      const representatives = new Map<string, PoolProxy>();
+      for (const result of results) {
+        if (!result.ok || !result.egressIp || representatives.has(result.egressIp)) continue;
+        const proxy = targets.find((candidate) => candidate.id === result.id);
+        if (proxy) representatives.set(result.egressIp, proxy);
+      }
+      const representativeEntries = [...representatives.entries()];
+      const anonymousChecks = await mapWithConcurrency(
+        representativeEntries,
+        4,
+        async ([egressIp, proxy]) => ({
+          egressIp,
+          result: await probeAnonymousZenProxy(proxy, s.clashBridge, {
+            baseUrl: s.baseUrl,
+            model: freeModels.has("big-pickle") ? "big-pickle" : freeModels.ids()[0],
+            fetchImpl: ctx?.probeFetch,
+            bridgeFetch,
+            clashQueue: clashProbeQueue,
+          }),
+        })
+      );
+      const anonymousByIp = new Map(
+        anonymousChecks.map(({ egressIp, result }) => [egressIp, result] as const)
+      );
+      results = results.map((result) => {
+        if (!result.ok || !result.egressIp) return attachAnonymousZenResult(result, null);
+        const anonymous = anonymousByIp.get(result.egressIp);
+        return attachAnonymousZenResult(
+          result,
+          anonymous ? { ...anonymous, id: result.id } : null
+        );
       });
     } finally {
       if (previousNode) {
@@ -592,6 +790,7 @@ async function handleRequest(
     sendJson(res, 200, {
       results,
       summary: summarizeProbeResults(results),
+      anonymousSummary: anonymousZenSummary(results),
       probeResults: probes.getAll(),
     });
     return;
@@ -608,11 +807,23 @@ async function handleRequest(
       sendJson(res, 404, { error: { message: `Proxy not found: ${id}` } });
       return;
     }
-    const result: ProbeResult = await probePoolProxy(proxy, s.clashBridge, {
+    const networkProbe: ProbeResult = await probePoolProxy(proxy, s.clashBridge, {
       fetchImpl: ctx?.probeFetch,
       bridgeFetch: subscriptionFetch ?? globalThis.fetch,
       clashQueue: clashProbeQueue,
     });
+    const result = networkProbe.ok
+      ? attachAnonymousZenResult(
+          networkProbe,
+          await probeAnonymousZenProxy(proxy, s.clashBridge, {
+            baseUrl: s.baseUrl,
+            model: freeModels.has("big-pickle") ? "big-pickle" : freeModels.ids()[0],
+            fetchImpl: ctx?.probeFetch,
+            bridgeFetch: subscriptionFetch ?? globalThis.fetch,
+            clashQueue: clashProbeQueue,
+          })
+        )
+      : attachAnonymousZenResult(networkProbe, null);
     probes.set(result);
     sendJson(res, 200, { result, probeResults: probes.getAll() });
     return;

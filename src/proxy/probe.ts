@@ -3,6 +3,7 @@
  */
 
 import { fetch as undiciFetch, type RequestInit as UndiciRequestInit } from "undici";
+import { randomUUID } from "node:crypto";
 import type { AccountProxy } from "../relay/accounts.js";
 import {
   isClashProtocol,
@@ -16,10 +17,13 @@ import {
   probeClashNodeDelay,
   selectClashProxy,
 } from "./clashBridge.js";
+import { buildChatCompletionsUrl, DEFAULT_BASE_URL } from "../relay/url.js";
 
 /** Echo the public egress IP so health checks can also verify account isolation. */
 export const DEFAULT_PROBE_URL = "https://api.ipify.org";
 export const DEFAULT_PROBE_TIMEOUT_MS = 8000;
+export const DEFAULT_ANONYMOUS_ZEN_MODEL = "big-pickle";
+export const DEFAULT_ANONYMOUS_ZEN_TIMEOUT_MS = 45_000;
 
 export type ProbeHealth = "healthy" | "warn" | "bad" | "testing" | "skip";
 
@@ -33,6 +37,8 @@ export type ProbeResult = {
   egressIp?: string | null;
   skipped?: boolean;
   reason?: string;
+  /** Real anonymous Zen model check through this egress. */
+  anonymousZen?: AnonymousZenProbeResult | null;
 };
 
 export type ProbeFetch = (
@@ -55,6 +61,35 @@ export type ProbeOptions = {
   /** Controller proxy ids that should receive full public-IP verification first. */
   verifyProxyIds?: string[];
 };
+
+export type AnonymousZenProbeStatus =
+  | "usable"
+  | "rate_limited"
+  | "blocked"
+  | "temporary_failure"
+  | "unreachable";
+
+export type AnonymousZenProbeResult = {
+  id: string;
+  status: AnonymousZenProbeStatus;
+  ok: boolean;
+  httpStatus: number | null;
+  latencyMs: number | null;
+  error: string | null;
+  testedAt: string;
+  retryAfterSeconds?: number;
+};
+
+export type AnonymousZenProbeOptions = {
+  baseUrl?: string;
+  model?: string;
+  timeoutMs?: number;
+  fetchImpl?: ProbeFetch;
+  bridgeFetch?: typeof fetch;
+  clashQueue?: ClashSwitchQueue;
+};
+
+const anonymousZenClashQueue = new ClashSwitchQueue();
 
 /** In-memory last probe results (process lifetime). */
 export class ProbeResultCache {
@@ -149,6 +184,164 @@ async function timedProxyFetch(
   } finally {
     clearTimeout(timer);
   }
+}
+
+function anonymousZenStatus(httpStatus: number): AnonymousZenProbeStatus {
+  if (httpStatus >= 200 && httpStatus < 300) return "usable";
+  if (httpStatus === 429) return "rate_limited";
+  if (httpStatus === 401 || httpStatus === 403) return "blocked";
+  if (httpStatus === 407) return "unreachable";
+  return "temporary_failure";
+}
+
+function retryAfterSeconds(headers: Headers): number | undefined {
+  const value = headers.get("retry-after")?.trim();
+  if (!value) return undefined;
+  if (/^\d+(?:\.\d+)?$/.test(value)) return Math.ceil(Number(value));
+  const at = Date.parse(value);
+  if (!Number.isFinite(at)) return undefined;
+  return Math.max(0, Math.ceil((at - Date.now()) / 1000));
+}
+
+async function zenResponseError(response: Response): Promise<string> {
+  let text = "";
+  try {
+    text = (await response.text()).trim();
+  } catch {
+    /* fall back to the HTTP status */
+  }
+  if (text) {
+    try {
+      const parsed = JSON.parse(text) as unknown;
+      if (parsed && typeof parsed === "object") {
+        const record = parsed as Record<string, unknown>;
+        const nested =
+          record.error && typeof record.error === "object"
+            ? (record.error as Record<string, unknown>)
+            : null;
+        const message =
+          (typeof nested?.message === "string" && nested.message) ||
+          (typeof record.error === "string" && record.error) ||
+          (typeof record.message === "string" && record.message) ||
+          (typeof record.detail === "string" && record.detail);
+        if (message) return message.slice(0, 500);
+      }
+    } catch {
+      /* keep the plain response body */
+    }
+    return text.replace(/\s+/g, " ").slice(0, 500);
+  }
+  return `Zen HTTP ${response.status}`;
+}
+
+/**
+ * Send a real, minimal anonymous request through one proxy pool entry.
+ * OpenCode's anonymous Zen mode uses the fixed `public` bearer credential.
+ */
+export async function probeAnonymousZenProxy(
+  proxy: PoolProxy,
+  bridge: ClashBridgeConfig,
+  opts: AnonymousZenProbeOptions = {}
+): Promise<AnonymousZenProbeResult> {
+  const testedAt = nowIso();
+  const unreachable = (error: string): AnonymousZenProbeResult => ({
+    id: proxy.id,
+    status: "unreachable",
+    ok: false,
+    httpStatus: null,
+    latencyMs: null,
+    error,
+    testedAt,
+  });
+
+  if (!proxy.enabled) return unreachable("disabled");
+  if (!proxy.usable && !needsBridgeEgress(proxy)) {
+    return unreachable("unusable protocol");
+  }
+  if (needsBridgeEgress(proxy) && !bridge?.enabled) {
+    return unreachable("Clash bridge required");
+  }
+
+  const egress = resolveAccountEgress({ proxyId: proxy.id }, [proxy], bridge);
+  if (!egress.proxy) return unreachable("no proxy egress");
+
+  const fetchImpl: ProbeFetch =
+    opts.fetchImpl ??
+    ((url, init) =>
+      undiciFetch(url, init as UndiciRequestInit) as unknown as Promise<Response>);
+  const bridgeFetch = opts.bridgeFetch ?? globalThis.fetch;
+  const timeoutMs = Math.max(1, opts.timeoutMs ?? DEFAULT_ANONYMOUS_ZEN_TIMEOUT_MS);
+  const url = buildChatCompletionsUrl(opts.baseUrl ?? DEFAULT_BASE_URL);
+  const model = opts.model?.trim() || DEFAULT_ANONYMOUS_ZEN_MODEL;
+
+  const run = async (): Promise<AnonymousZenProbeResult> => {
+    const started = performance.now();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      if (egress.clashNodeName && bridge.enabled) {
+        const abortableBridgeFetch = ((url: string, init?: RequestInit) =>
+          bridgeFetch(url, { ...init, signal: controller.signal })) as typeof fetch;
+        await selectClashProxy(bridge, egress.clashNodeName, abortableBridgeFetch);
+      }
+      const response = await fetchImpl(url, {
+        method: "POST",
+        signal: controller.signal,
+        dispatcher: createProxyDispatcher(egress.proxy!),
+        headers: {
+          Authorization: "Bearer public",
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "User-Agent": "opencode-cli/1.0.0",
+          "x-opencode-client": "cli",
+          "x-opencode-project": "default",
+          "x-opencode-request": randomUUID(),
+          "x-opencode-session": randomUUID(),
+        },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: "user", content: "Reply exactly OK" }],
+          stream: false,
+          max_tokens: 1,
+        }),
+      });
+      const status = anonymousZenStatus(response.status);
+      const result: AnonymousZenProbeResult = {
+        id: proxy.id,
+        status,
+        ok: status === "usable",
+        httpStatus: response.status,
+        latencyMs: Math.round(performance.now() - started),
+        error: status === "usable" ? null : await zenResponseError(response),
+        testedAt,
+      };
+      const retryAfter = retryAfterSeconds(response.headers);
+      if (retryAfter !== undefined) result.retryAfterSeconds = retryAfter;
+      return result;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const timedOut =
+        controller.signal.aborted ||
+        (err instanceof Error && err.name === "AbortError") ||
+        /abort|timeout/i.test(message);
+      return {
+        id: proxy.id,
+        status: "unreachable",
+        ok: false,
+        httpStatus: null,
+        latencyMs: Math.round(performance.now() - started),
+        error: timedOut ? "Timeout" : message,
+        testedAt,
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  if (egress.clashNodeName) {
+    return (opts.clashQueue ?? anonymousZenClashQueue).run(run);
+  }
+  return run();
 }
 
 /**

@@ -9,7 +9,8 @@ Standalone **OpenCode free-worker** LLM gateway: an OpenAI-compatible relay that
 - Accepts **OpenAI-compatible** client requests (`/v1/chat/completions`, `/v1/models`)
 - **Transparent passthrough** to `https://opencode.ai/zen/v1` (configurable)
 - **Free-only models**: auto-scrapes the Zen pricing page and serves ONLY free models (list + chat); paid models are never exposed
-- Multi-key / multi-account **sticky affinity until 429**, then rotate + cooldown (keeps prompt cache warm)
+- Separate anonymous Zen (`Bearer public`) and signed-in Zen pools, with anonymous capacity first
+- Per-OpenCode-session worker affinity with failover on 429, invalid keys, and temporary upstream errors
 - Optional **OpenCode CLI identity header** synthesis (Cloudflare / VPS)
 - Minimal free-model body fixes (strip `client_metadata`, thinking-model `reasoning_content`, effort aliases)
 - **Management page** at `/` for keys, base URL, proxies, and status
@@ -40,6 +41,28 @@ Default port: **9876** (override with `PORT` or admin settings).
 | `OPENCODE_SYNTHESIZE_CLI_HEADERS` | `true` to synthesize CLI identity headers (also toggleable in admin) |
 | `OPENCODE_USER_AGENT` / `OPENCODE_CLIENT` / `OPENCODE_PROJECT` | CLI default values |
 | `OCFREERELAY_PRICING_URL` | Override the Zen pricing page URL used to scrape free models |
+
+### Native OpenCode setup
+
+No OpenCode source changes are needed. Override the built-in `opencode` provider in `opencode.json`. When relay authentication is enabled, pass it as a custom header rather than a Zen API key:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "opencode": {
+      "options": {
+        "baseURL": "http://127.0.0.1:9876/v1",
+        "headers": {
+          "X-OC-Relay-Key": "your-relay-token"
+        }
+      }
+    }
+  }
+}
+```
+
+An empty relay token preserves the existing open-access behavior. OpenCode Go is not handled by this release.
 
 ## Free-only model serving
 
@@ -72,9 +95,9 @@ OpenCode free accounts are often **IP-limited**. Bind each worker to a different
    - Gateway switches the select-group per worker, then exits via local HTTP proxy
 4. **Bind** — each Worker selects a pool node via `proxyId`
 
-Probe candidate nodes after importing. Probes record the public egress IP, and automatic assignment avoids nodes with the same known egress IP. A single mixed-port uses one shared selector; the gateway serializes node selection and connection setup. Do not switch that selector from another client while the gateway is running. Use separate Mihomo inbounds or instances when workers must permanently own concurrent ports.
+Probe candidate nodes after importing. A probe records the public egress IP and then sends a real anonymous Zen free-model request with `Bearer public`; only successful egress routes are eligible for automatic assignment. Nodes are deduplicated by public IP, and one egress may host at most one anonymous worker plus one signed-in worker. A single mixed-port uses one shared selector; the gateway serializes node selection and connection setup. Do not switch that selector from another client while the gateway is running. Use separate Mihomo inbounds or instances when workers must permanently own concurrent ports.
 
-**Batch Test** screens nodes concurrently through Mihomo's delay API and prioritizes public-IP verification for currently bound workers. After saving a worker, click **Test connection** on its card to send a real OpenCode request with that exact key and bound node; the result includes HTTP status, total latency, node, and public egress IP.
+**Batch Test** first screens nodes through Mihomo's delay API, then verifies every distinct public IP against anonymous Zen. After saving a worker, click **Test connection** on its card; signed-in workers are checked with both anonymous Zen and their own key. Results include HTTP status, total latency, node, and public egress IP.
 
 ## Tests
 

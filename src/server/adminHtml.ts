@@ -592,12 +592,26 @@ export const ADMIN_HTML = `<!DOCTYPE html>
       .iso-map { border-right: none; border-bottom: 1px solid var(--border); }
     }
     @media (max-width: 900px) {
-      .sidebar { display: none; }
+      .topbar { padding: 0 10px; gap: 8px; }
+      .addr-box { display: none; }
+      .body { flex-direction: column; }
+      .sidebar {
+        display: flex; width: 100%; height: 48px; padding: 6px;
+        border-right: none; border-bottom: 1px solid var(--border);
+        overflow-x: auto; overflow-y: hidden;
+      }
+      .nav { flex: none; flex-direction: row; gap: 4px; padding: 0; }
+      .nav-item { width: auto; flex-shrink: 0; padding: 0 10px; }
+      .nav-item.active::before {
+        left: 10px; right: 10px; top: auto; bottom: -6px;
+        width: auto; height: 2px; border-radius: 2px 2px 0 0;
+      }
+      .sidebar-foot { display: none; }
       .metrics { grid-template-columns: repeat(2, 1fr); }
       .row.two, .row.three { grid-template-columns: 1fr; }
       body { overflow: auto; }
       .app { height: auto; min-height: 100vh; }
-      .content { overflow: visible; }
+      .content { overflow: visible; padding: 14px 12px 24px; }
     }
   </style>
 </head>
@@ -726,6 +740,12 @@ export const ADMIN_HTML = `<!DOCTYPE html>
                   <div>
                     <label class="field" for="baseUrl" data-i18n="upstreamBaseUrl">Upstream base URL</label>
                     <input class="input" id="baseUrl" type="text" placeholder="https://opencode.ai/zen/v1" />
+                  </div>
+                </div>
+                <div class="row">
+                  <div>
+                    <label class="field" for="relayAccessToken" data-i18n="relayAccessToken">Relay access token (X-OC-Relay-Key)</label>
+                    <input class="input" id="relayAccessToken" type="password" autocomplete="new-password" />
                   </div>
                 </div>
                 <div class="row two">
@@ -1115,6 +1135,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         saveChanges: "Save Changes", testConnection: "Test Connection",
         importController: "Import Controller Nodes",
         upstreamBaseUrl: "Upstream base URL",
+        relayAccessToken: "Relay access token (X-OC-Relay-Key)",
         listenPort: "Listen port (restart to apply)",
         cliUserAgent: "CLI User-Agent",
         synthesizeCli: "Synthesize OpenCode CLI identity headers (VPS / Cloudflare)",
@@ -1130,6 +1151,8 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         allSources: "All Sources", allHealth: "All Health",
         healthy: "Healthy", warning: "Warning", unreachable: "Unreachable", testing: "Testing",
         refresh: "Refresh", batchTest: "Batch Test", testNode: "Test",
+        zenUnverified: "Zen unverified", zenUsable: "Anonymous Zen usable", zenRateLimited: "Zen rate limited",
+        zenTemporary: "Zen temporary failure", zenBlocked: "Zen blocked", zenUnreachable: "Zen unreachable",
         colName: "Name", colType: "Type", colAddress: "Address",
         colSource: "Source", colRoute: "Route", colHealth: "Health", colLatency: "Latency",
         colActions: "Actions", clashBridge: "Clash Bridge",
@@ -1155,6 +1178,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         toastAssignNoHealthy: "No healthy proxies — run Batch Test on the proxy pool first",
         toastAssignFail: "Auto-assign failed",
         remove: "Remove", idLabel: "Id / label", apiKey: "API key (Bearer)",
+        workerKind: "Zen access", anonymousZen: "Anonymous Zen (public)", authenticatedZen: "Signed-in Zen key",
         bindProxy: "Bind pool node",
         directNoProxy: "(direct / no proxy)",
         tagDirect: "[direct] ", tagBridge: "[Clash bridge] ",
@@ -1238,6 +1262,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         saveChanges: "保存更改", testConnection: "测试连接",
         importController: "导入 Controller 节点",
         upstreamBaseUrl: "上游 Base URL",
+        relayAccessToken: "网关访问令牌（X-OC-Relay-Key）",
         listenPort: "监听端口（需重启生效）",
         cliUserAgent: "CLI User-Agent",
         synthesizeCli: "合成 OpenCode CLI 身份头（VPS / Cloudflare）",
@@ -1253,6 +1278,8 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         allSources: "全部来源", allHealth: "全部健康状态",
         healthy: "健康", warning: "警告", unreachable: "不可达", testing: "测试中",
         refresh: "刷新", batchTest: "批量测试", testNode: "测试",
+        zenUnverified: "Zen 未验证", zenUsable: "匿名 Zen 可用", zenRateLimited: "Zen 已限流",
+        zenTemporary: "Zen 临时故障", zenBlocked: "Zen 已阻止", zenUnreachable: "Zen 不可达",
         colName: "名称", colType: "类型", colAddress: "地址",
         colSource: "来源", colRoute: "路由", colHealth: "健康", colLatency: "延迟",
         colActions: "操作", clashBridge: "Clash 桥接",
@@ -1278,6 +1305,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         toastAssignNoHealthy: "没有健康代理 — 请先在代理池执行批量测试",
         toastAssignFail: "一键分配失败",
         remove: "移除", idLabel: "Id / 标签", apiKey: "API Key（Bearer）",
+        workerKind: "Zen 访问类型", anonymousZen: "匿名 Zen（public）", authenticatedZen: "登录 Zen Key",
         bindProxy: "绑定代理池节点",
         directNoProxy: "（直连 / 无代理）",
         tagDirect: "[直连] ", tagBridge: "[Clash桥接] ",
@@ -1465,6 +1493,15 @@ export const ADMIN_HTML = `<!DOCTYPE html>
       }
       const structural = structuralHealth(p);
       return structural === "healthy" ? "warn" : structural;
+    }
+
+    function anonymousZenTag(p) {
+      const result = probeResults[p.id]?.anonymousZen;
+      if (!result) return '<span class="tag">' + escapeHtml(t("zenUnverified")) + '</span>';
+      if (result.status === "usable") return '<span class="tag ok">' + escapeHtml(t("zenUsable")) + '</span>';
+      if (result.status === "rate_limited") return '<span class="tag warn">' + escapeHtml(t("zenRateLimited")) + '</span>';
+      if (result.status === "temporary_failure") return '<span class="tag warn">' + escapeHtml(t("zenTemporary")) + '</span>';
+      return '<span class="tag err">' + escapeHtml(result.status === "blocked" ? t("zenBlocked") : t("zenUnreachable")) + '</span>';
     }
 
     function latencyCell(p) {
@@ -1720,9 +1757,11 @@ export const ADMIN_HTML = `<!DOCTYPE html>
           const route = nodeRoute(p);
           const assigned = assignedWorkers(p.id);
           const rowCls = h === "warn" ? "row-warn" : h === "bad" ? "row-err" : "";
+          const zenResult = probeResults[p.id]?.anonymousZen;
           const healthTag = h === "testing"
             ? '<span class="tag blue"><span class="spin"></span>' + escapeHtml(t("testing")) + '</span>'
-            : h === "healthy" ? '<span class="tag ok">' + escapeHtml(t("healthy")) + '</span>'
+            : zenResult ? anonymousZenTag(p)
+            : h === "healthy" ? anonymousZenTag(p)
             : h === "warn" ? '<span class="tag warn">' + escapeHtml(t("warning")) + '</span>'
             : '<span class="tag err">' + escapeHtml(t("unreachable")) + '</span>';
           const routeTag = '<span class="tag ' + route.cls + '">' + escapeHtml(route.label) + '</span>';
@@ -1928,6 +1967,9 @@ export const ADMIN_HTML = `<!DOCTYPE html>
       const root = $("accounts");
       const list = settings.accounts || [];
       root.innerHTML = list.map((a, idx) => {
+        const kind = a.kind === "authenticated_zen" || (!a.kind && String(a.apiKey || "").trim())
+          ? "authenticated_zen"
+          : "anonymous_zen";
         const testing = workerTestingIds.has(a.id);
         const testResult = workerTestResults.get(a.id);
         const resultHtml = !testResult ? '' :
@@ -1945,8 +1987,10 @@ export const ADMIN_HTML = `<!DOCTYPE html>
           '<button type="button" class="btn btn-sm btn-danger btn-remove-acc" data-idx="' + idx + '">' + escapeHtml(t("remove")) + '</button></div></div>' +
           '<div class="row two"><div><label class="field">' + escapeHtml(t("idLabel")) + '</label>' +
           '<input class="input acc-id" type="text" value="' + escapeAttr(a.id || "") + '" /></div>' +
-          '<div><label class="field">' + escapeHtml(t("apiKey")) + '</label>' +
-          '<input class="input acc-key" type="password" value="' + escapeAttr(a.apiKey || "") + '" autocomplete="off" /></div></div>' +
+          '<div><label class="field">' + escapeHtml(t("workerKind")) + '</label>' +
+          '<select class="select acc-kind"><option value="anonymous_zen"' + (kind === "anonymous_zen" ? " selected" : "") + '>' + escapeHtml(t("anonymousZen")) + '</option><option value="authenticated_zen"' + (kind === "authenticated_zen" ? " selected" : "") + '>' + escapeHtml(t("authenticatedZen")) + '</option></select></div></div>' +
+          '<div class="row"><div><label class="field">' + escapeHtml(t("apiKey")) + '</label>' +
+          '<input class="input acc-key" type="password" value="' + escapeAttr(kind === "authenticated_zen" ? (a.apiKey || "") : "") + '" autocomplete="off"' + (kind === "anonymous_zen" ? " disabled" : "") + ' /></div></div>' +
           '<div class="row"><div><label class="field">' + escapeHtml(t("bindProxy")) + '</label>' +
           '<select class="select acc-proxy-id">' + proxyOptions(a.proxyId || "") + '</select></div></div>' + resultHtml + '</div>';
       }).join("") || '<p class="hint">' + escapeHtml(t("noWorkers")) + '</p>';
@@ -1955,9 +1999,16 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         btn.onclick = () => {
           settings.accounts.splice(Number(btn.dataset.idx), 1);
           if (!settings.accounts.length) {
-            settings.accounts.push({ id: "default", apiKey: "", proxyId: null, proxy: null });
+            settings.accounts.push({ id: "default", kind: "anonymous_zen", apiKey: "", proxyId: null, proxy: null });
           }
           renderAccounts();
+        };
+      });
+      root.querySelectorAll(".acc-kind").forEach((select) => {
+        select.onchange = () => {
+          const input = select.closest(".worker-card").querySelector(".acc-key");
+          input.disabled = select.value === "anonymous_zen";
+          if (input.disabled) input.value = "";
         };
       });
       root.querySelectorAll(".btn-test-worker").forEach((btn) => {
@@ -1967,11 +2018,12 @@ export const ADMIN_HTML = `<!DOCTYPE html>
           const card = cards[idx];
           const draft = {
             id: card.querySelector(".acc-id").value.trim() || "account",
-            apiKey: card.querySelector(".acc-key").value,
+            kind: card.querySelector(".acc-kind").value,
+            apiKey: card.querySelector(".acc-kind").value === "anonymous_zen" ? "" : card.querySelector(".acc-key").value,
             proxyId: card.querySelector(".acc-proxy-id").value || null,
           };
           const saved = settings.accounts[idx];
-          if (!saved || draft.id !== saved.id || draft.apiKey !== saved.apiKey || draft.proxyId !== (saved.proxyId || null)) {
+          if (!saved || draft.id !== saved.id || draft.kind !== saved.kind || draft.apiKey !== saved.apiKey || draft.proxyId !== (saved.proxyId || null)) {
             toast(t("saveBeforeWorkerTest"), false);
             return;
           }
@@ -2000,7 +2052,8 @@ export const ADMIN_HTML = `<!DOCTYPE html>
     function collectAccounts() {
       return Array.from(document.querySelectorAll("#accounts .worker-card")).map((el) => ({
         id: el.querySelector(".acc-id").value.trim() || "account",
-        apiKey: el.querySelector(".acc-key").value,
+        kind: el.querySelector(".acc-kind").value,
+        apiKey: el.querySelector(".acc-kind").value === "anonymous_zen" ? "" : el.querySelector(".acc-key").value,
         proxyId: el.querySelector(".acc-proxy-id").value || null,
         proxy: null,
       }));
@@ -2008,6 +2061,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
 
     function fillGateway() {
       $("baseUrl").value = settings.baseUrl || "";
+      $("relayAccessToken").value = settings.relayAccessToken || "";
       $("port").value = settings.port || 9876;
       $("cliUserAgent").value = settings.cliUserAgent || "";
       $("cliClient").value = settings.cliClient || "";
@@ -2031,14 +2085,14 @@ export const ADMIN_HTML = `<!DOCTYPE html>
       if (!body) return;
       const workers = status?.workers || [];
       const totals = status?.usageTotals || {};
+      const byKind = status?.usageTotalsByKind || {};
       if (totalsEl) {
         totalsEl.textContent =
           t("totalsLabel") + ": " +
           fmtNum(totals.requestCount) + " req · " +
           fmtNum(totals.totalTokens) + " tok · " +
-          t("colCacheRead") + " " + fmtNum(totals.cacheReadTokens) + " · " +
-          t("colCacheWrite") + " " + fmtNum(totals.cacheWriteTokens) + " · " +
-          t("colCacheRate") + " " + fmtRate(totals.cacheRate);
+          t("anonymousZen") + " " + fmtNum(byKind.anonymous_zen?.requestCount) + " req · " +
+          t("authenticatedZen") + " " + fmtNum(byKind.authenticated_zen?.requestCount) + " req";
       }
       if (!workers.length) {
         body.innerHTML = '<tr><td colspan="11" class="muted" style="padding:14px">' + escapeHtml(t("noWorkers")) + '</td></tr>';
@@ -2046,7 +2100,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
       }
       body.innerHTML = workers.map((w) => {
         return '<tr>' +
-          '<td><strong>' + escapeHtml(w.accountId) + '</strong></td>' +
+          '<td><strong>' + escapeHtml(w.accountId) + '</strong><div class="muted">' + escapeHtml(t(w.kind === "authenticated_zen" ? "authenticatedZen" : "anonymousZen")) + '</div></td>' +
           '<td class="mono">' + fmtNum(w.requestCount) + '</td>' +
           '<td class="mono">' + fmtNum(w.chatCount) + '</td>' +
           '<td class="mono">' + fmtNum(w.modelsCount) + '</td>' +
@@ -2302,6 +2356,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
       const body = {
         ...settings,
         baseUrl: $("baseUrl").value.trim(),
+        relayAccessToken: $("relayAccessToken").value.trim(),
         port: Number($("port").value) || 9876,
         synthesizeCliHeaders: $("synthesizeCliHeaders").checked,
         cliUserAgent: $("cliUserAgent").value.trim(),
@@ -2365,7 +2420,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
     $("btn-add-account").onclick = () => {
       settings.accounts.push({
         id: "worker-" + (settings.accounts.length + 1),
-        apiKey: "", proxyId: null, proxy: null,
+        kind: "anonymous_zen", apiKey: "", proxyId: null, proxy: null,
       });
       renderAccounts();
     };

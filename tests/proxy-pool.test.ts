@@ -362,9 +362,9 @@ describe("assignHealthyProxiesToWorkers", () => {
       ],
       pool: [px("slow"), px("fast"), px("mid"), px("bad")],
       probeResults: {
-        slow: { ok: true, health: "healthy", latencyMs: 300 },
-        fast: { ok: true, health: "healthy", latencyMs: 40 },
-        mid: { ok: true, health: "healthy", latencyMs: 120 },
+        slow: { ok: true, health: "healthy", latencyMs: 300, anonymousZen: { ok: true } },
+        fast: { ok: true, health: "healthy", latencyMs: 40, anonymousZen: { ok: true } },
+        mid: { ok: true, health: "healthy", latencyMs: 120, anonymousZen: { ok: true } },
         bad: { ok: false, health: "bad", latencyMs: null },
       },
     });
@@ -384,7 +384,7 @@ describe("assignHealthyProxiesToWorkers", () => {
       ],
       pool: [px("only")],
       probeResults: {
-        only: { ok: true, health: "healthy", latencyMs: 10 },
+        only: { ok: true, health: "healthy", latencyMs: 10, anonymousZen: { ok: true } },
       },
     });
     expect(result.assigned).toBe(1);
@@ -401,12 +401,49 @@ describe("assignHealthyProxiesToWorkers", () => {
       ],
       pool: [px("a"), px("b")],
       probeResults: {
-        a: { ok: true, health: "healthy", latencyMs: 10, egressIp: "203.0.113.7" },
-        b: { ok: true, health: "healthy", latencyMs: 20, egressIp: "203.0.113.7" },
+        a: { ok: true, health: "healthy", latencyMs: 10, egressIp: "203.0.113.7", anonymousZen: { ok: true } },
+        b: { ok: true, health: "healthy", latencyMs: 20, egressIp: "203.0.113.7", anonymousZen: { ok: true } },
       },
     });
     expect(result.healthyAvailable).toBe(1);
     expect(result.assigned).toBe(1);
+  });
+
+  it("allows one anonymous and one authenticated worker to share a verified egress", () => {
+    const result = assignHealthyProxiesToWorkers({
+      accounts: [
+        { id: "anonymous", kind: "anonymous_zen", apiKey: "", proxyId: null },
+        { id: "login", kind: "authenticated_zen", apiKey: "zen-key", proxyId: null },
+      ],
+      pool: [px("shared")],
+      probeResults: {
+        shared: {
+          ok: true,
+          health: "healthy",
+          latencyMs: 10,
+          egressIp: "203.0.113.8",
+          anonymousZen: { ok: true },
+        },
+      },
+    });
+    expect(result.assigned).toBe(2);
+    expect(result.accounts.map((account) => account.proxyId)).toEqual(["shared", "shared"]);
+    expect(result.accounts.map((account) => account.kind)).toEqual([
+      "anonymous_zen",
+      "authenticated_zen",
+    ]);
+  });
+
+  it("does not assign a network-healthy proxy until anonymous Zen succeeds", () => {
+    const result = assignHealthyProxiesToWorkers({
+      accounts: [{ id: "anonymous", apiKey: "", proxyId: null }],
+      pool: [px("network-only")],
+      probeResults: {
+        "network-only": { ok: true, health: "healthy", latencyMs: 10 },
+      },
+    });
+    expect(result.healthyAvailable).toBe(0);
+    expect(result.assigned).toBe(0);
   });
 
   it("ignores structural-usable nodes that never probed healthy", () => {
@@ -847,6 +884,7 @@ proxies:
         error: null,
         testedAt: new Date().toISOString(),
         health: "healthy",
+        anonymousZen: { id: "px-fast", status: "usable", ok: true, httpStatus: 200, latencyMs: 50, error: null, testedAt: new Date().toISOString() },
       },
       {
         id: "px-slow",
@@ -855,6 +893,7 @@ proxies:
         error: null,
         testedAt: new Date().toISOString(),
         health: "healthy",
+        anonymousZen: { id: "px-slow", status: "usable", ok: true, httpStatus: 200, latencyMs: 50, error: null, testedAt: new Date().toISOString() },
       },
       {
         id: "px-dead",

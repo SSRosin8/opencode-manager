@@ -9,7 +9,8 @@
 - 接受 **OpenAI 兼容**的客户端请求（`/v1/chat/completions`、`/v1/models`）
 - **透明转发**到 `https://opencode.ai/zen/v1`（可配置）
 - **仅免费模型**：自动抓取 Zen 定价页面，只提供免费模型（列表 + 对话）；付费模型永不暴露
-- 多 Key / 多账号 **429 前粘性绑定**，之后轮换 + 冷却（保持提示词缓存热度）
+- 匿名 Zen（自动使用 `Bearer public`）与登录 Zen Key 分池统计，匿名池优先
+- 按 OpenCode 会话粘性绑定 Worker；429、无效 Key 和临时上游故障自动切换
 - 可选 **OpenCode CLI 身份请求头**合成（Cloudflare / VPS）
 - 最小化的免费模型请求体修复（去除 `client_metadata`、思考模型的 `reasoning_content`、effort 别名等）
 - `/` 提供**管理页面**，管理 Key、Base URL、代理和状态
@@ -40,6 +41,28 @@ npm start
 | `OPENCODE_SYNTHESIZE_CLI_HEADERS` | 设为 `true` 合成 CLI 身份请求头（也可在管理后台开关） |
 | `OPENCODE_USER_AGENT` / `OPENCODE_CLIENT` / `OPENCODE_PROJECT` | CLI 默认值 |
 | `OCFREERELAY_PRICING_URL` | 覆盖用于抓取免费模型的 Zen 定价页面 URL |
+
+### OpenCode 原生接入
+
+无需修改 OpenCode。在 `opencode.json` 中覆盖内置 `opencode` provider 的地址；启用网关访问令牌时，通过自定义请求头传递，不要把它配置成 Zen API Key：
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "opencode": {
+      "options": {
+        "baseURL": "http://127.0.0.1:9876/v1",
+        "headers": {
+          "X-OC-Relay-Key": "your-relay-token"
+        }
+      }
+    }
+  }
+}
+```
+
+网关令牌为空时保持原有的开放访问行为。当前版本只接入 Zen，不接入 OpenCode Go。
 
 ## 仅免费模型服务
 
@@ -72,9 +95,9 @@ OpenCode 免费账号经常受 **IP 限制**。将每个 Worker 绑定到不同�
    - 网关按 Worker 切换选择组，然后经本地 HTTP 代理出站
 4. **绑定** — 每个 Worker 通过 `proxyId` 选择池中节点
 
-导入后先测试候选节点。测试会记录公网出口 IP；自动分配会避开已知相同出口 IP 的节点。单个 mixed-port 使用共享选择组，网关会串行完成“切换节点 + 建立连接”；运行期间不要在其他客户端中切换同一个选择组。需要多个节点永久并行独占端口时，应为每个 Worker 配置独立的 Mihomo 入站或实例。
+导入后先测试候选节点。测试会先记录公网出口 IP，再用 `Bearer public` 发起一次真实匿名 Zen 免费模型请求；只有匿名 Zen 成功的出口才参与自动分配。节点按真实出口 IP 去重，同一出口最多承载一个匿名 Worker和一个登录 Worker。单个 mixed-port 使用共享选择组，网关会串行完成“切换节点 + 建立连接”；运行期间不要在其他客户端中切换同一个选择组。需要多个节点永久并行独占端口时，应为每个 Worker 配置独立的 Mihomo 入站或实例。
 
-“批量测试”通过 Mihomo 节点延迟接口并发筛选，并优先对当前 Worker 绑定节点验证公网出口，因此适合快速筛选。保存 Worker 后，可点击卡片中的“测试连接”执行该 Key + 绑定节点的真实 OpenCode 请求；结果会显示 HTTP 状态、总耗时、节点和公网出口 IP。
+“批量测试”先通过 Mihomo 节点延迟接口筛选，再对每个不同公网出口执行匿名 Zen 验证。保存 Worker 后，可点击卡片中的“测试连接”；登录 Worker 会依次验证匿名 Zen 与自身 Key。结果会显示 HTTP 状态、总耗时、节点和公网出口 IP。
 
 ## 测试
 

@@ -2,13 +2,14 @@
  * Upstream client tests with mock fetch at network boundary.
  */
 import { describe, expect, it, vi } from "vitest";
-import { UpstreamClient } from "../src/proxy/upstream.js";
+import { parseRetryAfterMs, UpstreamClient } from "../src/proxy/upstream.js";
 import type { GatewaySettings } from "../src/settings/store.js";
 import { transformRequestBody } from "../src/relay/index.js";
 
 function baseSettings(over: Partial<GatewaySettings> = {}): GatewaySettings {
   return {
     baseUrl: "https://opencode.ai/zen/v1",
+    relayAccessToken: "",
     synthesizeCliHeaders: false,
     cliUserAgent: "opencode-cli/1.0.0",
     cliClient: "cli",
@@ -40,6 +41,23 @@ function jsonResponse(status: number, body: unknown): Response {
 }
 
 describe("UpstreamClient chatCompletions", () => {
+  it("sends Bearer public for an anonymous Zen worker", async () => {
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      const headers = init?.headers as Record<string, string>;
+      expect(headers.Authorization).toBe("Bearer public");
+      return jsonResponse(200, { choices: [] });
+    });
+    const client = new UpstreamClient(
+      baseSettings({
+        accounts: [{ id: "anon", apiKey: "", kind: "anonymous_zen", proxy: null }],
+      }),
+      fetchImpl
+    );
+
+    await client.chatCompletions({ body: { model: "big-pickle" }, stream: false });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
   it("sends transformed body to zen chat URL with Bearer key", async () => {
     const calls: Array<{ url: string; init: RequestInit }> = [];
     const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
@@ -98,6 +116,27 @@ describe("UpstreamClient chatCompletions", () => {
     expect(new Set(authHeaders).size).toBeGreaterThanOrEqual(2);
   });
 
+  it.each([401, 403, 500])("rotates away from an unusable worker on HTTP %i", async (status) => {
+    let calls = 0;
+    const fetchImpl = vi.fn(async () => {
+      calls++;
+      return calls === 1
+        ? jsonResponse(status, { error: { message: "unusable worker" } })
+        : jsonResponse(200, { choices: [] });
+    });
+    const client = new UpstreamClient(baseSettings(), fetchImpl);
+
+    const result = await client.chatCompletions({
+      body: { model: "big-pickle" },
+      stream: false,
+      sessionKey: "fallback-session",
+    });
+
+    expect(result.status).toBe(200);
+    expect(calls).toBe(2);
+    expect(client.rotator.readyCount()).toBe(1);
+  });
+
   it("sticks to the same worker across successful chat requests", async () => {
     const accountIds: string[] = [];
     const fetchImpl = vi.fn(async () =>
@@ -120,6 +159,30 @@ describe("UpstreamClient chatCompletions", () => {
 
     expect(new Set(accountIds).size).toBe(1);
     expect(fetchImpl).toHaveBeenCalledTimes(4);
+  });
+
+  it("keeps separate worker affinity for separate OpenCode sessions", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, { choices: [] }));
+    const client = new UpstreamClient(baseSettings(), fetchImpl);
+
+    const first = await client.chatCompletions({
+      body: { model: "big-pickle" },
+      stream: false,
+      clientHeaders: { "x-session-id": "session-a" },
+    });
+    const second = await client.chatCompletions({
+      body: { model: "big-pickle" },
+      stream: false,
+      clientHeaders: { "x-session-id": "session-b" },
+    });
+    const again = await client.chatCompletions({
+      body: { model: "big-pickle" },
+      stream: false,
+      clientHeaders: { "x-session-id": "session-a" },
+    });
+
+    expect(first.accountId).not.toBe(second.accountId);
+    expect(again.accountId).toBe(first.accountId);
   });
 
   /**
@@ -169,15 +232,23 @@ describe("UpstreamClient chatCompletions", () => {
     expect(result.accountId).toBe("worker-2");
     expect(callN).toBe(2);
     expect(callAccountIds).toEqual(["default", "worker-2"]);
-    // No Bearer on either attempt
+    // OpenCode anonymous mode uses the public placeholder credential.
     for (const [, init] of fetchImpl.mock.calls) {
       const h = (init as RequestInit | undefined)?.headers as Record<string, string> | undefined;
-      expect(h?.Authorization).toBeUndefined();
+      expect(h?.Authorization).toBe("Bearer public");
     }
     // Exhausted worker is in cooldown
     expect(client.rotator.readyCount()).toBe(1);
     const cooled = client.rotator.getAccounts().find((a) => a.id === "default");
     expect(cooled?.cooldownUntil).toBeGreaterThan(Date.now());
+  });
+});
+
+describe("Retry-After parsing", () => {
+  it("supports delta seconds and HTTP dates", () => {
+    expect(parseRetryAfterMs("12", 1_000)).toBe(12_000);
+    expect(parseRetryAfterMs("Thu, 01 Jan 1970 00:00:10 GMT", 1_000)).toBe(9_000);
+    expect(parseRetryAfterMs("invalid", 1_000)).toBeUndefined();
   });
 });
 

@@ -381,12 +381,14 @@ export type ProbeHealthSnapshot = {
   health?: string;
   latencyMs?: number | null;
   egressIp?: string | null;
+  anonymousZen?: { ok?: boolean } | null;
 };
 
 export type AssignHealthyProxiesInput = {
   accounts: Array<{
     id: string;
     apiKey: string;
+    kind?: "anonymous_zen" | "authenticated_zen";
     proxyId?: string | null;
     proxy?: AccountProxy;
   }>;
@@ -400,6 +402,7 @@ export type AssignHealthyProxiesResult = {
   accounts: Array<{
     id: string;
     apiKey: string;
+    kind?: "anonymous_zen" | "authenticated_zen";
     proxyId: string | null;
     proxy: AccountProxy;
   }>;
@@ -424,12 +427,12 @@ export type AssignHealthyProxiesResult = {
 export function assignHealthyProxiesToWorkers(
   input: AssignHealthyProxiesInput
 ): AssignHealthyProxiesResult {
-  const seenEgressIps = new Set<string>();
   const healthy = input.pool
     .filter((p) => {
       if (!isBindablePoolProxy(p, input.bridge)) return false;
       const pr = input.probeResults[p.id];
       if (!(pr && pr.ok && pr.health === "healthy")) return false;
+      if (!pr.anonymousZen?.ok) return false;
       return p.source !== "controller" || Boolean(pr.egressIp);
     })
     .sort((a, b) => {
@@ -440,26 +443,35 @@ export function assignHealthyProxiesToWorkers(
       if (na !== nb) return na - nb;
       return a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
     })
-    .filter((p) => {
+    .filter((p, index, list) => {
       const ip = input.probeResults[p.id]?.egressIp;
       if (!ip) return true;
-      if (seenEgressIps.has(ip)) return false;
-      seenEgressIps.add(ip);
-      return true;
+      return list.findIndex((candidate) => input.probeResults[candidate.id]?.egressIp === ip) === index;
     });
 
-  let cursor = 0;
+  const cursorByKind = { anonymous_zen: 0, authenticated_zen: 0 };
   let assigned = 0;
   let unassigned = 0;
   const assignments: AssignHealthyProxiesResult["assignments"] = [];
   const accounts = input.accounts.map((a) => {
+    const kind: "anonymous_zen" | "authenticated_zen" =
+      a.kind === "authenticated_zen"
+        ? "authenticated_zen"
+        : a.kind === "anonymous_zen"
+          ? "anonymous_zen"
+          : a.apiKey.trim()
+            ? "authenticated_zen"
+            : "anonymous_zen";
+    const cursor = cursorByKind[kind];
     if (cursor < healthy.length) {
-      const p = healthy[cursor++];
+      const p = healthy[cursor];
+      cursorByKind[kind] += 1;
       assigned += 1;
       assignments.push({ accountId: a.id, proxyId: p.id, proxyName: p.name });
       return {
         id: a.id,
         apiKey: a.apiKey ?? "",
+        kind,
         proxyId: p.id,
         proxy: null as AccountProxy,
       };
@@ -469,6 +481,7 @@ export function assignHealthyProxiesToWorkers(
     return {
       id: a.id,
       apiKey: a.apiKey ?? "",
+      kind,
       proxyId: null,
       proxy: null as AccountProxy,
     };

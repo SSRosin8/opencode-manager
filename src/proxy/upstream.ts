@@ -13,6 +13,7 @@ import {
   type AccountConfig,
   type AccountProxy,
 } from "../relay/index.js";
+import type { AccountKind } from "../relay/accounts.js";
 import type { GatewaySettings } from "../settings/store.js";
 import { resolveAccountEgress } from "./pool.js";
 import { createProxyDispatcher } from "./dispatcher.js";
@@ -31,6 +32,36 @@ export type ProxyFetch = (
   url: string,
   init: RequestInit & { dispatcher?: unknown }
 ) => Promise<Response>;
+
+function effectiveApiKey(apiKey: string, kind: AccountKind): string {
+  return kind === "anonymous_zen" ? "public" : apiKey;
+}
+
+export function parseRetryAfterMs(value: string | null, now = Date.now()): number | undefined {
+  if (!value) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const at = Date.parse(value);
+  if (!Number.isFinite(at)) return undefined;
+  return Math.max(0, at - now);
+}
+
+function retryableStatus(status: number): "rate_limit" | "failure" | null {
+  if (status === 429 || status === 401 || status === 403) return "rate_limit";
+  if (status >= 500) return "failure";
+  return null;
+}
+
+function sessionKeyFromHeaders(headers?: Record<string, string>): string | undefined {
+  if (!headers) return undefined;
+  for (const [name, value] of Object.entries(headers)) {
+    const lower = name.toLowerCase();
+    if ((lower === "x-session-id" || lower === "x-opencode-session") && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
 
 export class UpstreamClient {
   readonly rotator = new AccountRotator();
@@ -98,11 +129,13 @@ export class UpstreamClient {
       },
       false
     );
+    const kind: AccountKind =
+      account.kind ?? (account.apiKey.trim() ? "authenticated_zen" : "anonymous_zen");
     const response = await this.doFetch(
       buildChatCompletionsUrl(this.settings.baseUrl),
       {
         method: "POST",
-        headers: this.buildHeaders(account.apiKey, false),
+        headers: this.buildHeaders(effectiveApiKey(account.apiKey, kind), false),
         body: JSON.stringify(transformed),
         signal: AbortSignal.timeout(45_000),
       },
@@ -199,6 +232,8 @@ export class UpstreamClient {
     body: unknown;
     stream: boolean;
     clientHeaders?: Record<string, string>;
+    /** Stable OpenCode conversation id used for per-session worker affinity. */
+    sessionKey?: string;
   }): Promise<UpstreamResult> {
     const model =
       opts.body && typeof opts.body === "object" && !Array.isArray(opts.body)
@@ -209,10 +244,15 @@ export class UpstreamClient {
     const maxAttempts = Math.max(1, this.rotator.getAccounts().length);
     let last: UpstreamResult | null = null;
     let lastError: Error | null = null;
+    const sessionKey = opts.sessionKey ?? sessionKeyFromHeaders(opts.clientHeaders);
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const account = this.rotator.pick();
-      const headers = this.buildHeaders(account.apiKey, opts.stream, opts.clientHeaders);
+      const account = this.rotator.pick(sessionKey);
+      const headers = this.buildHeaders(
+        effectiveApiKey(account.apiKey, account.kind),
+        opts.stream,
+        opts.clientHeaders
+      );
 
       try {
         if (account.proxyId && !account.proxy) {
@@ -238,8 +278,16 @@ export class UpstreamClient {
           clashNodeName: account.clashNodeName,
         };
 
-        if (response.status === 429) {
-          this.rotator.markCooldown(account);
+        const retry = retryableStatus(response.status);
+        if (retry) {
+          if (retry === "rate_limit") {
+            this.rotator.markRateLimited(
+              account,
+              parseRetryAfterMs(response.headers.get("retry-after"))
+            );
+          } else {
+            this.rotator.markCooldown(account);
+          }
           try {
             await response.arrayBuffer();
           } catch {
@@ -268,7 +316,10 @@ export class UpstreamClient {
     // Last resort: direct (no proxy) so a misconfigured Clash doesn't total black-hole chat
     try {
       const headers = this.buildHeaders(
-        this.rotator.getAccounts()[0]?.apiKey || "",
+        effectiveApiKey(
+          this.rotator.getAccounts()[0]?.apiKey || "",
+          this.rotator.getAccounts()[0]?.kind ?? "anonymous_zen"
+        ),
         opts.stream,
         opts.clientHeaders
       );
@@ -301,8 +352,12 @@ export class UpstreamClient {
     let lastError: Error | null = null;
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const account = this.rotator.pick();
-      const headers = this.buildHeaders(account.apiKey, false, clientHeaders);
+      const account = this.rotator.pick("__models__");
+      const headers = this.buildHeaders(
+        effectiveApiKey(account.apiKey, account.kind),
+        false,
+        clientHeaders
+      );
       // models: Accept application/json (not SSE)
       headers["Accept"] = "application/json";
 
@@ -317,8 +372,16 @@ export class UpstreamClient {
           account.clashNodeName
         );
 
-        if (response.status === 429) {
-          this.rotator.markCooldown(account);
+        const retry = retryableStatus(response.status);
+        if (retry) {
+          if (retry === "rate_limit") {
+            this.rotator.markRateLimited(
+              account,
+              parseRetryAfterMs(response.headers.get("retry-after"))
+            );
+          } else {
+            this.rotator.markCooldown(account);
+          }
           try {
             await response.arrayBuffer();
           } catch {
@@ -359,7 +422,10 @@ export class UpstreamClient {
 
     // Direct fallback is allowed only when at least one worker is intentionally unbound.
     const headers = this.buildHeaders(
-      this.rotator.getAccounts()[0]?.apiKey || "",
+      effectiveApiKey(
+        this.rotator.getAccounts()[0]?.apiKey || "",
+        this.rotator.getAccounts()[0]?.kind ?? "anonymous_zen"
+      ),
       false,
       clientHeaders
     );

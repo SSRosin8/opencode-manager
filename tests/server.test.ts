@@ -49,6 +49,82 @@ async function bootMocked(fetchImpl: (url: string, init?: RequestInit) => Promis
 }
 
 describe("gateway HTTP entry", () => {
+  it("keeps /v1 routes open when no relay access token is configured", async () => {
+    const { port, dir } = await bootMocked(async (url) => {
+      if (String(url).endsWith("/models")) {
+        return new Response(JSON.stringify({ object: "list", data: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response("{}", { status: 404 });
+    });
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/v1/models`);
+      expect(res.status).toBe(200);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("protects only /v1 routes with X-OC-Relay-Key when configured", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ocfr-"));
+    const store = new SettingsStore(join(dir, "settings.json"));
+    await store.save({
+      relayAccessToken: "relay-secret",
+      accounts: [{ id: "t", apiKey: "test-key", proxyId: null, proxy: null }],
+    });
+    let upstreamCalls = 0;
+    app = await createApp({
+      store,
+      port: 0,
+      fetchImpl: async (url, init) => {
+        upstreamCalls++;
+        expect(new Headers(init?.headers).get("X-OC-Relay-Key")).toBeNull();
+        if (String(url).endsWith("/models")) {
+          return new Response(JSON.stringify({ object: "list", data: [] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response("{}", { status: 404 });
+      },
+      freeModels: new FreeModelRegistry({ cachePath: join(dir, "free-models.json") }),
+    });
+    await listen(app);
+    const addr = app.server.address();
+    if (!addr || typeof addr === "string") throw new Error("no address");
+    const port = addr.port;
+
+    try {
+      const missing = await fetch(`http://127.0.0.1:${port}/v1/models`);
+      expect(missing.status).toBe(401);
+      expect(await missing.json()).toMatchObject({
+        error: { type: "authentication_error" },
+      });
+
+      const incorrect = await fetch(`http://127.0.0.1:${port}/v1/models`, {
+        headers: { "X-OC-Relay-Key": "wrong" },
+      });
+      expect(incorrect.status).toBe(401);
+      expect(upstreamCalls).toBe(0);
+
+      const authorized = await fetch(`http://127.0.0.1:${port}/v1/models`, {
+        headers: { "X-OC-Relay-Key": "relay-secret" },
+      });
+      expect(authorized.status).toBe(200);
+      expect(upstreamCalls).toBe(1);
+
+      const health = await fetch(`http://127.0.0.1:${port}/health`);
+      expect(health.status).toBe(200);
+      const admin = await fetch(`http://127.0.0.1:${port}/admin/api/settings`);
+      expect(admin.status).toBe(200);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("serves admin HTML and settings read/write", async () => {
     const { port, dir } = await bootMocked(async () => new Response("{}", { status: 200 }));
     try {
@@ -79,6 +155,21 @@ describe("gateway HTTP entry", () => {
       expect(putRes.status).toBe(200);
       const saved = (await putRes.json()) as { accounts: Array<{ id: string }> };
       expect(saved.accounts.map((a) => a.id)).toEqual(["a1", "a2"]);
+
+      const duplicateRes = await fetch(`http://127.0.0.1:${port}/admin/api/settings`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accounts: [
+            { id: "anon-a", kind: "anonymous_zen", apiKey: "", proxyId: "same-proxy" },
+            { id: "anon-b", kind: "anonymous_zen", apiKey: "", proxyId: "same-proxy" },
+          ],
+        }),
+      });
+      expect(duplicateRes.status).toBe(400);
+      expect(await duplicateRes.json()).toMatchObject({
+        error: { type: "duplicate_worker_egress" },
+      });
 
       const statusRes = await fetch(`http://127.0.0.1:${port}/admin/api/status`);
       expect(statusRes.status).toBe(200);
@@ -272,7 +363,7 @@ describe("gateway HTTP entry", () => {
       expect(chat.choices[0].message.content).toBe("ok-after-rotate");
 
       expect(chatCalls).toBe(2);
-      expect(authSeen.every((a) => a === undefined)).toBe(true);
+      expect(authSeen.every((a) => a === "Bearer public")).toBe(true);
 
       const after = (await (
         await fetch(`http://127.0.0.1:${port}/admin/api/status`)

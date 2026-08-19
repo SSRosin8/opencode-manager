@@ -6,6 +6,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  probeAnonymousZenProxy,
   probePoolProxy,
   probePoolProxies,
   summarizeProbeResults,
@@ -215,6 +216,155 @@ describe("probePoolProxies", () => {
     expect(results.slice(0, 2).every((result) => result.egressIp === null)).toBe(true);
     expect(calls.filter((call) => call.startsWith("GET ") && call.includes("/delay?"))).toHaveLength(3);
     expect(calls.some((call) => call.startsWith("PUT ") && call.includes("/proxies/Proxy"))).toBe(true);
+  });
+});
+
+describe("probeAnonymousZenProxy", () => {
+  it("sends a real anonymous Zen request through the selected proxy", async () => {
+    let requestUrl = "";
+    let requestInit: (RequestInit & { dispatcher?: unknown }) | undefined;
+    const result = await probeAnonymousZenProxy(
+      px({ id: "anon", name: "anon", type: "http", host: "10.0.0.4", port: 8080 }),
+      bridgeOff,
+      {
+        baseUrl: "https://opencode.ai/zen/v1/",
+        model: "deepseek-v4-flash-free",
+        fetchImpl: async (url, init) => {
+          requestUrl = url;
+          requestInit = init;
+          return new Response(JSON.stringify({ choices: [] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        },
+      }
+    );
+
+    expect(result.status).toBe("usable");
+    expect(result.ok).toBe(true);
+    expect(result.httpStatus).toBe(200);
+    expect(result.error).toBeNull();
+    expect(requestUrl).toBe("https://opencode.ai/zen/v1/chat/completions");
+    expect(new Headers(requestInit?.headers).get("authorization")).toBe("Bearer public");
+    expect(new Headers(requestInit?.headers).get("user-agent")).toBe("opencode-cli/1.0.0");
+    expect(new Headers(requestInit?.headers).get("x-opencode-client")).toBe("cli");
+    expect(new Headers(requestInit?.headers).get("x-opencode-session")).toBeTruthy();
+    expect(requestInit?.dispatcher).toBeTruthy();
+    expect(JSON.parse(String(requestInit?.body))).toMatchObject({
+      model: "deepseek-v4-flash-free",
+      stream: false,
+      max_tokens: 1,
+    });
+  });
+
+  it.each([
+    [401, "blocked"],
+    [403, "blocked"],
+    [429, "rate_limited"],
+    [500, "temporary_failure"],
+    [400, "temporary_failure"],
+    [407, "unreachable"],
+  ] as const)("maps HTTP %i to %s", async (httpStatus, status) => {
+    const result = await probeAnonymousZenProxy(
+      px({ id: `s${httpStatus}`, name: "status", type: "http", host: "10.0.0.5", port: 8080 }),
+      bridgeOff,
+      {
+        fetchImpl: async () =>
+          new Response(JSON.stringify({ error: { message: "upstream rejected" } }), {
+            status: httpStatus,
+            headers: httpStatus === 429 ? { "Retry-After": "120" } : undefined,
+          }),
+      }
+    );
+
+    expect(result.status).toBe(status);
+    expect(result.ok).toBe(false);
+    expect(result.httpStatus).toBe(httpStatus);
+    expect(result.error).toBe("upstream rejected");
+    if (httpStatus === 429) expect(result.retryAfterSeconds).toBe(120);
+  });
+
+  it("aborts a slow anonymous request at the configured timeout", async () => {
+    const result = await probeAnonymousZenProxy(
+      px({ id: "slow-anon", name: "slow", type: "http", host: "10.0.0.6", port: 8080 }),
+      bridgeOff,
+      {
+        timeoutMs: 20,
+        fetchImpl: async (_url, init) => {
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(resolve, 500);
+            init.signal?.addEventListener("abort", () => {
+              clearTimeout(timer);
+              reject(new DOMException("aborted", "AbortError"));
+            });
+          });
+          return new Response(null, { status: 200 });
+        },
+      }
+    );
+
+    expect(result.status).toBe("unreachable");
+    expect(result.httpStatus).toBeNull();
+    expect(result.error).toBe("Timeout");
+    expect(result.latencyMs).toBeGreaterThanOrEqual(10);
+  });
+
+  it("switches a Clash node before sending the anonymous request", async () => {
+    const calls: string[] = [];
+    const result = await probeAnonymousZenProxy(
+      px({
+        id: "anon-clash",
+        name: "Mexico",
+        type: "hysteria2",
+        host: "192.0.2.8",
+        port: 443,
+        usable: false,
+        bridgeable: true,
+        clashNodeName: "Mexico",
+      }),
+      { ...bridgeOn, selectorGroup: "Proxy" },
+      {
+        bridgeFetch: (async (_url: string, init?: RequestInit) => {
+          calls.push(`switch:${String(init?.body)}`);
+          return new Response(null, { status: 204 });
+        }) as typeof fetch,
+        fetchImpl: async () => {
+          calls.push("zen");
+          return new Response("{}", { status: 200 });
+        },
+      }
+    );
+
+    expect(result.status).toBe("usable");
+    expect(calls[0]).toContain('"Mexico"');
+    expect(calls[1]).toBe("zen");
+  });
+
+  it("does not probe a bridge node when the Clash bridge is disabled", async () => {
+    let called = false;
+    const result = await probeAnonymousZenProxy(
+      px({
+        id: "no-bridge",
+        name: "no-bridge",
+        type: "vless",
+        host: "192.0.2.9",
+        port: 443,
+        usable: false,
+        bridgeable: true,
+      }),
+      bridgeOff,
+      {
+        fetchImpl: async () => {
+          called = true;
+          return new Response("{}", { status: 200 });
+        },
+      }
+    );
+
+    expect(result.status).toBe("unreachable");
+    expect(result.error).toBe("Clash bridge required");
+    expect(result.latencyMs).toBeNull();
+    expect(called).toBe(false);
   });
 });
 

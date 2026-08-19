@@ -199,6 +199,37 @@ describe("header construction", () => {
 });
 
 describe("multi-key sticky affinity / 429 cooldown", () => {
+  it("infers legacy worker kinds and prioritizes anonymous capacity", () => {
+    const rot = new AccountRotator();
+    rot.sync([
+      { id: "login", apiKey: "real-key" },
+      { id: "anonymous", apiKey: "" },
+    ]);
+
+    expect(rot.getAccounts().map((account) => account.kind)).toEqual([
+      "anonymous_zen",
+      "authenticated_zen",
+    ]);
+    expect(rot.pick("session-a", 100).id).toBe("anonymous");
+  });
+
+  it("keeps affinity per session and distributes new sessions", () => {
+    const rot = new AccountRotator();
+    rot.sync([
+      { id: "anon-a", apiKey: "", kind: "anonymous_zen" },
+      { id: "anon-b", apiKey: "", kind: "anonymous_zen" },
+      { id: "login", apiKey: "key", kind: "authenticated_zen" },
+    ]);
+
+    const a = rot.pick("session-a", 100);
+    const b = rot.pick("session-b", 100);
+    expect(a.id).not.toBe(b.id);
+    expect(a.kind).toBe("anonymous_zen");
+    expect(b.kind).toBe("anonymous_zen");
+    expect(rot.pick("session-a", 100).id).toBe(a.id);
+    expect(rot.pick("session-b", 100).id).toBe(b.id);
+  });
+
   it("sticks to the same ready account until cooldown, then advances and sticks again", () => {
     const rot = new AccountRotator();
     rot.sync([
@@ -243,6 +274,14 @@ describe("multi-key sticky affinity / 429 cooldown", () => {
     rot.markCooldown(acct, 0, 0);
     expect(acct.cooldownUntil).toBeGreaterThan(firstCd);
     expect(acct.consecutiveFails).toBe(2);
+  });
+
+  it("uses a 15 minute default rate-limit cooldown", () => {
+    const rot = new AccountRotator();
+    rot.sync([{ id: "only", apiKey: "k" }]);
+    const acct = rot.pick(0);
+    rot.markRateLimited(acct, undefined, 1_000);
+    expect(acct.cooldownUntil).toBe(901_000);
   });
 
   it("readyCount reflects cooldowns", () => {

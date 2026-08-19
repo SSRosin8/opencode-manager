@@ -119,6 +119,15 @@ describe("WorkerStatsStore", () => {
     expect(s.totals(["w1"]).cacheRate).toBeCloseTo(0.4);
   });
 
+  it("returns zero totals for an explicitly empty account group", () => {
+    const s = new WorkerStatsStore({ persist: false });
+    s.recordRequest("historical", { kind: "chat", status: 200 });
+
+    expect(s.totals([]).requestCount).toBe(0);
+    expect(s.listForAccounts([])).toEqual([]);
+    expect(s.getAll()).toHaveLength(1);
+  });
+
   it("persists and reloads", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ocfr-ws-"));
     try {

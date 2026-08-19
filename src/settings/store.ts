@@ -4,7 +4,12 @@
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { DEFAULT_BASE_URL, type AccountConfig, type AccountProxy } from "../relay/index.js";
+import {
+  DEFAULT_BASE_URL,
+  inferAccountKind,
+  type AccountConfig,
+  type AccountProxy,
+} from "../relay/index.js";
 import {
   DEFAULT_CLASH_BRIDGE,
   normalizeClashBridge,
@@ -18,6 +23,8 @@ import {
 
 export type GatewaySettings = {
   baseUrl: string;
+  /** Optional token required in X-OC-Relay-Key for public /v1/* requests. */
+  relayAccessToken: string;
   /** When true, synthesize OpenCode CLI identity headers if client omitted them. */
   synthesizeCliHeaders: boolean;
   cliUserAgent: string;
@@ -54,6 +61,7 @@ export type RuntimeStatus = {
 
 const DEFAULT_SETTINGS: GatewaySettings = {
   baseUrl: DEFAULT_BASE_URL,
+  relayAccessToken: "",
   synthesizeCliHeaders: false,
   cliUserAgent: "opencode-cli/1.0.0",
   cliClient: "cli",
@@ -97,6 +105,13 @@ function normalizeAccounts(raw: unknown): AccountConfig[] {
     return {
       id: typeof a.id === "string" && a.id ? a.id : `account-${i + 1}`,
       apiKey: typeof a.apiKey === "string" ? a.apiKey : "",
+      kind: inferAccountKind({
+        apiKey: typeof a.apiKey === "string" ? a.apiKey : "",
+        kind:
+          a.kind === "anonymous_zen" || a.kind === "authenticated_zen"
+            ? a.kind
+            : undefined,
+      }),
       proxyId,
       proxy: normalizeProxy(a.proxy),
     };
@@ -110,6 +125,8 @@ export function normalizeSettings(raw: Partial<GatewaySettings> | null | undefin
       typeof s.baseUrl === "string" && s.baseUrl.trim()
         ? s.baseUrl.trim().replace(/\/+$/, "")
         : DEFAULT_BASE_URL,
+    relayAccessToken:
+      typeof s.relayAccessToken === "string" ? s.relayAccessToken.trim() : "",
     synthesizeCliHeaders: Boolean(s.synthesizeCliHeaders),
     cliUserAgent:
       typeof s.cliUserAgent === "string" && s.cliUserAgent.trim()

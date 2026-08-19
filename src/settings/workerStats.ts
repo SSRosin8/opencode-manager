@@ -303,8 +303,7 @@ export class WorkerStatsStore {
 
   /** Stats for known account ids (creates zero rows for missing). */
   listForAccounts(accountIds: string[]): WorkerStatSnapshot[] {
-    const ids = accountIds.length ? accountIds : [...this.stats.keys()];
-    return ids.map((id) => structuredClone(withDerived(this.ensure(id))));
+    return accountIds.map((id) => structuredClone(withDerived(this.ensure(id))));
   }
 
   getAll(): WorkerStatSnapshot[] {
