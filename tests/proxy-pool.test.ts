@@ -1,0 +1,1012 @@
+/**
+ * Proxy pool + Clash subscription parse + worker binding tests.
+ */
+import { describe, expect, it, vi, afterEach } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  assignHealthyProxiesToWorkers,
+  mergeSubscriptionProxies,
+  mergeControllerProxies,
+  resolveAccountProxy,
+  resolveAccountEgress,
+  normalizeProxyPool,
+  newProxyId,
+  type PoolProxy,
+} from "../src/proxy/pool.js";
+import { parseSubscriptionBody, fetchClashSubscription } from "../src/proxy/clash.js";
+import { UpstreamClient } from "../src/proxy/upstream.js";
+import { importClashControllerNodes } from "../src/proxy/clashBridge.js";
+import { SettingsStore, type GatewaySettings } from "../src/settings/store.js";
+import { createApp, close, listen, type App } from "../src/server/http.js";
+import { ProbeResultCache } from "../src/proxy/probe.js";
+
+function settings(over: Partial<GatewaySettings> = {}): GatewaySettings {
+  return {
+    baseUrl: "https://opencode.ai/zen/v1",
+    synthesizeCliHeaders: false,
+    cliUserAgent: "opencode-cli/1.0.0",
+    cliClient: "cli",
+    cliProject: "default",
+    accounts: [{ id: "w1", apiKey: "k1", proxyId: null, proxy: null }],
+    proxyPool: [],
+    proxySubscriptions: [],
+    clashBridge: {
+      enabled: false,
+      apiBase: "http://127.0.0.1:9090",
+      apiSecret: "",
+      localProxyHost: "127.0.0.1",
+      localProxyPort: 7890,
+      selectorGroup: "GLOBAL",
+    },
+    port: 9876,
+    ...over,
+  };
+}
+
+describe("parseSubscriptionBody", () => {
+  it("parses Clash YAML http/socks5 proxies", () => {
+    const yaml = `
+proxies:
+  - name: "HK-HTTP"
+    type: http
+    server: 1.1.1.1
+    port: 8080
+    username: u1
+    password: p1
+  - name: "JP-SOCKS"
+    type: socks5
+    server: 2.2.2.2
+    port: 1080
+  - name: "SS-skip"
+    type: ss
+    server: 3.3.3.3
+    port: 8388
+    cipher: aes-256-gcm
+    password: x
+`;
+    const result = parseSubscriptionBody(yaml, "sub1");
+    expect(result.format).toBe("clash-yaml");
+    expect(result.usableCount).toBe(2);
+    expect(result.proxies.some((p) => p.name === "HK-HTTP" && p.usable)).toBe(true);
+    expect(result.proxies.some((p) => p.name === "JP-SOCKS" && p.type === "socks5")).toBe(
+      true
+    );
+    const ss = result.proxies.find((p) => p.name === "SS-skip");
+    expect(ss?.usable).toBe(false);
+    expect(ss?.bridgeable).toBe(true);
+  });
+
+  it("parses base64 URI list", () => {
+    const lines = [
+      "http://user:pass@10.0.0.1:8888",
+      "socks5://10.0.0.2:1080",
+    ].join("\n");
+    const b64 = Buffer.from(lines, "utf8").toString("base64");
+    const result = parseSubscriptionBody(b64, "sub-uri");
+    expect(result.usableCount).toBe(2);
+    expect(result.proxies[0].host).toBe("10.0.0.1");
+    expect(result.proxies[0].username).toBe("user");
+    expect(result.proxies[1].type).toBe("socks5");
+  });
+
+  it("parses plain multi-line URI list", () => {
+    const result = parseSubscriptionBody(
+      "http://1.2.3.4:7890\nsocks5://5.6.7.8:1080\n",
+      "s"
+    );
+    expect(result.format).toBe("uri-list");
+    expect(result.usableCount).toBe(2);
+  });
+
+  it("parses mitce-style base64 vless/hysteria2 URI list (was empty before)", () => {
+    const lines = [
+      "vless://F2987FBA-B653-444D-8057-6B6474E448C6@hk1-r.example.com:10126?type=grpc&security=reality#HK-1",
+      "hysteria2://secret@jp1-hy2.example.com:443?insecure=0#JP1-HY2",
+      "tuic://uuid:pass@us1.example.com:8443?congestion_control=bbr#US-TUIC",
+    ].join("\n");
+    const b64 = Buffer.from(lines, "utf8").toString("base64");
+    const result = parseSubscriptionBody(b64, "mitce");
+    expect(result.format).toBe("uri-list");
+    expect(result.proxies.length).toBe(3);
+    expect(result.usableCount).toBe(0);
+    expect(result.bridgeableCount).toBe(3);
+    expect(result.proxies[0].name).toBe("HK-1");
+    expect(result.proxies[0].host).toBe("hk1-r.example.com");
+    expect(result.proxies[0].port).toBe(10126);
+    expect(result.proxies[0].type).toBe("vless");
+    expect(result.proxies[1].type).toBe("hysteria2");
+    expect(result.proxies[2].type).toBe("tuic");
+  });
+
+  it("parses Clash YAML with vless nodes + hints", () => {
+    const yaml = `
+mixed-port: 7892
+port: 7890
+external-controller: '127.0.0.1:9090'
+proxies:
+  - name: HK-1
+    type: vless
+    server: hk1.example.com
+    port: 10126
+    uuid: abc
+  - name: JP-1
+    type: hysteria2
+    server: jp1.example.com
+    port: 443
+    password: x
+  - name: HK2-HY2
+    type: hysteria2
+    server: hk2.example.com
+    ports: "20200-20399"
+    password: x
+proxy-groups:
+  - name: 主代理
+    type: select
+    proxies: [HK-1, JP-1]
+  - name: OpenAI
+    type: select
+    proxies: [HK-1]
+`;
+    const result = parseSubscriptionBody(yaml, "sub");
+    expect(result.format).toBe("clash-yaml");
+    expect(result.proxies.length).toBe(3);
+    expect(result.bridgeableCount).toBe(3);
+    expect(result.proxies.find((p) => p.name === "HK2-HY2")?.port).toBe(20200);
+    expect(result.clashHints?.mixedPort).toBe(7892);
+    expect(result.clashHints?.selectorGroups?.[0]).toBe("主代理");
+  });
+});
+
+describe("Clash Controller import", () => {
+  it("imports only leaf nodes with stable ids and exact names", async () => {
+    const calls: Array<{ url: string; auth: string | null }> = [];
+    const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      calls.push({ url: String(url), auth: headers.get("authorization") });
+      return new Response(
+        JSON.stringify({
+          proxies: {
+            Proxy: {
+              type: "Selector",
+              now: "Mexico",
+              all: ["Mexico", "Spain  ", "Auto", "Fallback", "DIRECT", "Blocked"],
+            },
+            Mexico: { type: "AnyTLS" },
+            "Spain  ": { type: "AnyTLS" },
+            Auto: { type: "URLTest" },
+            Fallback: { type: "Fallback" },
+            DIRECT: { type: "Direct" },
+            Blocked: { type: "Reject" },
+            GLOBAL: { type: "Selector", all: ["Proxy", "DIRECT"] },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    };
+    const bridge = {
+      enabled: true,
+      apiBase: "http://127.0.0.1:9090",
+      apiSecret: "secret",
+      localProxyHost: "127.0.0.1",
+      localProxyPort: 17891,
+      selectorGroup: "Proxy",
+    };
+
+    const first = await importClashControllerNodes(bridge, fetchImpl as typeof fetch);
+    const second = await importClashControllerNodes(bridge, fetchImpl as typeof fetch);
+
+    expect(first.proxies.map((p) => p.name)).toEqual(["Mexico", "Spain  "]);
+    expect(first.proxies.map((p) => p.clashNodeName)).toEqual(["Mexico", "Spain  "]);
+    expect(first.proxies.every((p) => p.type === "anytls")).toBe(true);
+    expect(first.proxies.every((p) => !p.usable && p.bridgeable)).toBe(true);
+    expect(first.proxies.map((p) => p.id)).toEqual(second.proxies.map((p) => p.id));
+    expect(calls.every((call) => call.auth === "Bearer secret")).toBe(true);
+  });
+
+  it("replaces one Controller group without duplicating stable nodes", async () => {
+    const imported = [
+      {
+        id: "controller_a",
+        name: "Mexico",
+        type: "anytls",
+        host: "127.0.0.1",
+        port: 17891,
+        enabled: true,
+        source: "controller" as const,
+        controllerGroup: "Proxy",
+        usable: false,
+        bridgeable: true,
+        clashNodeName: "Mexico",
+      },
+    ];
+    const once = mergeControllerProxies([], "Proxy", imported);
+    const twice = mergeControllerProxies(once, "Proxy", imported);
+    expect(twice).toHaveLength(1);
+    expect(twice[0].id).toBe("controller_a");
+  });
+});
+
+describe("resolveAccountProxy + merge", () => {
+  it("binds worker to pool proxy by proxyId", () => {
+    const pool: PoolProxy[] = [
+      {
+        id: "px_a",
+        name: "a",
+        type: "http",
+        host: "9.9.9.9",
+        port: 8000,
+        enabled: true,
+        source: "manual",
+        usable: true,
+      },
+    ];
+    const resolved = resolveAccountProxy({ proxyId: "px_a", proxy: null }, pool);
+    expect(resolved).toEqual({
+      type: "http",
+      host: "9.9.9.9",
+      port: 8000,
+      username: undefined,
+      password: undefined,
+    });
+  });
+
+  it("falls back to legacy inline proxy when proxyId missing", () => {
+    const resolved = resolveAccountProxy(
+      { proxyId: null, proxy: { type: "http", host: "127.0.0.1", port: 7890 } },
+      []
+    );
+    expect(resolved?.host).toBe("127.0.0.1");
+  });
+
+  it("resolves vless node via Clash bridge to local mixed-port", () => {
+    const pool: PoolProxy[] = [
+      {
+        id: "px_v",
+        name: "HK-1",
+        type: "vless",
+        host: "hk.example.com",
+        port: 10126,
+        enabled: true,
+        source: "subscription",
+        usable: false,
+        bridgeable: true,
+        clashNodeName: "HK-1",
+      },
+    ];
+    const bridge = {
+      enabled: true,
+      apiBase: "http://127.0.0.1:9090",
+      apiSecret: "",
+      localProxyHost: "127.0.0.1",
+      localProxyPort: 7892,
+      selectorGroup: "主代理",
+    };
+    const egress = resolveAccountEgress({ proxyId: "px_v" }, pool, bridge);
+    expect(egress.proxy).toEqual({
+      type: "http",
+      host: "127.0.0.1",
+      port: 7892,
+    });
+    expect(egress.clashNodeName).toBe("HK-1");
+  });
+
+  it("mergeSubscriptionProxies replaces only same subscription entries", () => {
+    const pool: PoolProxy[] = [
+      {
+        id: "m1",
+        name: "manual",
+        type: "http",
+        host: "1.1.1.1",
+        port: 1,
+        enabled: true,
+        source: "manual",
+        usable: true,
+      },
+      {
+        id: "s1",
+        name: "old",
+        type: "http",
+        host: "2.2.2.2",
+        port: 2,
+        enabled: true,
+        source: "subscription",
+        subscriptionId: "subA",
+        usable: true,
+      },
+    ];
+    const imported: PoolProxy[] = [
+      {
+        id: "s2",
+        name: "new",
+        type: "socks5",
+        host: "3.3.3.3",
+        port: 3,
+        enabled: true,
+        source: "subscription",
+        usable: true,
+      },
+    ];
+    const merged = mergeSubscriptionProxies(pool, "subA", imported);
+    expect(merged.find((p) => p.id === "m1")).toBeTruthy();
+    expect(merged.find((p) => p.id === "s1")).toBeFalsy();
+    expect(merged.find((p) => p.host === "3.3.3.3")?.subscriptionId).toBe("subA");
+  });
+});
+
+describe("assignHealthyProxiesToWorkers", () => {
+  function px(
+    id: string,
+    over: Partial<PoolProxy> = {}
+  ): PoolProxy {
+    return {
+      id,
+      name: id,
+      type: "http",
+      host: "10.0.0." + id.slice(-1),
+      port: 8000,
+      enabled: true,
+      source: "manual",
+      usable: true,
+      ...over,
+    };
+  }
+
+  it("assigns unique healthy proxies sorted by latency", () => {
+    const result = assignHealthyProxiesToWorkers({
+      accounts: [
+        { id: "w1", apiKey: "k1", proxyId: null, proxy: null },
+        { id: "w2", apiKey: "k2", proxyId: "old", proxy: null },
+        { id: "w3", apiKey: "k3", proxyId: null, proxy: null },
+      ],
+      pool: [px("slow"), px("fast"), px("mid"), px("bad")],
+      probeResults: {
+        slow: { ok: true, health: "healthy", latencyMs: 300 },
+        fast: { ok: true, health: "healthy", latencyMs: 40 },
+        mid: { ok: true, health: "healthy", latencyMs: 120 },
+        bad: { ok: false, health: "bad", latencyMs: null },
+      },
+    });
+
+    expect(result.healthyAvailable).toBe(3);
+    expect(result.assigned).toBe(3);
+    expect(result.unassigned).toBe(0);
+    expect(result.accounts.map((a) => a.proxyId)).toEqual(["fast", "mid", "slow"]);
+    expect(new Set(result.accounts.map((a) => a.proxyId)).size).toBe(3);
+  });
+
+  it("leaves surplus workers unbound when healthy proxies run out", () => {
+    const result = assignHealthyProxiesToWorkers({
+      accounts: [
+        { id: "w1", apiKey: "", proxyId: "keep-me", proxy: null },
+        { id: "w2", apiKey: "", proxyId: null, proxy: null },
+      ],
+      pool: [px("only")],
+      probeResults: {
+        only: { ok: true, health: "healthy", latencyMs: 10 },
+      },
+    });
+    expect(result.assigned).toBe(1);
+    expect(result.unassigned).toBe(1);
+    expect(result.accounts[0].proxyId).toBe("only");
+    expect(result.accounts[1].proxyId).toBeNull();
+  });
+
+  it("does not assign two nodes with the same measured egress IP", () => {
+    const result = assignHealthyProxiesToWorkers({
+      accounts: [
+        { id: "w1", apiKey: "", proxyId: null, proxy: null },
+        { id: "w2", apiKey: "", proxyId: null, proxy: null },
+      ],
+      pool: [px("a"), px("b")],
+      probeResults: {
+        a: { ok: true, health: "healthy", latencyMs: 10, egressIp: "203.0.113.7" },
+        b: { ok: true, health: "healthy", latencyMs: 20, egressIp: "203.0.113.7" },
+      },
+    });
+    expect(result.healthyAvailable).toBe(1);
+    expect(result.assigned).toBe(1);
+  });
+
+  it("ignores structural-usable nodes that never probed healthy", () => {
+    const result = assignHealthyProxiesToWorkers({
+      accounts: [{ id: "w1", apiKey: "", proxyId: null, proxy: null }],
+      pool: [px("untested")],
+      probeResults: {},
+    });
+    expect(result.healthyAvailable).toBe(0);
+    expect(result.assigned).toBe(0);
+    expect(result.accounts[0].proxyId).toBeNull();
+  });
+
+  it("skips bridge-only healthy nodes when Clash bridge is off", () => {
+    const result = assignHealthyProxiesToWorkers({
+      accounts: [{ id: "w1", apiKey: "", proxyId: null, proxy: null }],
+      pool: [
+        px("vless", {
+          type: "vless",
+          usable: false,
+          bridgeable: true,
+          clashNodeName: "vless",
+        }),
+      ],
+      probeResults: {
+        vless: { ok: true, health: "healthy", latencyMs: 50 },
+      },
+      bridge: {
+        enabled: false,
+        apiBase: "http://127.0.0.1:9090",
+        apiSecret: "",
+        localProxyHost: "127.0.0.1",
+        localProxyPort: 7890,
+        selectorGroup: "GLOBAL",
+      },
+    });
+    expect(result.healthyAvailable).toBe(0);
+    expect(result.assigned).toBe(0);
+  });
+});
+
+describe("UpstreamClient uses bound pool proxy", () => {
+  it("passes dispatcher when worker has proxyId in pool", async () => {
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit & { dispatcher?: unknown }) => {
+      expect(init?.dispatcher).toBeTruthy();
+      return new Response(
+        JSON.stringify({
+          id: "1",
+          object: "chat.completion",
+          choices: [{ message: { role: "assistant", content: "ok" } }],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    });
+
+    const client = new UpstreamClient(
+      settings({
+        proxyPool: [
+          {
+            id: "px1",
+            name: "egress-1",
+            type: "http",
+            host: "10.0.0.9",
+            port: 8888,
+            enabled: true,
+            source: "manual",
+            usable: true,
+          },
+        ],
+        accounts: [{ id: "w1", apiKey: "key", proxyId: "px1", proxy: null }],
+      }),
+      fetchImpl
+    );
+
+    const result = await client.chatCompletions({
+      body: { model: "big-pickle", messages: [{ role: "user", content: "x" }] },
+      stream: false,
+    });
+    expect(result.status).toBe(200);
+    expect(result.proxyId).toBe("px1");
+    expect(fetchImpl).toHaveBeenCalled();
+  });
+});
+
+describe("admin proxy-pool HTTP APIs", () => {
+  let app: App | null = null;
+  let dir = "";
+
+  afterEach(async () => {
+    if (app) {
+      await close(app);
+      app = null;
+    }
+    if (dir) {
+      await rm(dir, { recursive: true, force: true });
+      dir = "";
+    }
+  });
+
+  it("adds manual proxy, binds worker, fetches clash subscription into pool", async () => {
+    dir = await mkdtemp(join(tmpdir(), "ocfr-pool-"));
+    const store = new SettingsStore(join(dir, "settings.json"));
+    await store.save(settings());
+
+    const clashBody = `
+proxies:
+  - { name: "sub-node", type: http, server: 8.8.8.8, port: 3128 }
+`;
+    const subFetch = vi.fn(async () => new Response(clashBody, { status: 200 }));
+
+    app = await createApp({
+      store,
+      port: 0,
+      fetchImpl: async () => new Response("{}", { status: 200 }),
+      subscriptionFetch: subFetch as unknown as typeof fetch,
+    });
+    await listen(app);
+    const addr = app.server.address();
+    if (!addr || typeof addr === "string") throw new Error("no addr");
+    const base = `http://127.0.0.1:${addr.port}`;
+
+    // manual add
+    const addRes = await fetch(`${base}/admin/api/proxy-pool`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "manual-1",
+        type: "http",
+        host: "127.0.0.1",
+        port: 7890,
+      }),
+    });
+    expect(addRes.status).toBe(200);
+    let s = (await addRes.json()) as GatewaySettings;
+    expect(s.proxyPool.length).toBe(1);
+    const manualId = s.proxyPool[0].id;
+
+    // bind worker
+    const put = await fetch(`${base}/admin/api/settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...s,
+        accounts: [{ id: "worker-a", apiKey: "ak", proxyId: manualId, proxy: null }],
+      }),
+    });
+    expect(put.status).toBe(200);
+    s = (await put.json()) as GatewaySettings;
+    expect(s.accounts[0].proxyId).toBe(manualId);
+
+    // add subscription + fetch
+    const subRes = await fetch(`${base}/admin/api/proxy-subscriptions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "test-sub", url: "https://example.com/clash" }),
+    });
+    expect(subRes.status).toBe(200);
+    const subBody = (await subRes.json()) as {
+      subscription: { id: string };
+      settings: GatewaySettings;
+    };
+    const subId = subBody.subscription.id;
+
+    const fetchRes = await fetch(
+      `${base}/admin/api/proxy-subscriptions/${encodeURIComponent(subId)}/fetch`,
+      { method: "POST" }
+    );
+    expect(fetchRes.status).toBe(200);
+    const fetched = (await fetchRes.json()) as {
+      usableCount: number;
+      settings: GatewaySettings;
+    };
+    expect(fetched.usableCount).toBe(1);
+    expect((fetched as { totalCount?: number }).totalCount).toBe(1);
+    expect(fetched.settings.proxyPool.some((p) => p.host === "8.8.8.8")).toBe(true);
+    expect(fetched.settings.proxyPool.some((p) => p.host === "127.0.0.1")).toBe(true);
+    expect(subFetch).toHaveBeenCalled();
+
+    // status reflects pool
+    const st = (await (await fetch(`${base}/admin/api/status`)).json()) as {
+      proxyPoolCount: number;
+      proxyPoolUsable: number;
+    };
+    expect(st.proxyPoolCount).toBeGreaterThanOrEqual(2);
+    expect(st.proxyPoolUsable).toBeGreaterThanOrEqual(2);
+
+    // admin page mentions proxy pool
+    const html = await (await fetch(`${base}/`)).text();
+    expect(html).toMatch(/Proxy [Pp]ool/);
+    expect(html).toContain("Clash");
+    expect(html).toContain("btn-assign-proxies");
+    expect(html).toContain("/admin/api/workers/assign-proxies");
+  });
+
+  it("imports running Controller nodes and preserves worker bindings on refresh", async () => {
+    dir = await mkdtemp(join(tmpdir(), "ocfr-controller-"));
+    const store = new SettingsStore(join(dir, "settings.json"));
+    await store.save(
+      settings({
+        accounts: [
+          { id: "w1", apiKey: "a", proxyId: null, proxy: null },
+          { id: "w2", apiKey: "b", proxyId: null, proxy: null },
+        ],
+      })
+    );
+    const controllerFetch = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).endsWith("/proxies")) {
+        return new Response(
+          JSON.stringify({
+            proxies: {
+              Proxy: { type: "Selector", now: "Mexico", all: ["Mexico", "Spain", "Auto"] },
+              Mexico: { type: "AnyTLS" },
+              Spain: { type: "AnyTLS" },
+              Auto: { type: "URLTest", all: ["Mexico", "Spain"] },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      return new Response(null, { status: 404 });
+    });
+    app = await createApp({
+      store,
+      port: 0,
+      fetchImpl: async () => new Response("{}", { status: 200 }),
+      subscriptionFetch: controllerFetch as unknown as typeof fetch,
+    });
+    await listen(app);
+    const addr = app.server.address();
+    if (!addr || typeof addr === "string") throw new Error("no addr");
+    const base = `http://127.0.0.1:${addr.port}`;
+    const bridge = {
+      enabled: true,
+      apiBase: "http://127.0.0.1:9090",
+      apiSecret: "",
+      localProxyHost: "127.0.0.1",
+      localProxyPort: 17891,
+      selectorGroup: "Proxy",
+    };
+
+    const firstRes = await fetch(`${base}/admin/api/clash-bridge/import`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(bridge),
+    });
+    expect(firstRes.status).toBe(200);
+    const first = (await firstRes.json()) as { imported: number; settings: GatewaySettings };
+    expect(first.imported).toBe(2);
+    expect(first.settings.clashBridge).toEqual(bridge);
+    expect(first.settings.proxyPool.every((p) => p.source === "controller")).toBe(true);
+    const ids = first.settings.proxyPool.map((p) => p.id);
+
+    const bound = await store.save({
+      accounts: [
+        { id: "w1", apiKey: "a", proxyId: ids[0], proxy: null },
+        { id: "w2", apiKey: "b", proxyId: ids[1], proxy: null },
+      ],
+    });
+    app.upstream.updateSettings(bound);
+
+    const secondRes = await fetch(`${base}/admin/api/clash-bridge/import`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(bridge),
+    });
+    const second = (await secondRes.json()) as { settings: GatewaySettings };
+    expect(secondRes.status).toBe(200);
+    expect(second.settings.proxyPool.map((p) => p.id)).toEqual(ids);
+    expect(second.settings.accounts.map((a) => a.proxyId)).toEqual(ids);
+
+    const html = await (await fetch(`${base}/`)).text();
+    expect(html).toContain("btn-import-clash");
+    expect(html).toContain("/admin/api/clash-bridge/import");
+  });
+
+  it("tests exactly one bound worker with a real proxied chat request", async () => {
+    dir = await mkdtemp(join(tmpdir(), "ocfr-worker-test-"));
+    const store = new SettingsStore(join(dir, "settings.json"));
+    await store.save(
+      settings({
+        accounts: [
+          { id: "target", apiKey: "target-key", proxyId: "px", proxy: null },
+          { id: "other", apiKey: "other-key", proxyId: null, proxy: null },
+        ],
+        proxyPool: [
+          {
+            id: "px",
+            name: "Mexico",
+            type: "http",
+            host: "127.0.0.1",
+            port: 17891,
+            enabled: true,
+            source: "manual",
+            usable: true,
+            bridgeable: true,
+          },
+        ],
+      })
+    );
+    const upstreamFetch = vi.fn(async (_url: string, init?: RequestInit & { dispatcher?: unknown }) => {
+      const headers = new Headers(init?.headers);
+      expect(headers.get("authorization")).toBe("Bearer target-key");
+      expect(init?.dispatcher).toBeTruthy();
+      return new Response(
+        JSON.stringify({
+          id: "test",
+          object: "chat.completion",
+          choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    });
+    app = await createApp({
+      store,
+      port: 0,
+      fetchImpl: upstreamFetch,
+      probeFetch: async () => new Response("203.0.113.25", { status: 200 }),
+    });
+    await listen(app);
+    const addr = app.server.address();
+    if (!addr || typeof addr === "string") throw new Error("no addr");
+    const base = `http://127.0.0.1:${addr.port}`;
+
+    const res = await fetch(`${base}/admin/api/workers/target/test`, { method: "POST" });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      workerId: string;
+      upstreamStatus: number;
+      egressIp: string;
+      proxyName: string;
+    };
+    expect(body).toMatchObject({
+      ok: true,
+      workerId: "target",
+      upstreamStatus: 200,
+      egressIp: "203.0.113.25",
+      proxyName: "Mexico",
+    });
+    expect(upstreamFetch).toHaveBeenCalledTimes(1);
+
+    const unbound = await fetch(`${base}/admin/api/workers/other/test`, { method: "POST" });
+    expect(unbound.status).toBe(400);
+    expect(upstreamFetch).toHaveBeenCalledTimes(1);
+
+    const html = await (await fetch(`${base}/`)).text();
+    expect(html).toContain("btn-test-worker");
+    expect(html).toContain("/admin/api/workers/");
+  });
+
+  it("returns 400 when no probe-healthy proxies exist", async () => {
+    dir = await mkdtemp(join(tmpdir(), "ocfr-assign-empty-"));
+    const store = new SettingsStore(join(dir, "settings.json"));
+    await store.save(
+      settings({
+        accounts: [{ id: "w1", apiKey: "a", proxyId: null, proxy: null }],
+        proxyPool: [
+          {
+            id: "px1",
+            name: "n1",
+            type: "http",
+            host: "1.1.1.1",
+            port: 8080,
+            enabled: true,
+            source: "manual",
+            usable: true,
+          },
+        ],
+      })
+    );
+    app = await createApp({
+      store,
+      port: 0,
+      probes: new ProbeResultCache(),
+      fetchImpl: async () => new Response("{}", { status: 200 }),
+    });
+    await listen(app);
+    const addr = app.server.address();
+    if (!addr || typeof addr === "string") throw new Error("no addr");
+    const res = await fetch(
+      `http://127.0.0.1:${addr.port}/admin/api/workers/assign-proxies`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("auto-assigns unique healthy proxies to each worker", async () => {
+    dir = await mkdtemp(join(tmpdir(), "ocfr-assign-"));
+    const store = new SettingsStore(join(dir, "settings.json"));
+    await store.save(
+      settings({
+        accounts: [
+          { id: "w1", apiKey: "a", proxyId: null, proxy: null },
+          { id: "w2", apiKey: "b", proxyId: null, proxy: null },
+          { id: "w3", apiKey: "c", proxyId: null, proxy: null },
+        ],
+        proxyPool: [
+          {
+            id: "px-fast",
+            name: "fast",
+            type: "http",
+            host: "1.1.1.1",
+            port: 8080,
+            enabled: true,
+            source: "manual",
+            usable: true,
+          },
+          {
+            id: "px-slow",
+            name: "slow",
+            type: "http",
+            host: "2.2.2.2",
+            port: 8080,
+            enabled: true,
+            source: "manual",
+            usable: true,
+          },
+          {
+            id: "px-dead",
+            name: "dead",
+            type: "http",
+            host: "3.3.3.3",
+            port: 8080,
+            enabled: true,
+            source: "manual",
+            usable: true,
+          },
+        ],
+      })
+    );
+
+    const probes = new ProbeResultCache();
+    probes.setMany([
+      {
+        id: "px-fast",
+        ok: true,
+        latencyMs: 30,
+        error: null,
+        testedAt: new Date().toISOString(),
+        health: "healthy",
+      },
+      {
+        id: "px-slow",
+        ok: true,
+        latencyMs: 200,
+        error: null,
+        testedAt: new Date().toISOString(),
+        health: "healthy",
+      },
+      {
+        id: "px-dead",
+        ok: false,
+        latencyMs: null,
+        error: "Timeout",
+        testedAt: new Date().toISOString(),
+        health: "bad",
+      },
+    ]);
+
+    app = await createApp({
+      store,
+      port: 0,
+      probes,
+      fetchImpl: async () => new Response("{}", { status: 200 }),
+    });
+    await listen(app);
+    const addr = app.server.address();
+    if (!addr || typeof addr === "string") throw new Error("no addr");
+    const base = `http://127.0.0.1:${addr.port}`;
+
+    const res = await fetch(`${base}/admin/api/workers/assign-proxies`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      assigned: number;
+      unassigned: number;
+      healthyAvailable: number;
+      settings: GatewaySettings;
+    };
+    expect(body.healthyAvailable).toBe(2);
+    expect(body.assigned).toBe(2);
+    expect(body.unassigned).toBe(1);
+    expect(body.settings.accounts[0].proxyId).toBe("px-fast");
+    expect(body.settings.accounts[1].proxyId).toBe("px-slow");
+    expect(body.settings.accounts[2].proxyId).toBeNull();
+
+    const saved = (await (await fetch(`${base}/admin/api/settings`)).json()) as GatewaySettings;
+    expect(saved.accounts.map((a) => a.proxyId)).toEqual(["px-fast", "px-slow", null]);
+  });
+});
+
+describe("normalizeProxyPool", () => {
+  it("drops invalid entries", () => {
+    const pool = normalizeProxyPool([
+      { id: "ok", host: "1.1.1.1", port: 80, type: "http" },
+      { host: "", port: 1 },
+      null,
+    ]);
+    expect(pool).toHaveLength(1);
+    expect(pool[0].host).toBe("1.1.1.1");
+    expect(newProxyId().startsWith("px_")).toBe(true);
+  });
+});
+
+describe("listModels resilience", () => {
+  it("fails closed when a bound Clash switch fails", async () => {
+    const bridgeFetch = vi.fn(async () => {
+      return new Response(JSON.stringify({ message: "Resource not found" }), {
+        status: 404,
+      });
+    });
+    const upstreamFetch = vi.fn(async (url: string, init?: RequestInit) => {
+      // direct (no dispatcher) path
+      if (String(url).includes("/models") && !(init as { dispatcher?: unknown })?.dispatcher) {
+        return new Response(
+          JSON.stringify({
+            object: "list",
+            data: [{ id: "big-pickle", object: "model" }],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      throw new Error("should not use proxy path successfully");
+    });
+
+    const client = new UpstreamClient(
+      settings({
+        clashBridge: {
+          enabled: true,
+          apiBase: "http://127.0.0.1:9090",
+          apiSecret: "",
+          localProxyHost: "127.0.0.1",
+          localProxyPort: 7892,
+          selectorGroup: "主代理",
+        },
+        proxyPool: [
+          {
+            id: "px_jp",
+            name: "JP-2",
+            type: "vless",
+            host: "jp.example.com",
+            port: 1,
+            enabled: true,
+            source: "subscription",
+            usable: false,
+            bridgeable: true,
+            clashNodeName: "JP-2",
+          },
+        ],
+        accounts: [{ id: "w1", apiKey: "", proxyId: "px_jp", proxy: null }],
+      }),
+      upstreamFetch as unknown as import("../src/proxy/upstream.js").ProxyFetch,
+      bridgeFetch as unknown as typeof fetch
+    );
+
+    await expect(client.listModels()).rejects.toThrow("Clash switch failed");
+    expect(upstreamFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("fetchClashSubscription multi-UA", () => {
+  it("prefers clash UA YAML over base64 vless list", async () => {
+    const yaml = `
+mixed-port: 7892
+proxies:
+  - name: N1
+    type: vless
+    server: a.example.com
+    port: 1
+  - name: N2
+    type: vless
+    server: b.example.com
+    port: 2
+proxy-groups:
+  - name: 主代理
+    type: select
+    proxies: [N1, N2]
+`;
+    const b64 = Buffer.from(
+      "vless://u@a.example.com:1#OnlyOne\n",
+      "utf8"
+    ).toString("base64");
+
+    const fetchImpl = async (_url: string, init?: RequestInit) => {
+      const ua = String((init?.headers as Record<string, string>)?.["User-Agent"] || "");
+      if (ua === "clash") return new Response(yaml, { status: 200 });
+      return new Response(b64, { status: 200 });
+    };
+
+    const result = await fetchClashSubscription({
+      url: "https://example.com/sub",
+      subscriptionId: "s1",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    expect(result.format).toBe("clash-yaml");
+    expect(result.proxies.length).toBe(2);
+    expect(result.usedUserAgent).toBe("clash");
+    expect(result.clashHints?.mixedPort).toBe(7892);
+  });
+});
