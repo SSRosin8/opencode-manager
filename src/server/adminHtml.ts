@@ -409,6 +409,12 @@ export const ADMIN_HTML = `<!DOCTYPE html>
     }
     .table-tools .select { width: auto; min-width: 120px; }
     .table-wrap { overflow: auto; max-height: 360px; }
+    .attempts-table { min-width: 980px; }
+    .attempts-table td { vertical-align: top; }
+    .attempt-error {
+      max-width: 260px; overflow: hidden; text-overflow: ellipsis;
+      white-space: nowrap; color: var(--muted); font-size: 11px; margin-top: 3px;
+    }
     table.nodes {
       width: 100%; border-collapse: collapse; font-size: 12px;
     }
@@ -699,20 +705,40 @@ export const ADMIN_HTML = `<!DOCTYPE html>
               <table class="nodes">
                 <thead>
                   <tr>
-                    <th data-i18n="colWorkerId">Worker</th>
+                    <th data-i18n="colIdentity">Zen identity</th>
+                    <th data-i18n="colRouteEgress">Route / egress</th>
                     <th data-i18n="colRequests">Requests</th>
-                    <th data-i18n="colChat">Chat</th>
-                    <th data-i18n="colModels">Models</th>
-                    <th data-i18n="colPromptTok">Prompt tokens</th>
-                    <th data-i18n="colCompletionTok">Completion tokens</th>
-                    <th data-i18n="colTotalTok">Total tokens</th>
-                    <th data-i18n="colCacheRead">Cache read</th>
-                    <th data-i18n="colCacheWrite">Cache write</th>
-                    <th data-i18n="colCacheRate">Cache rate</th>
+                    <th data-i18n="colSuccessErrors">Success / errors</th>
+                    <th data-i18n="colTokens">Tokens</th>
+                    <th data-i18n="colCache">Cache</th>
+                    <th data-i18n="colState">State</th>
                     <th data-i18n="colLastReq">Last request</th>
                   </tr>
                 </thead>
                 <tbody id="ov-worker-stats"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="panel" style="margin-top:12px">
+            <div class="panel-hd">
+              <h2 data-i18n="recentAttempts">Recent upstream attempts</h2>
+              <span class="muted" data-i18n="recentAttemptsSub">Retries share the same request ID.</span>
+            </div>
+            <div class="table-wrap">
+              <table class="nodes attempts-table">
+                <thead>
+                  <tr>
+                    <th data-i18n="colTime">Time</th>
+                    <th data-i18n="colRequest">Request</th>
+                    <th data-i18n="colOperation">Operation</th>
+                    <th data-i18n="colIdentity">Zen identity</th>
+                    <th data-i18n="colRouteEgress">Route / egress</th>
+                    <th data-i18n="colResult">Result</th>
+                    <th data-i18n="colLatency">Latency</th>
+                    <th data-i18n="colSwitch">Switch</th>
+                  </tr>
+                </thead>
+                <tbody id="ov-attempts"></tbody>
               </table>
             </div>
           </div>
@@ -1110,10 +1136,23 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         running: "Running", stopped: "Stopped", loading: "Loading…",
         overviewSub: "Gateway health, workers, and proxy pool at a glance.",
         workerUsage: "Worker usage",
+        recentAttempts: "Recent upstream attempts",
+        recentAttemptsSub: "Retries share the same request ID.",
         resetStats: "Reset stats",
         confirmResetStats: "Reset all worker request and token counters?",
         toastStatsReset: "Worker stats reset",
         colWorkerId: "Worker",
+        colIdentity: "Zen identity",
+        colRouteEgress: "Route / egress",
+        colSuccessErrors: "Success / errors",
+        colTokens: "Tokens",
+        colCache: "Cache",
+        colState: "State",
+        colTime: "Time",
+        colRequest: "Request",
+        colOperation: "Operation",
+        colResult: "Result",
+        colSwitch: "Switch",
         colRequests: "Requests",
         colChat: "Chat",
         colModels: "Models",
@@ -1125,6 +1164,20 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         colCacheRate: "Cache rate",
         colLastReq: "Last request",
         totalsLabel: "Totals",
+        attemptCount: "upstream attempts",
+        retrying: "Retrying",
+        returned: "Returned",
+        noRetry: "No retry",
+        readyState: "Ready",
+        coolingState: "Cooling down",
+        directEgress: "Direct egress",
+        unknownEgress: "Egress unknown",
+        noAttempts: "No upstream attempts yet.",
+        outcomeSuccess: "Success",
+        outcomeRateLimit: "Rate limited",
+        outcomeAuthFailed: "Auth failed",
+        outcomeUpstreamError: "Upstream error",
+        outcomeTransportError: "Network error",
         gatewaySub: "Upstream target, listen port, and CLI identity headers.",
         proxyPoolTitle: "Proxy Pool",
         proxyPoolSub: "Isolate every OpenCode account with a dedicated egress IP.",
@@ -1237,10 +1290,23 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         running: "运行中", stopped: "已停止", loading: "加载中…",
         overviewSub: "网关健康、Worker 与代理池一览。",
         workerUsage: "Worker 用量",
+        recentAttempts: "最近上游尝试",
+        recentAttemptsSub: "自动重试会使用相同的请求编号。",
         resetStats: "重置统计",
         confirmResetStats: "重置全部 Worker 的请求次数与 token 计数？",
         toastStatsReset: "Worker 统计已重置",
         colWorkerId: "Worker",
+        colIdentity: "Zen 身份",
+        colRouteEgress: "节点 / 出口",
+        colSuccessErrors: "成功 / 失败",
+        colTokens: "Tokens",
+        colCache: "缓存",
+        colState: "状态",
+        colTime: "时间",
+        colRequest: "请求",
+        colOperation: "操作",
+        colResult: "结果",
+        colSwitch: "切换",
         colRequests: "请求次数",
         colChat: "Chat",
         colModels: "Models",
@@ -1252,6 +1318,20 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         colCacheRate: "缓存率",
         colLastReq: "最近请求",
         totalsLabel: "合计",
+        attemptCount: "次上游尝试",
+        retrying: "继续切换",
+        returned: "已返回",
+        noRetry: "未切换",
+        readyState: "可用",
+        coolingState: "冷却中",
+        directEgress: "直连出口",
+        unknownEgress: "出口未知",
+        noAttempts: "暂无上游请求记录。",
+        outcomeSuccess: "成功",
+        outcomeRateLimit: "已限流",
+        outcomeAuthFailed: "认证失败",
+        outcomeUpstreamError: "上游错误",
+        outcomeTransportError: "网络错误",
         gatewaySub: "上游地址、监听端口与 CLI 身份头。",
         proxyPoolTitle: "代理池",
         proxyPoolSub: "为每个 OpenCode 账号隔离独立出口 IP。",
@@ -2081,6 +2161,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
 
     function renderWorkerStats() {
       const body = $("ov-worker-stats");
+      const attemptsBody = $("ov-attempts");
       const totalsEl = $("ov-usage-totals");
       if (!body) return;
       const workers = status?.workers || [];
@@ -2089,28 +2170,66 @@ export const ADMIN_HTML = `<!DOCTYPE html>
       if (totalsEl) {
         totalsEl.textContent =
           t("totalsLabel") + ": " +
-          fmtNum(totals.requestCount) + " req · " +
+          fmtNum(totals.requestCount) + " " + t("attemptCount") + " · " +
           fmtNum(totals.totalTokens) + " tok · " +
           t("anonymousZen") + " " + fmtNum(byKind.anonymous_zen?.requestCount) + " req · " +
           t("authenticatedZen") + " " + fmtNum(byKind.authenticated_zen?.requestCount) + " req";
       }
       if (!workers.length) {
-        body.innerHTML = '<tr><td colspan="11" class="muted" style="padding:14px">' + escapeHtml(t("noWorkers")) + '</td></tr>';
+        body.innerHTML = '<tr><td colspan="8" class="muted" style="padding:14px">' + escapeHtml(t("noWorkers")) + '</td></tr>';
+      } else {
+        body.innerHTML = workers.map((w) => {
+          const kindLabel = t(w.kind === "authenticated_zen" ? "authenticatedZen" : "anonymousZen");
+          const routeName = w.proxyName || (w.proxyId ? w.proxyId : t("directEgress"));
+          const egress = w.egressIp || t("unknownEgress");
+          const stateLabel = w.ready ? t("readyState") : t("coolingState");
+          const statusText = w.lastStatus == null
+            ? (w.lastRequestAt ? t("outcomeTransportError") : "—")
+            : "HTTP " + w.lastStatus;
+          return '<tr>' +
+            '<td><strong>' + escapeHtml(w.accountId) + '</strong><div style="margin-top:4px"><span class="tag ' + (w.kind === "anonymous_zen" ? "blue" : "info") + '">' + escapeHtml(kindLabel) + '</span></div><div class="muted mono" style="margin-top:4px">' + escapeHtml(w.credentialLabel || "—") + '</div></td>' +
+            '<td><strong>' + escapeHtml(routeName) + '</strong><div class="muted mono">' + escapeHtml(egress) + '</div></td>' +
+            '<td class="mono"><strong>' + fmtNum(w.requestCount) + '</strong><div class="muted">Chat ' + fmtNum(w.chatCount) + ' · Models ' + fmtNum(w.modelsCount) + '</div></td>' +
+            '<td><span class="ok mono">' + fmtNum(w.successCount) + '</span> / <span class="err mono">' + fmtNum(w.errorCount) + '</span><div class="muted">' + escapeHtml(statusText) + '</div></td>' +
+            '<td class="mono"><strong>' + fmtNum(w.totalTokens) + '</strong><div class="muted">in ' + fmtNum(w.promptTokens) + ' · out ' + fmtNum(w.completionTokens) + '</div></td>' +
+            '<td class="mono">' + escapeHtml(fmtRate(w.cacheRate)) + '<div class="muted">read ' + fmtNum(w.cacheReadTokens) + ' · write ' + fmtNum(w.cacheWriteTokens) + '</div></td>' +
+            '<td><span class="tag ' + (w.ready ? "ok" : "warn") + '">' + escapeHtml(stateLabel) + '</span>' + (!w.ready && w.cooldownUntil ? '<div class="muted">' + escapeHtml(relTime(new Date(w.cooldownUntil).toISOString())) + '</div>' : '') + '</td>' +
+            '<td class="muted">' + escapeHtml(w.lastRequestAt ? relTime(w.lastRequestAt) : "—") + '</td>' +
+            '</tr>';
+        }).join("");
+      }
+
+      const attempts = status?.recentAttempts || [];
+      if (!attemptsBody) return;
+      if (!attempts.length) {
+        attemptsBody.innerHTML = '<tr><td colspan="8" class="muted" style="padding:14px">' + escapeHtml(t("noAttempts")) + '</td></tr>';
         return;
       }
-      body.innerHTML = workers.map((w) => {
-        return '<tr>' +
-          '<td><strong>' + escapeHtml(w.accountId) + '</strong><div class="muted">' + escapeHtml(t(w.kind === "authenticated_zen" ? "authenticatedZen" : "anonymousZen")) + '</div></td>' +
-          '<td class="mono">' + fmtNum(w.requestCount) + '</td>' +
-          '<td class="mono">' + fmtNum(w.chatCount) + '</td>' +
-          '<td class="mono">' + fmtNum(w.modelsCount) + '</td>' +
-          '<td class="mono">' + fmtNum(w.promptTokens) + '</td>' +
-          '<td class="mono">' + fmtNum(w.completionTokens) + '</td>' +
-          '<td class="mono"><strong>' + fmtNum(w.totalTokens) + '</strong></td>' +
-          '<td class="mono">' + fmtNum(w.cacheReadTokens) + '</td>' +
-          '<td class="mono">' + fmtNum(w.cacheWriteTokens) + '</td>' +
-          '<td class="mono">' + escapeHtml(fmtRate(w.cacheRate)) + '</td>' +
-          '<td class="muted">' + escapeHtml(w.lastRequestAt ? relTime(w.lastRequestAt) : "—") + '</td>' +
+      const outcomeText = {
+        success: "outcomeSuccess",
+        rate_limited: "outcomeRateLimit",
+        auth_failed: "outcomeAuthFailed",
+        upstream_error: "outcomeUpstreamError",
+        transport_error: "outcomeTransportError",
+      };
+      attemptsBody.innerHTML = attempts.map((a) => {
+        const ok = a.outcome === "success";
+        const warn = a.outcome === "rate_limited" || a.outcome === "upstream_error";
+        const resultClass = ok ? "ok" : warn ? "warn" : "err";
+        const resultLabel = t(outcomeText[a.outcome] || "outcomeUpstreamError");
+        const kindLabel = t(a.accountKind === "authenticated_zen" ? "authenticatedZen" : "anonymousZen");
+        const route = a.proxyName || a.clashNodeName || a.proxyId || t("directEgress");
+        const egress = a.egressIp || t("unknownEgress");
+        const statusLabel = a.status == null ? resultLabel : "HTTP " + a.status + " · " + resultLabel;
+        return '<tr class="' + (ok ? "" : warn ? "row-warn" : "row-err") + '">' +
+          '<td class="muted">' + escapeHtml(relTime(a.at)) + '</td>' +
+          '<td><span class="mono">' + escapeHtml(String(a.requestId || "").slice(0, 8)) + '</span><div class="muted">' + escapeHtml(a.attempt + "/" + a.maxAttempts) + '</div></td>' +
+          '<td><strong>' + escapeHtml(a.operation) + '</strong><div class="muted mono">' + escapeHtml(a.model || "—") + '</div></td>' +
+          '<td><strong>' + escapeHtml(a.accountId) + '</strong><div><span class="tag ' + (a.accountKind === "anonymous_zen" ? "blue" : "info") + '">' + escapeHtml(kindLabel) + '</span></div><div class="muted mono">' + escapeHtml(a.credentialLabel || (a.accountKind === "anonymous_zen" ? "public" : "—")) + '</div></td>' +
+          '<td><strong>' + escapeHtml(route) + '</strong><div class="muted mono">' + escapeHtml(egress) + '</div></td>' +
+          '<td><span class="tag ' + resultClass + '">' + escapeHtml(statusLabel) + '</span>' + (a.error ? '<div class="attempt-error" title="' + escapeAttr(a.error) + '">' + escapeHtml(a.error) + '</div>' : '') + '</td>' +
+          '<td class="mono">' + fmtNum(a.latencyMs) + ' ms</td>' +
+          '<td><span class="tag ' + (a.willRetry ? "warn" : ok ? "ok" : "err") + '">' + escapeHtml(a.willRetry ? t("retrying") : ok ? t("returned") : t("noRetry")) + '</span></td>' +
           '</tr>';
       }).join("");
     }

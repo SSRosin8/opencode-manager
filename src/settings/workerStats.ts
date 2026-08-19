@@ -13,6 +13,7 @@
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import type { UpstreamAttemptEvent } from "../proxy/upstream.js";
 
 export type TokenUsage = {
   promptTokens: number;
@@ -46,9 +47,20 @@ export type WorkerStatSnapshot = {
   lastStatus: number | null;
 };
 
+export type WorkerAttemptEnrichment = {
+  proxyName?: string | null;
+  egressIp?: string | null;
+  credentialLabel?: string;
+};
+
+export type WorkerAttemptRecord = UpstreamAttemptEvent & WorkerAttemptEnrichment;
+
 type PersistShape = {
   workers: Record<string, Omit<WorkerStatSnapshot, "accountId" | "cacheRate">>;
+  attempts?: WorkerAttemptRecord[];
 };
+
+const MAX_RECENT_ATTEMPTS = 200;
 
 function emptyStat(accountId: string): WorkerStatSnapshot {
   return {
@@ -190,6 +202,7 @@ function defaultStatsPath(): string {
 export class WorkerStatsStore {
   readonly path: string;
   private stats = new Map<string, WorkerStatSnapshot>();
+  private attempts: WorkerAttemptRecord[] = [];
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private persistEnabled: boolean;
 
@@ -204,29 +217,42 @@ export class WorkerStatsStore {
       const text = await readFile(this.path, "utf8");
       const parsed = JSON.parse(text) as PersistShape;
       const workers = parsed?.workers;
-      if (!workers || typeof workers !== "object") return;
-      for (const [id, raw] of Object.entries(workers)) {
-        if (!id || !raw || typeof raw !== "object") continue;
-        const r = raw as Record<string, unknown>;
-        this.stats.set(
-          id,
-          withDerived({
-            accountId: id,
-            requestCount: num(r.requestCount),
-            chatCount: num(r.chatCount),
-            modelsCount: num(r.modelsCount),
-            successCount: num(r.successCount),
-            errorCount: num(r.errorCount),
-            promptTokens: num(r.promptTokens),
-            completionTokens: num(r.completionTokens),
-            totalTokens: num(r.totalTokens),
-            cacheReadTokens: num(r.cacheReadTokens),
-            cacheWriteTokens: num(r.cacheWriteTokens),
-            cacheRate: null,
-            lastRequestAt: typeof r.lastRequestAt === "string" ? r.lastRequestAt : null,
-            lastStatus: typeof r.lastStatus === "number" ? r.lastStatus : null,
+      if (workers && typeof workers === "object") {
+        for (const [id, raw] of Object.entries(workers)) {
+          if (!id || !raw || typeof raw !== "object") continue;
+          const r = raw as Record<string, unknown>;
+          this.stats.set(
+            id,
+            withDerived({
+              accountId: id,
+              requestCount: num(r.requestCount),
+              chatCount: num(r.chatCount),
+              modelsCount: num(r.modelsCount),
+              successCount: num(r.successCount),
+              errorCount: num(r.errorCount),
+              promptTokens: num(r.promptTokens),
+              completionTokens: num(r.completionTokens),
+              totalTokens: num(r.totalTokens),
+              cacheReadTokens: num(r.cacheReadTokens),
+              cacheWriteTokens: num(r.cacheWriteTokens),
+              cacheRate: null,
+              lastRequestAt: typeof r.lastRequestAt === "string" ? r.lastRequestAt : null,
+              lastStatus: typeof r.lastStatus === "number" ? r.lastStatus : null,
+            })
+          );
+        }
+      }
+      if (Array.isArray(parsed?.attempts)) {
+        this.attempts = parsed.attempts
+          .filter((attempt): attempt is WorkerAttemptRecord => {
+            if (!attempt || typeof attempt !== "object") return false;
+            return (
+              typeof attempt.requestId === "string" &&
+              typeof attempt.accountId === "string" &&
+              typeof attempt.at === "string"
+            );
           })
-        );
+          .slice(-MAX_RECENT_ATTEMPTS);
       }
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
@@ -253,7 +279,11 @@ export class WorkerStatsStore {
       workers[id] = rest;
     }
     await mkdir(dirname(this.path), { recursive: true });
-    await writeFile(this.path, JSON.stringify({ workers }, null, 2), "utf8");
+    await writeFile(
+      this.path,
+      JSON.stringify({ workers, attempts: this.attempts }, null, 2),
+      "utf8"
+    );
   }
 
   private ensure(id: string): WorkerStatSnapshot {
@@ -284,6 +314,47 @@ export class WorkerStatsStore {
     s.lastRequestAt = new Date().toISOString();
     this.stats.set(s.accountId, withDerived(s));
     this.scheduleSave();
+  }
+
+  /** Record an individual upstream route attempt and update request aggregates. */
+  recordAttempt(
+    event: UpstreamAttemptEvent & WorkerAttemptEnrichment,
+    enrichment?: WorkerAttemptEnrichment
+  ): void {
+    const record: WorkerAttemptRecord = structuredClone({
+      ...event,
+      ...enrichment,
+    });
+    this.attempts.push(record);
+    if (this.attempts.length > MAX_RECENT_ATTEMPTS) {
+      this.attempts.splice(0, this.attempts.length - MAX_RECENT_ATTEMPTS);
+    }
+
+    if (event.operation === "chat" || event.operation === "models") {
+      const s = this.ensure(event.accountId);
+      s.requestCount += 1;
+      if (event.operation === "chat") s.chatCount += 1;
+      else s.modelsCount += 1;
+      if (event.status !== null && event.status >= 200 && event.status < 400) {
+        s.successCount += 1;
+      } else {
+        s.errorCount += 1;
+      }
+      s.lastStatus = event.status;
+      s.lastRequestAt = event.at;
+      this.stats.set(s.accountId, withDerived(s));
+    }
+    this.scheduleSave();
+  }
+
+  /** Most recent attempts, newest first. */
+  recentAttempts(limit = 100): WorkerAttemptRecord[] {
+    const safeLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 100;
+    if (safeLimit === 0) return [];
+    return this.attempts
+      .slice(-Math.min(safeLimit, MAX_RECENT_ATTEMPTS))
+      .reverse()
+      .map((attempt) => structuredClone(attempt));
   }
 
   addTokens(accountId: string, usage: TokenUsage): void {
@@ -352,8 +423,13 @@ export class WorkerStatsStore {
   }
 
   async reset(accountId?: string): Promise<void> {
-    if (accountId) this.stats.delete(accountId);
-    else this.stats.clear();
+    if (accountId) {
+      this.stats.delete(accountId);
+      this.attempts = this.attempts.filter((attempt) => attempt.accountId !== accountId);
+    } else {
+      this.stats.clear();
+      this.attempts = [];
+    }
     await this.persist();
   }
 }

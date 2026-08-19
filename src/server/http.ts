@@ -191,6 +191,14 @@ function duplicateWorkerEgress(
   return null;
 }
 
+function credentialLabel(kind: "anonymous_zen" | "authenticated_zen", apiKey: string): string {
+  if (kind === "anonymous_zen") return "public";
+  const key = apiKey.trim();
+  if (!key) return "missing key";
+  if (key.length <= 8) return `${key.slice(0, 2)}...${key.slice(-2)}`;
+  return `${key.slice(0, 4)}...${key.slice(-4)}`;
+}
+
 async function readStreamFully(
   body: ReadableStream<Uint8Array> | null
 ): Promise<Buffer> {
@@ -290,6 +298,18 @@ export async function createApp(opts?: {
   if (!opts?.workerStats) {
     await workerStats.load().catch(() => {});
   }
+  upstream.setAttemptObserver((event) => {
+    const current = store.get();
+    const account = current.accounts.find((item) => item.id === event.accountId);
+    const proxy = event.proxyId
+      ? current.proxyPool.find((item) => item.id === event.proxyId)
+      : null;
+    workerStats.recordAttempt(event, {
+      credentialLabel: credentialLabel(event.accountKind, account?.apiKey ?? ""),
+      proxyName: proxy?.name ?? event.clashNodeName,
+      egressIp: event.proxyId ? probes.get(event.proxyId)?.egressIp ?? null : null,
+    });
+  });
 
   // Free-model registry: baseline = currently-known free ids; a background
   // scrape of the Zen pricing page keeps it current. Injected in tests.
@@ -455,11 +475,27 @@ async function handleRequest(
     );
     const accounts = store.get().accounts;
     const accountIds = accounts.map((a) => a.id);
-    const kinds = new Map(accounts.map((account) => [account.id, account.kind] as const));
-    const workers = workerStats.listForAccounts(accountIds).map((worker) => ({
-      ...worker,
-      kind: kinds.get(worker.accountId) ?? "anonymous_zen",
-    }));
+    const rotatorStates = new Map(
+      upstream.rotator.getAccounts().map((account) => [account.id, account] as const)
+    );
+    const workers = workerStats.listForAccounts(accountIds).map((worker) => {
+      const account = accounts.find((item) => item.id === worker.accountId);
+      const kind = account ? inferAccountKind(account) : "anonymous_zen";
+      const proxy = account?.proxyId
+        ? store.get().proxyPool.find((item) => item.id === account.proxyId)
+        : null;
+      const state = rotatorStates.get(worker.accountId);
+      return {
+        ...worker,
+        kind,
+        credentialLabel: credentialLabel(kind, account?.apiKey ?? ""),
+        proxyId: account?.proxyId ?? null,
+        proxyName: proxy?.name ?? state?.clashNodeName ?? null,
+        egressIp: account?.proxyId ? probes.get(account.proxyId)?.egressIp ?? null : null,
+        ready: state ? upstream.rotator.isReady(state) : false,
+        cooldownUntil: state?.cooldownUntil ?? 0,
+      };
+    });
     const anonymousIds = accounts
       .filter((account) => account.kind === "anonymous_zen")
       .map((account) => account.id);
@@ -474,6 +510,7 @@ async function handleRequest(
         anonymous_zen: workerStats.totals(anonymousIds),
         authenticated_zen: workerStats.totals(authenticatedIds),
       },
+      recentAttempts: workerStats.recentAttempts(100),
     });
     return;
   }
@@ -1195,10 +1232,6 @@ async function handleRequest(
         upstream.rotator.readyCount(),
         upstream.rotator.getAccounts().length
       );
-      workerStats.recordRequest(result.accountId, {
-        kind: "models",
-        status: result.status,
-      });
       // Serve ONLY free models: buffer the JSON payload and drop paid ids.
       if (result.status < 400 && result.body) {
         const buf = await readStreamFully(result.body);
@@ -1284,10 +1317,6 @@ async function handleRequest(
         upstream.rotator.readyCount(),
         upstream.rotator.getAccounts().length
       );
-      workerStats.recordRequest(result.accountId, {
-        kind: "chat",
-        status: result.status,
-      });
 
       if (!stream && result.body && result.status < 400) {
         // Buffer non-stream body to extract usage, then forward intact.

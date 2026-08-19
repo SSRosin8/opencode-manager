@@ -2,7 +2,11 @@
  * Upstream client tests with mock fetch at network boundary.
  */
 import { describe, expect, it, vi } from "vitest";
-import { parseRetryAfterMs, UpstreamClient } from "../src/proxy/upstream.js";
+import {
+  parseRetryAfterMs,
+  UpstreamClient,
+  type UpstreamAttemptEvent,
+} from "../src/proxy/upstream.js";
 import type { GatewaySettings } from "../src/settings/store.js";
 import { transformRequestBody } from "../src/relay/index.js";
 
@@ -92,6 +96,7 @@ describe("UpstreamClient chatCompletions", () => {
 
   it("rotates to next key on 429", async () => {
     const authHeaders: string[] = [];
+    const events: UpstreamAttemptEvent[] = [];
     const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
       const h = init?.headers as Record<string, string>;
       authHeaders.push(h.Authorization);
@@ -106,6 +111,7 @@ describe("UpstreamClient chatCompletions", () => {
     });
 
     const client = new UpstreamClient(baseSettings(), fetchImpl);
+    client.setAttemptObserver((event) => events.push(event));
     const result = await client.chatCompletions({
       body: { model: "hy3-free", messages: [{ role: "user", content: "x" }] },
       stream: false,
@@ -114,6 +120,52 @@ describe("UpstreamClient chatCompletions", () => {
     expect(result.status).toBe(200);
     expect(authHeaders.length).toBeGreaterThanOrEqual(2);
     expect(new Set(authHeaders).size).toBeGreaterThanOrEqual(2);
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({
+      operation: "chat",
+      status: 429,
+      outcome: "rate_limited",
+      attempt: 1,
+      willRetry: true,
+    });
+    expect(events[1]).toMatchObject({
+      operation: "chat",
+      status: 200,
+      outcome: "success",
+      attempt: 2,
+      willRetry: false,
+    });
+    expect(events[1].requestId).toBe(events[0].requestId);
+    expect(events[1].accountId).not.toBe(events[0].accountId);
+  });
+
+  it("observes a transport failure and the successful retry as one request", async () => {
+    const events: UpstreamAttemptEvent[] = [];
+    let calls = 0;
+    const fetchImpl = vi.fn(async () => {
+      calls++;
+      if (calls === 1) throw new Error("connect ECONNREFUSED key-one");
+      return jsonResponse(200, { choices: [] });
+    });
+    const client = new UpstreamClient(baseSettings(), fetchImpl);
+    client.setAttemptObserver((event) => events.push(event));
+
+    const result = await client.chatCompletions({
+      body: { model: "big-pickle" },
+      stream: false,
+    });
+
+    expect(result.status).toBe(200);
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({
+      status: null,
+      outcome: "transport_error",
+      error: "connect ECONNREFUSED [REDACTED]",
+      willRetry: true,
+    });
+    expect(events[1]).toMatchObject({ status: 200, outcome: "success" });
+    expect(events[1].requestId).toBe(events[0].requestId);
+    expect(events[1].accountId).not.toBe(events[0].accountId);
   });
 
   it.each([401, 403, 500])("rotates away from an unusable worker on HTTP %i", async (status) => {

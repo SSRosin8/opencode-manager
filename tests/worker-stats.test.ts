@@ -2,7 +2,7 @@
  * Worker request / token usage stats.
  */
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -12,6 +12,31 @@ import {
 } from "../src/settings/workerStats.js";
 import { createApp, close, listen, type App } from "../src/server/http.js";
 import { SettingsStore } from "../src/settings/store.js";
+import type { UpstreamAttemptEvent } from "../src/proxy/upstream.js";
+import { ProbeResultCache } from "../src/proxy/probe.js";
+
+function attempt(
+  overrides: Partial<UpstreamAttemptEvent> = {}
+): UpstreamAttemptEvent {
+  return {
+    requestId: "req-1",
+    operation: "chat",
+    accountId: "worker-a",
+    accountKind: "anonymous_zen",
+    proxyId: "proxy-a",
+    clashNodeName: null,
+    model: "big-pickle",
+    attempt: 1,
+    maxAttempts: 2,
+    status: 200,
+    outcome: "success",
+    error: null,
+    latencyMs: 12,
+    willRetry: false,
+    at: "2026-08-19T01:00:00.000Z",
+    ...overrides,
+  };
+}
 
 describe("usage parsers", () => {
   it("parses OpenAI usage object", () => {
@@ -128,12 +153,84 @@ describe("WorkerStatsStore", () => {
     expect(s.getAll()).toHaveLength(1);
   });
 
+  it("records upstream attempts and aggregates only chat/models operations", () => {
+    const s = new WorkerStatsStore({ persist: false });
+    s.recordAttempt(
+      attempt(),
+      {
+        proxyName: "US node",
+        egressIp: "203.0.113.9",
+        credentialLabel: "anonymous public",
+      }
+    );
+    s.recordAttempt(
+      attempt({
+        requestId: "req-2",
+        operation: "models",
+        status: null,
+        outcome: "transport_error",
+        error: "connect timeout",
+        at: "2026-08-19T01:01:00.000Z",
+      })
+    );
+    s.recordAttempt(
+      attempt({
+        requestId: "req-3",
+        operation: "test",
+        at: "2026-08-19T01:02:00.000Z",
+      })
+    );
+
+    const snapshot = s.get("worker-a");
+    expect(snapshot).toMatchObject({
+      requestCount: 2,
+      chatCount: 1,
+      modelsCount: 1,
+      successCount: 1,
+      errorCount: 1,
+      lastStatus: null,
+      lastRequestAt: "2026-08-19T01:01:00.000Z",
+    });
+    expect(s.recentAttempts().map((item) => item.requestId)).toEqual([
+      "req-3",
+      "req-2",
+      "req-1",
+    ]);
+    expect(s.recentAttempts()[2]).toMatchObject({
+      proxyName: "US node",
+      egressIp: "203.0.113.9",
+      credentialLabel: "anonymous public",
+    });
+  });
+
+  it("caps attempt history at 200 entries and resets by worker", async () => {
+    const s = new WorkerStatsStore({ persist: false });
+    for (let i = 0; i < 205; i += 1) {
+      s.recordAttempt(
+        attempt({
+          requestId: `req-${i}`,
+          accountId: i === 204 ? "worker-b" : "worker-a",
+        })
+      );
+    }
+
+    expect(s.recentAttempts(500)).toHaveLength(200);
+    expect(s.recentAttempts(500).at(-1)?.requestId).toBe("req-5");
+    await s.reset("worker-b");
+    expect(s.recentAttempts().some((item) => item.accountId === "worker-b")).toBe(false);
+    expect(s.get("worker-b").requestCount).toBe(0);
+  });
+
   it("persists and reloads", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ocfr-ws-"));
     try {
       const path = join(dir, "stats.json");
       const a = new WorkerStatsStore({ path, persist: true });
       a.recordRequest("acc", { kind: "chat", status: 200 });
+      a.recordAttempt(
+        attempt({ accountId: "acc", requestId: "persisted-attempt" }),
+        { egressIp: "198.51.100.7", credentialLabel: "Zen abcd...wxyz" }
+      );
       a.addTokens("acc", {
         promptTokens: 3,
         completionTokens: 4,
@@ -145,9 +242,43 @@ describe("WorkerStatsStore", () => {
       const b = new WorkerStatsStore({ path, persist: true });
       await b.load();
       expect(b.get("acc").totalTokens).toBe(7);
-      expect(b.get("acc").chatCount).toBe(1);
+      expect(b.get("acc").chatCount).toBe(2);
       expect(b.get("acc").cacheReadTokens).toBe(1);
       expect(b.get("acc").cacheWriteTokens).toBe(2);
+      expect(b.recentAttempts()).toEqual([
+        expect.objectContaining({
+          requestId: "persisted-attempt",
+          egressIp: "198.51.100.7",
+          credentialLabel: "Zen abcd...wxyz",
+        }),
+      ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("loads legacy persisted stats without an attempts field", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ocfr-ws-legacy-"));
+    try {
+      const path = join(dir, "stats.json");
+      await writeFile(
+        path,
+        JSON.stringify({
+          workers: {
+            legacy: {
+              requestCount: 3,
+              chatCount: 3,
+              successCount: 2,
+              errorCount: 1,
+              totalTokens: 9,
+            },
+          },
+        })
+      );
+      const s = new WorkerStatsStore({ path, persist: true });
+      await s.load();
+      expect(s.get("legacy").requestCount).toBe(3);
+      expect(s.recentAttempts()).toEqual([]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -279,5 +410,63 @@ describe("worker stats HTTP", () => {
     };
     expect(after.usageTotals.requestCount).toBe(0);
     expect(after.usageTotals.totalTokens).toBe(0);
+  });
+
+  it("shows the failed egress and the successful Zen key in one retry chain", async () => {
+    dir = await mkdtemp(join(tmpdir(), "ocfr-ws-retry-"));
+    const store = new SettingsStore(join(dir, "settings.json"));
+    await store.save({
+      accounts: [
+        { id: "worker-us", kind: "authenticated_zen", apiKey: "zen-key-america", proxyId: "proxy-us" },
+        { id: "worker-mx", kind: "authenticated_zen", apiKey: "zen-key-mexico", proxyId: "proxy-mx" },
+      ],
+      proxyPool: [
+        { id: "proxy-us", name: "US unavailable", type: "http", host: "192.0.2.10", port: 8080, enabled: true, source: "manual", usable: true, bridgeable: true },
+        { id: "proxy-mx", name: "Mexico available", type: "http", host: "192.0.2.11", port: 8080, enabled: true, source: "manual", usable: true, bridgeable: true },
+      ],
+    });
+    const probes = new ProbeResultCache();
+    probes.setMany([
+      { id: "proxy-us", ok: true, latencyMs: 10, error: null, testedAt: new Date().toISOString(), health: "healthy", egressIp: "203.0.113.10" },
+      { id: "proxy-mx", ok: true, latencyMs: 20, error: null, testedAt: new Date().toISOString(), health: "healthy", egressIp: "203.0.113.11" },
+    ]);
+    let call = 0;
+    app = await createApp({
+      store,
+      probes,
+      port: 0,
+      fetchImpl: async () => {
+        call++;
+        if (call === 1) throw new Error("connect timeout to US proxy");
+        return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      },
+    });
+    await listen(app);
+    const addr = app.server.address();
+    if (!addr || typeof addr === "string") throw new Error("no addr");
+    const base = `http://127.0.0.1:${addr.port}`;
+
+    const chat = await fetch(`${base}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "big-pickle", messages: [{ role: "user", content: "hi" }] }),
+    });
+    expect(chat.status).toBe(200);
+
+    const status = (await (await fetch(`${base}/admin/api/status`)).json()) as {
+      workers: Array<{ accountId: string; successCount: number; errorCount: number; proxyName: string; egressIp: string; credentialLabel: string }>;
+      recentAttempts: Array<{ requestId: string; accountId: string; outcome: string; willRetry: boolean; proxyName: string; egressIp: string; credentialLabel: string }>;
+    };
+    expect(status.recentAttempts).toHaveLength(2);
+    expect(new Set(status.recentAttempts.map((item) => item.requestId)).size).toBe(1);
+    expect(status.recentAttempts).toEqual([
+      expect.objectContaining({ accountId: "worker-mx", outcome: "success", willRetry: false, proxyName: "Mexico available", egressIp: "203.0.113.11", credentialLabel: "zen-...xico" }),
+      expect.objectContaining({ accountId: "worker-us", outcome: "transport_error", willRetry: true, proxyName: "US unavailable", egressIp: "203.0.113.10", credentialLabel: "zen-...rica" }),
+    ]);
+    expect(status.workers.find((item) => item.accountId === "worker-us")).toMatchObject({ errorCount: 1, successCount: 0, proxyName: "US unavailable", egressIp: "203.0.113.10" });
+    expect(status.workers.find((item) => item.accountId === "worker-mx")).toMatchObject({ errorCount: 0, successCount: 1, proxyName: "Mexico available", egressIp: "203.0.113.11" });
   });
 });
