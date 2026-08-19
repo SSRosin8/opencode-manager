@@ -118,25 +118,22 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(data);
 }
 
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  concurrency: number,
-  fn: (item: T) => Promise<R>
-): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let cursor = 0;
-  const workers = Array.from(
-    { length: Math.min(Math.max(1, concurrency), Math.max(1, items.length)) },
-    async () => {
-      while (true) {
-        const index = cursor++;
-        if (index >= items.length) return;
-        results[index] = await fn(items[index]);
-      }
-    }
-  );
-  if (items.length) await Promise.all(workers);
-  return results;
+function rejectUnavailableWorkerPool(
+  res: ServerResponse,
+  store: SettingsStore,
+  path: string
+): boolean {
+  const accounts = store.get().accounts;
+  if (accounts.some((account) => account.enabled !== false)) return false;
+
+  const empty = accounts.length === 0;
+  const message = empty
+    ? "No Zen workers are configured. Add a Worker or run a batch proxy test to create anonymous Workers."
+    : "All configured Zen workers are disabled. Enable at least one Worker before sending requests.";
+  const type = empty ? "no_workers_configured" : "no_enabled_workers";
+  store.recordRequest(path, 503, message);
+  sendJson(res, 503, { error: { message, type } });
+  return true;
 }
 
 function attachAnonymousZenResult(
@@ -316,6 +313,46 @@ export type App = {
   freeModels: FreeModelRegistry;
 };
 
+type BatchProbeProgress = {
+  running: boolean;
+  total: number;
+  completed: number;
+  completedIds: string[];
+  stage: "screening" | "verifying" | null;
+  stageCompleted: number;
+  stageTotal: number;
+  addedWorkerIds: string[];
+  startedAt: string | null;
+  updatedAt: string | null;
+  finishedAt: string | null;
+  error: string | null;
+};
+
+function newBatchProbeProgress(): BatchProbeProgress {
+  return {
+    running: false,
+    total: 0,
+    completed: 0,
+    completedIds: [],
+    stage: null,
+    stageCompleted: 0,
+    stageTotal: 0,
+    addedWorkerIds: [],
+    startedAt: null,
+    updatedAt: null,
+    finishedAt: null,
+    error: null,
+  };
+}
+
+function batchProbeSnapshot(progress: BatchProbeProgress): BatchProbeProgress {
+  return {
+    ...progress,
+    completedIds: [...progress.completedIds],
+    addedWorkerIds: [...progress.addedWorkerIds],
+  };
+}
+
 export async function createApp(opts?: {
   store?: SettingsStore;
   port?: number;
@@ -341,6 +378,7 @@ export async function createApp(opts?: {
   );
   store.updateReadyCount(upstream.rotator.readyCount(), upstream.rotator.getAccounts().length);
   const probes = opts?.probes ?? new ProbeResultCache();
+  const batchProbeProgress = newBatchProbeProgress();
   const workerStats =
     opts?.workerStats ??
     new WorkerStatsStore({
@@ -396,6 +434,7 @@ export async function createApp(opts?: {
         clashProbeQueue,
         workerStats,
         freeModels,
+        batchProbeProgress,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -423,6 +462,7 @@ async function handleRequest(
     clashProbeQueue?: ClashSwitchQueue;
     workerStats?: WorkerStatsStore;
     freeModels?: FreeModelRegistry;
+    batchProbeProgress?: BatchProbeProgress;
   }
 ): Promise<void> {
   const subscriptionFetch = ctx?.subscriptionFetch;
@@ -430,6 +470,7 @@ async function handleRequest(
   const clashProbeQueue = ctx?.clashProbeQueue ?? new ClashSwitchQueue();
   const workerStats = ctx?.workerStats ?? new WorkerStatsStore({ persist: false });
   const freeModels = ctx?.freeModels ?? new FreeModelRegistry();
+  const batchProbeProgress = ctx?.batchProbeProgress ?? newBatchProbeProgress();
   const method = (req.method || "GET").toUpperCase();
   const url = new URL(req.url || "/", "http://localhost");
   const path = url.pathname.replace(/\/+$/, "") || "/";
@@ -498,6 +539,15 @@ async function handleRequest(
         return;
       }
       if (Array.isArray(parsed.accounts)) {
+        if (batchProbeProgress.running) {
+          sendJson(res, 409, {
+            error: {
+              type: "batch_probe_running",
+              message: "Workers cannot be saved while a batch proxy test is running",
+            },
+          });
+          return;
+        }
         const duplicate = duplicateWorkerEgress(parsed.accounts, probes);
         if (duplicate) {
           sendJson(res, 400, {
@@ -571,6 +621,12 @@ async function handleRequest(
 
   // PATCH /admin/api/workers/:id — enable or disable one configured worker.
   if (method === "PATCH" && path.match(/^\/admin\/api\/workers\/[^/]+$/)) {
+    if (batchProbeProgress.running) {
+      sendJson(res, 409, {
+        error: { message: "Workers cannot be changed while a batch proxy test is running", type: "batch_probe_running" },
+      });
+      return;
+    }
     const id = decodeURIComponent(path.slice("/admin/api/workers/".length));
     const raw = await readBody(req);
     let enabled: boolean;
@@ -642,6 +698,12 @@ async function handleRequest(
 
   // POST /admin/api/workers/assign-proxies — bind each worker to a unique probe-healthy proxy
   if (method === "POST" && path === "/admin/api/workers/assign-proxies") {
+    if (batchProbeProgress.running) {
+      sendJson(res, 409, {
+        error: { message: "Workers cannot be assigned while a batch proxy test is running", type: "batch_probe_running" },
+      });
+      return;
+    }
     const s = store.get();
     const raw = await readBody(req);
     let accounts = s.accounts;
@@ -840,15 +902,57 @@ async function handleRequest(
       proxyPool: s.proxyPool,
       proxySubscriptions: s.proxySubscriptions,
       probeResults: probes.getAll(),
+      batchProbe: batchProbeSnapshot(batchProbeProgress),
+    });
+    return;
+  }
+
+  if (method === "GET" && path === "/admin/api/proxy-pool/test-batch/status") {
+    sendJson(res, 200, {
+      ...batchProbeSnapshot(batchProbeProgress),
     });
     return;
   }
 
   // POST /admin/api/proxy-pool/test-batch — latency probe (optional body.ids)
   if (method === "POST" && path === "/admin/api/proxy-pool/test-batch") {
+    if (batchProbeProgress.running) {
+      sendJson(res, 409, {
+        error: { message: "A batch proxy test is already running", type: "batch_probe_running" },
+        progress: batchProbeSnapshot(batchProbeProgress),
+      });
+      return;
+    }
+    const startedAt = new Date().toISOString();
+    Object.assign(batchProbeProgress, {
+      running: true,
+      total: 0,
+      completed: 0,
+      completedIds: [],
+      stage: "screening",
+      stageCompleted: 0,
+      stageTotal: 0,
+      addedWorkerIds: [],
+      startedAt,
+      updatedAt: startedAt,
+      finishedAt: null,
+      error: null,
+    });
     const s = store.get();
     let ids: string[] | null = null;
-    const raw = await readBody(req);
+    let raw: Buffer;
+    try {
+      raw = await readBody(req);
+    } catch (err) {
+      const finishedAt = new Date().toISOString();
+      Object.assign(batchProbeProgress, {
+        running: false,
+        updatedAt: finishedAt,
+        finishedAt,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
     if (raw.length) {
       try {
         const body = JSON.parse(raw.toString("utf8") || "{}") as { ids?: unknown };
@@ -856,6 +960,13 @@ async function handleRequest(
           ids = body.ids.filter((x): x is string => typeof x === "string" && !!x);
         }
       } catch {
+        const finishedAt = new Date().toISOString();
+        Object.assign(batchProbeProgress, {
+          running: false,
+          updatedAt: finishedAt,
+          finishedAt,
+          error: "Invalid JSON",
+        });
         sendJson(res, 400, { error: { message: "Invalid JSON" } });
         return;
       }
@@ -866,58 +977,104 @@ async function handleRequest(
           .map((id) => pool.find((p) => p.id === id))
           .filter((p): p is NonNullable<typeof p> => !!p)
       : pool;
+    Object.assign(batchProbeProgress, {
+      total: targets.length,
+      updatedAt: new Date().toISOString(),
+    });
     const bridgeFetch = subscriptionFetch ?? globalThis.fetch;
+    const incrementallyAddedWorkerIds: string[] = [];
+    let workerSyncChain = Promise.resolve();
+    let workerSyncError: unknown = null;
+    const enqueueResultWorkerSync = (result: ProbeResult): void => {
+      workerSyncChain = workerSyncChain.then(async () => {
+        const current = store.get();
+        const synced = syncAnonymousWorkers(current, [result], probes);
+        if (!synced.addedIds.length) return;
+        const saved = await store.save({ accounts: synced.accounts });
+        incrementallyAddedWorkerIds.push(...synced.addedIds);
+        batchProbeProgress.addedWorkerIds.push(...synced.addedIds);
+        batchProbeProgress.updatedAt = new Date().toISOString();
+        upstream.updateSettings(saved);
+        store.updateReadyCount(
+          upstream.rotator.readyCount(),
+          upstream.rotator.getAccounts().length
+        );
+      }).catch((err) => {
+        workerSyncError ??= err;
+      });
+    };
     const shouldRestore = Boolean(
       s.clashBridge.enabled && targets.some((target) => target.source === "controller")
     );
     const previousNode = shouldRestore
       ? await getClashSelectorCurrent(s.clashBridge, bridgeFetch).catch(() => null)
       : null;
-    let results: ProbeResult[];
+    let results: ProbeResult[] = [];
+    let probeError: unknown = null;
     try {
+      const anonymousByIp = new Map<string, Promise<AnonymousZenProbeResult>>();
+      const anonymousModel = freeModels.has("big-pickle")
+        ? "big-pickle"
+        : freeModels.ids()[0];
       results = await probePoolProxies(targets, s.clashBridge, {
         fetchImpl: ctx?.probeFetch,
         bridgeFetch,
         clashQueue: clashProbeQueue,
+        concurrency: 8,
         fastController: true,
         // Anonymous quotas are IP-sensitive, so every candidate needs a verified egress IP.
         verifyEgressCount: Math.max(1, targets.length),
         verifyProxyIds: s.accounts
           .map((account) => account.proxyId)
           .filter((id): id is string => Boolean(id)),
+        afterProbe: async (proxy, result) => {
+          if (!result.ok || !result.egressIp) {
+            return attachAnonymousZenResult(result, null);
+          }
+          let check = anonymousByIp.get(result.egressIp);
+          if (!check) {
+            check = probeAnonymousZenProxy(proxy, s.clashBridge, {
+              baseUrl: s.baseUrl,
+              model: anonymousModel,
+              // Batch checks share one Clash selector. Do not let one dead
+              // egress block every remaining node for the 45s manual-test timeout.
+              timeoutMs: 12_000,
+              fetchImpl: ctx?.probeFetch,
+              bridgeFetch,
+              clashQueue: clashProbeQueue,
+              // afterProbe executes while probePoolProxy still owns the Clash
+              // queue, so switching or queueing again would add latency/deadlock.
+              skipClashSwitch: true,
+            });
+            anonymousByIp.set(result.egressIp, check);
+          }
+          const anonymous = await check;
+          return attachAnonymousZenResult(result, { ...anonymous, id: result.id });
+        },
+        onResult: async (result, completed) => {
+          probes.set(result);
+          batchProbeProgress.completed = completed;
+          batchProbeProgress.completedIds.push(result.id);
+          batchProbeProgress.stage = "verifying";
+          batchProbeProgress.stageCompleted = completed;
+          batchProbeProgress.stageTotal = targets.length;
+          batchProbeProgress.updatedAt = new Date().toISOString();
+          enqueueResultWorkerSync(result);
+        },
+        onStageProgress: (stage, completed, total) => {
+          batchProbeProgress.stage = stage;
+          batchProbeProgress.stageCompleted = completed;
+          batchProbeProgress.stageTotal = total;
+          batchProbeProgress.updatedAt = new Date().toISOString();
+        },
       });
-      const representatives = new Map<string, PoolProxy>();
-      for (const result of results) {
-        if (!result.ok || !result.egressIp || representatives.has(result.egressIp)) continue;
-        const proxy = targets.find((candidate) => candidate.id === result.id);
-        if (proxy) representatives.set(result.egressIp, proxy);
-      }
-      const representativeEntries = [...representatives.entries()];
-      const anonymousChecks = await mapWithConcurrency(
-        representativeEntries,
-        4,
-        async ([egressIp, proxy]) => ({
-          egressIp,
-          result: await probeAnonymousZenProxy(proxy, s.clashBridge, {
-            baseUrl: s.baseUrl,
-            model: freeModels.has("big-pickle") ? "big-pickle" : freeModels.ids()[0],
-            fetchImpl: ctx?.probeFetch,
-            bridgeFetch,
-            clashQueue: clashProbeQueue,
-          }),
-        })
-      );
-      const anonymousByIp = new Map(
-        anonymousChecks.map(({ egressIp, result }) => [egressIp, result] as const)
-      );
       results = results.map((result) => {
-        if (!result.ok || !result.egressIp) return attachAnonymousZenResult(result, null);
-        const anonymous = anonymousByIp.get(result.egressIp);
-        return attachAnonymousZenResult(
-          result,
-          anonymous ? { ...anonymous, id: result.id } : null
-        );
+        return result.anonymousZen === undefined
+          ? attachAnonymousZenResult(result, null)
+          : result;
       });
+    } catch (err) {
+      probeError = err;
     } finally {
       if (previousNode) {
         await clashProbeQueue
@@ -925,28 +1082,77 @@ async function handleRequest(
           .catch(() => undefined);
       }
     }
+    if (probeError) {
+      await workerSyncChain;
+      const finalError = workerSyncError ?? probeError;
+      const finishedAt = new Date().toISOString();
+      Object.assign(batchProbeProgress, {
+        running: false,
+        updatedAt: finishedAt,
+        finishedAt,
+        error: finalError instanceof Error ? finalError.message : String(finalError),
+      });
+      throw finalError;
+    }
     probes.setMany(results);
-    const synced = syncAnonymousWorkers(s, results, probes);
-    const saved = synced.addedIds.length
-      ? await store.save({ accounts: synced.accounts })
-      : store.get();
+    await workerSyncChain;
+    if (workerSyncError) {
+      const message = workerSyncError instanceof Error ? workerSyncError.message : String(workerSyncError);
+      const finishedAt = new Date().toISOString();
+      Object.assign(batchProbeProgress, {
+        running: false,
+        updatedAt: finishedAt,
+        finishedAt,
+        error: message,
+      });
+      throw workerSyncError;
+    }
+    const synced = syncAnonymousWorkers(store.get(), results, probes);
+    let saved: GatewaySettings;
+    try {
+      saved = synced.addedIds.length
+        ? await store.save({ accounts: synced.accounts })
+        : store.get();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      Object.assign(batchProbeProgress, {
+        running: false,
+        updatedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+        error: message,
+      });
+      throw err;
+    }
     if (synced.addedIds.length) {
+      batchProbeProgress.addedWorkerIds.push(...synced.addedIds);
       upstream.updateSettings(saved);
       store.updateReadyCount(
         upstream.rotator.readyCount(),
         upstream.rotator.getAccounts().length
       );
     }
+    const finishedAt = new Date().toISOString();
+    Object.assign(batchProbeProgress, {
+      running: false,
+      completed: results.length,
+      stage: "verifying",
+      stageCompleted: results.length,
+      stageTotal: targets.length,
+      updatedAt: finishedAt,
+      finishedAt,
+      error: null,
+    });
     sendJson(res, 200, {
       results,
       summary: summarizeProbeResults(results),
       anonymousSummary: anonymousZenSummary(results),
       probeResults: probes.getAll(),
       autoWorkers: {
-        added: synced.addedIds.length,
-        addedIds: synced.addedIds,
+        added: incrementallyAddedWorkerIds.length + synced.addedIds.length,
+        addedIds: [...incrementallyAddedWorkerIds, ...synced.addedIds],
       },
       settings: saved,
+      progress: batchProbeSnapshot(batchProbeProgress),
     });
     return;
   }
@@ -1343,6 +1549,7 @@ async function handleRequest(
 
   // OpenAI-compatible models
   if (method === "GET" && (path === "/v1/models" || path === "/models")) {
+    if (rejectUnavailableWorkerPool(res, store, path)) return;
     try {
       const result = await upstream.listModels(clientHeadersFrom(req));
       store.recordRequest(path, result.status);
@@ -1398,6 +1605,7 @@ async function handleRequest(
       });
       return;
     }
+    if (rejectUnavailableWorkerPool(res, store, path)) return;
     const stream = Boolean(
       body &&
         typeof body === "object" &&

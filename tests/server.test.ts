@@ -2,7 +2,7 @@
  * Integration-ish tests: real createApp entry, mock only at network boundary.
  */
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp, close, listen, type App } from "../src/server/http.js";
@@ -176,6 +176,73 @@ describe("gateway HTTP entry", () => {
       const status = (await statusRes.json()) as { running: boolean; accountCount: number };
       expect(status.running).toBe(true);
       expect(status.accountCount).toBe(2);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("persists an explicitly empty Worker list and reports a clear gateway error", async () => {
+    const { port, dir, store } = await bootMocked(async () => {
+      throw new Error("empty Worker pools must not call upstream");
+    });
+    try {
+      const saveRes = await fetch(`http://127.0.0.1:${port}/admin/api/settings`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accounts: [] }),
+      });
+      expect(saveRes.status).toBe(200);
+      expect(await saveRes.json()).toMatchObject({ accounts: [] });
+      expect(app?.upstream.rotator.getAccounts()).toEqual([]);
+
+      const persisted = JSON.parse(await readFile(store.path, "utf8")) as { accounts: unknown[] };
+      expect(persisted.accounts).toEqual([]);
+      const reloaded = new SettingsStore(store.path);
+      expect((await reloaded.load()).accounts).toEqual([]);
+
+      const models = await fetch(`http://127.0.0.1:${port}/v1/models`);
+      expect(models.status).toBe(503);
+      expect(await models.json()).toMatchObject({
+        error: { type: "no_workers_configured" },
+      });
+
+      const chat = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "big-pickle", messages: [{ role: "user", content: "x" }] }),
+      });
+      expect(chat.status).toBe(503);
+      expect(await chat.json()).toMatchObject({
+        error: { type: "no_workers_configured" },
+      });
+
+      const status = await fetch(`http://127.0.0.1:${port}/admin/api/status`);
+      expect(await status.json()).toMatchObject({
+        accountCount: 0,
+        enabledAccountCount: 0,
+        readyAccountCount: 0,
+        workers: [],
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("distinguishes an all-disabled Worker pool from an empty pool", async () => {
+    const { port, dir, store } = await bootMocked(async () => {
+      throw new Error("disabled Workers must not call upstream");
+    });
+    try {
+      await store.save({
+        accounts: [{ id: "paused", apiKey: "", kind: "anonymous_zen", enabled: false }],
+      });
+      app?.upstream.updateSettings(store.get());
+
+      const response = await fetch(`http://127.0.0.1:${port}/v1/models`);
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({
+        error: { type: "no_enabled_workers" },
+      });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

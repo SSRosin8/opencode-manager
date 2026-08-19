@@ -60,6 +60,20 @@ export type ProbeOptions = {
   verifyEgressCount?: number;
   /** Controller proxy ids that should receive full public-IP verification first. */
   verifyProxyIds?: string[];
+  /**
+   * Optional follow-up that runs before a selected Clash node is released.
+   * This lets batch callers reuse the same selector switch for egress and
+   * upstream checks instead of switching to every node twice.
+   */
+  afterProbe?: (proxy: PoolProxy, result: ProbeResult) => Promise<ProbeResult>;
+  /** Called once when each proxy reaches its final batch result. */
+  onResult?: (result: ProbeResult, completed: number, total: number) => void | Promise<void>;
+  /** Reports work inside Controller fast-screening before final probes complete. */
+  onStageProgress?: (
+    stage: "screening" | "verifying",
+    completed: number,
+    total: number
+  ) => void | Promise<void>;
 };
 
 export type AnonymousZenProbeStatus =
@@ -87,6 +101,8 @@ export type AnonymousZenProbeOptions = {
   fetchImpl?: ProbeFetch;
   bridgeFetch?: typeof fetch;
   clashQueue?: ClashSwitchQueue;
+  /** The caller already selected and exclusively owns this Clash node. */
+  skipClashSwitch?: boolean;
 };
 
 const anonymousZenClashQueue = new ClashSwitchQueue();
@@ -279,7 +295,7 @@ export async function probeAnonymousZenProxy(
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      if (egress.clashNodeName && bridge.enabled) {
+      if (egress.clashNodeName && bridge.enabled && !opts.skipClashSwitch) {
         const abortableBridgeFetch = ((url: string, init?: RequestInit) =>
           bridgeFetch(url, { ...init, signal: controller.signal })) as typeof fetch;
         await selectClashProxy(bridge, egress.clashNodeName, abortableBridgeFetch);
@@ -340,7 +356,7 @@ export async function probeAnonymousZenProxy(
     }
   };
 
-  if (egress.clashNodeName) {
+  if (egress.clashNodeName && !opts.skipClashSwitch) {
     return (opts.clashQueue ?? anonymousZenClashQueue).run(run);
   }
   return run();
@@ -402,7 +418,7 @@ export async function probePoolProxy(
         };
       }
       // Any other HTTP response means the tunnel worked (204/200/301/…).
-      return {
+      const result: ProbeResult = {
         id,
         ok: true,
         latencyMs,
@@ -411,6 +427,7 @@ export async function probePoolProxy(
         health: "healthy",
         egressIp,
       };
+      return opts.afterProbe ? await opts.afterProbe(proxy, result) : result;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const isTimeout = /abort|timeout/i.test(msg);
@@ -440,9 +457,14 @@ export async function probePoolProxies(
   bridge: ClashBridgeConfig,
   opts: ProbeOptions = {}
 ): Promise<ProbeResult[]> {
-  const concurrency = Math.max(1, opts.concurrency ?? 4);
+  const concurrency = Math.max(1, opts.concurrency ?? 8);
   const clashQueue = opts.clashQueue ?? new ClashSwitchQueue();
   const results: ProbeResult[] = new Array(proxies.length);
+  let completed = 0;
+  const report = async (result: ProbeResult): Promise<void> => {
+    completed += 1;
+    await opts.onResult?.(result, completed, proxies.length);
+  };
 
   const direct: Array<{ i: number; p: PoolProxy }> = [];
   const bridged: Array<{ i: number; p: PoolProxy }> = [];
@@ -467,6 +489,7 @@ export async function probePoolProxies(
   await Promise.all(
     skipped.map(async ({ i, p }) => {
       results[i] = await probePoolProxy(p, bridge, { ...opts, clashQueue });
+      await report(results[i]);
     })
   );
 
@@ -477,11 +500,13 @@ export async function probePoolProxies(
       if (idx >= direct.length) return;
       const { i, p } = direct[idx];
       results[i] = await probePoolProxy(p, bridge, { ...opts, clashQueue });
+      await report(results[i]);
     }
   });
   if (direct.length) await Promise.all(workers);
 
   let controllerCursor = 0;
+  let controllerScreened = 0;
   const controllerConcurrency = Math.min(16, Math.max(1, controllerNodes.length));
   const controllerWorkers = Array.from({ length: controllerConcurrency }, async () => {
     while (true) {
@@ -517,9 +542,24 @@ export async function probePoolProxies(
           egressIp: null,
         };
       }
+      controllerScreened += 1;
+      await opts.onStageProgress?.("screening", controllerScreened, controllerNodes.length);
     }
   });
   if (controllerNodes.length) await Promise.all(controllerWorkers);
+
+  const reportedControllerIndexes = new Set<number>();
+  const reportController = async (i: number): Promise<void> => {
+    if (reportedControllerIndexes.has(i)) return;
+    reportedControllerIndexes.add(i);
+    await report(results[i]);
+  };
+  await opts.onStageProgress?.("verifying", 0, controllerNodes.length);
+  await Promise.all(
+    controllerNodes
+      .filter(({ i }) => !results[i]?.ok)
+      .map(({ i }) => reportController(i))
+  );
 
   const verifyCount = Math.max(0, opts.verifyEgressCount ?? 0);
   if (verifyCount && controllerNodes.length) {
@@ -535,13 +575,19 @@ export async function probePoolProxies(
     for (const { i, p } of candidates) {
       const full = await probePoolProxy(p, bridge, { ...opts, fastController: false, clashQueue });
       results[i] = full;
+      await reportController(i);
       if (full.ok && full.egressIp) uniqueIps.add(full.egressIp);
       if (uniqueIps.size >= verifyCount) break;
     }
   }
 
+  // Any fast-screened nodes left after reaching the requested egress count
+  // keep their delay result and still count as completed.
+  await Promise.all(controllerNodes.map(({ i }) => reportController(i)));
+
   for (const { i, p } of bridged) {
     results[i] = await probePoolProxy(p, bridge, { ...opts, clashQueue });
+    await report(results[i]);
   }
 
   return results;

@@ -217,6 +217,178 @@ describe("probePoolProxies", () => {
     expect(calls.filter((call) => call.startsWith("GET ") && call.includes("/delay?"))).toHaveLength(3);
     expect(calls.some((call) => call.startsWith("PUT ") && call.includes("/proxies/Proxy"))).toBe(true);
   });
+
+  it("runs eight independent direct probes concurrently by default", async () => {
+    let active = 0;
+    let maxActive = 0;
+    const list = Array.from({ length: 8 }, (_, index) =>
+      px({
+        id: `direct-${index}`,
+        name: `direct-${index}`,
+        type: "http",
+        host: `10.0.0.${index + 1}`,
+        port: 8080,
+      })
+    );
+
+    const results = await probePoolProxies(list, bridgeOff, {
+      fetchImpl: async () => {
+        active++;
+        maxActive = Math.max(maxActive, active);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        active--;
+        return new Response("203.0.113.1", { status: 200 });
+      },
+    });
+
+    expect(results.every((result) => result.ok)).toBe(true);
+    expect(maxActive).toBe(8);
+  });
+
+  it("reports each final batch result as it completes", async () => {
+    const reported: Array<{ id: string; completed: number; total: number }> = [];
+    const list = [
+      px({ id: "fast", name: "fast", type: "http", host: "10.0.0.1", port: 8080 }),
+      px({ id: "slow", name: "slow", type: "http", host: "10.0.0.2", port: 8080 }),
+    ];
+
+    const results = await probePoolProxies(list, bridgeOff, {
+      fetchImpl: async () => new Response("203.0.113.1", { status: 200 }),
+      onResult: (result, completed, total) => {
+        reported.push({ id: result.id, completed, total });
+      },
+    });
+
+    expect(results).toHaveLength(2);
+    expect(reported).toHaveLength(2);
+    expect(reported.map((item) => item.id).sort()).toEqual(["fast", "slow"]);
+    expect(reported.map((item) => item.completed).sort()).toEqual([1, 2]);
+    expect(reported.every((item) => item.total === 2)).toBe(true);
+  });
+
+  it("reports Controller screening and final verification incrementally", async () => {
+    const list = ["Mexico", "Japan"].map((name, index) =>
+      px({
+        id: `controller-progress-${index}`,
+        name,
+        type: "anytls",
+        host: "127.0.0.1",
+        port: 17891,
+        source: "controller",
+        usable: false,
+        bridgeable: true,
+        clashNodeName: name,
+      })
+    );
+    let selected = "";
+    let releaseSecond!: () => void;
+    const secondBlocked = new Promise<void>((resolve) => { releaseSecond = resolve; });
+    const stages: Array<{ stage: string; completed: number }> = [];
+    const reported: string[] = [];
+    const run = probePoolProxies(list, { ...bridgeOn, selectorGroup: "Proxy" }, {
+      fastController: true,
+      verifyEgressCount: list.length,
+      bridgeFetch: (async (url: string, init?: RequestInit) => {
+        if (init?.method === "PUT") {
+          selected = (JSON.parse(String(init.body)) as { name: string }).name;
+          return new Response(null, { status: 204 });
+        }
+        return new Response(JSON.stringify({ delay: 10 }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }) as typeof fetch,
+      fetchImpl: async () => {
+        if (selected === "Japan") await secondBlocked;
+        return new Response(selected === "Mexico" ? "203.0.113.50" : "203.0.113.51");
+      },
+      onStageProgress: (stage, completed) => {
+        stages.push({ stage, completed });
+      },
+      onResult: (result) => {
+        reported.push(result.id);
+      },
+    });
+
+    for (let attempt = 0; attempt < 20 && reported.length === 0; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(stages.some((item) => item.stage === "screening" && item.completed === 1)).toBe(true);
+    expect(reported).toEqual(["controller-progress-0"]);
+    releaseSecond();
+    await run;
+    expect(reported).toEqual(["controller-progress-0", "controller-progress-1"]);
+  });
+
+  it("reuses one Clash selection for egress and anonymous Zen checks", async () => {
+    let selected = "";
+    const switches: string[] = [];
+    let anonymousRequests = 0;
+    const list = ["Mexico", "Japan"].map((name, index) =>
+      px({
+        id: `controller-${index}`,
+        name,
+        type: "anytls",
+        host: "127.0.0.1",
+        port: 17891,
+        source: "controller",
+        usable: false,
+        bridgeable: true,
+        clashNodeName: name,
+      })
+    );
+    const bridge = { ...bridgeOn, selectorGroup: "Proxy" };
+    const bridgeFetch = (async (url: string, init?: RequestInit) => {
+      if ((init?.method || "GET") === "PUT") {
+        selected = String((JSON.parse(String(init?.body)) as { name: string }).name);
+        switches.push(selected);
+        return new Response(null, { status: 204 });
+      }
+      if (String(url).includes("/delay?")) {
+        return new Response(JSON.stringify({ delay: 20 }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(null, { status: 404 });
+    }) as typeof fetch;
+    const anonymousByIp = new Map<string, ReturnType<typeof probeAnonymousZenProxy>>();
+
+    const results = await probePoolProxies(list, bridge, {
+      fastController: true,
+      verifyEgressCount: list.length,
+      bridgeFetch,
+      fetchImpl: async (_url, init) => {
+        if (init.method === "POST") {
+          anonymousRequests++;
+          return new Response(JSON.stringify({ choices: [] }), { status: 200 });
+        }
+        return new Response(selected === "Mexico" ? "203.0.113.10" : "203.0.113.11", {
+          status: 200,
+        });
+      },
+      afterProbe: async (proxy, result) => {
+        const ip = result.egressIp!;
+        let anonymous = anonymousByIp.get(ip);
+        if (!anonymous) {
+          anonymous = probeAnonymousZenProxy(proxy, bridge, {
+            bridgeFetch,
+            fetchImpl: async (_url, init) => {
+              if (init.method === "POST") anonymousRequests++;
+              return new Response(JSON.stringify({ choices: [] }), { status: 200 });
+            },
+            skipClashSwitch: true,
+          });
+          anonymousByIp.set(ip, anonymous);
+        }
+        return { ...result, anonymousZen: await anonymous };
+      },
+    });
+
+    expect(results.every((result) => result.anonymousZen?.ok)).toBe(true);
+    expect(switches).toEqual(["Mexico", "Japan"]);
+    expect(anonymousRequests).toBe(2);
+  });
 });
 
 describe("probeAnonymousZenProxy", () => {
@@ -474,6 +646,139 @@ describe("admin proxy probe HTTP APIs", () => {
     expect(data.results.find((r) => r.id === "b")?.skipped).toBe(true);
   });
 
+  it("publishes incremental batch progress and rejects overlapping batches", async () => {
+    dir = await mkdtemp(join(tmpdir(), "ocfr-probe-progress-"));
+    const store = new SettingsStore(join(dir, "settings.json"));
+    await store.save({
+      baseUrl: "https://opencode.ai/zen/v1",
+      accounts: [],
+      proxyPool: [
+        px({ id: "fast", name: "fast", type: "http", host: "10.0.0.1", port: 8080 }),
+        px({ id: "blocked", name: "blocked", type: "http", host: "10.0.0.2", port: 8080 }),
+      ],
+    });
+    let releaseBlocked!: () => void;
+    const blocked = new Promise<void>((resolve) => { releaseBlocked = resolve; });
+    let getCount = 0;
+    app = await createApp({
+      store,
+      port: 0,
+      probeFetch: async (_url, init) => {
+        if (init.method === "GET" && ++getCount === 2) await blocked;
+        return init.method === "POST"
+          ? new Response(JSON.stringify({ choices: [] }), { status: 200 })
+          : new Response(`203.0.113.${getCount}`, { status: 200 });
+      },
+    });
+    await listen(app);
+    const addr = app.server.address();
+    if (!addr || typeof addr === "string") throw new Error("no addr");
+    const base = `http://127.0.0.1:${addr.port}/admin/api/proxy-pool/test-batch`;
+    const batch = fetch(base, { method: "POST", body: "{}" });
+
+    let progress: { running: boolean; total: number; completed: number; completedIds: string[] } | null = null;
+    for (let attempt = 0; attempt < 20; attempt++) {
+      progress = await (await fetch(`${base}/status`)).json() as typeof progress;
+      if (progress?.completed === 1) break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(progress).toMatchObject({ running: true, total: 2, completed: 1 });
+    expect(progress?.completedIds).toEqual(["fast"]);
+
+    const incrementalSettings = await (
+      await fetch(`http://127.0.0.1:${addr.port}/admin/api/settings`)
+    ).json() as { accounts: Array<{ id: string; kind: string; proxyId: string | null }> };
+    expect(incrementalSettings.accounts).toContainEqual(expect.objectContaining({
+      id: "anonymous-zen-fast",
+      kind: "anonymous_zen",
+      proxyId: "fast",
+    }));
+
+    const poolState = await (await fetch(`http://127.0.0.1:${addr.port}/admin/api/proxy-pool`)).json() as {
+      probeResults: Record<string, unknown>;
+      batchProbe: { running: boolean; completed: number; addedWorkerIds: string[] };
+    };
+    expect(poolState.probeResults.fast).toBeTruthy();
+    expect(poolState.batchProbe).toMatchObject({
+      running: true,
+      completed: 1,
+      addedWorkerIds: ["anonymous-zen-fast"],
+    });
+
+    const conflictingSave = await fetch(`http://127.0.0.1:${addr.port}/admin/api/settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accounts: [] }),
+    });
+    expect(conflictingSave.status).toBe(409);
+    expect(await conflictingSave.json()).toMatchObject({
+      error: { type: "batch_probe_running" },
+    });
+
+    const overlap = await fetch(base, { method: "POST", body: "{}" });
+    expect(overlap.status).toBe(409);
+    releaseBlocked();
+    expect((await batch).status).toBe(200);
+    const finished = await (await fetch(`${base}/status`)).json() as {
+      running: boolean; completed: number; finishedAt: string | null;
+    };
+    expect(finished).toMatchObject({ running: false, completed: 2 });
+    expect(finished.finishedAt).toBeTruthy();
+  });
+
+  it("reserves a batch before reading its body and releases invalid requests", async () => {
+    dir = await mkdtemp(join(tmpdir(), "ocfr-probe-lock-"));
+    const store = new SettingsStore(join(dir, "settings.json"));
+    await store.save({
+      baseUrl: "https://opencode.ai/zen/v1",
+      accounts: [],
+      proxyPool: [
+        px({ id: "only", name: "only", type: "http", host: "10.0.0.1", port: 8080 }),
+      ],
+    });
+    app = await createApp({
+      store,
+      port: 0,
+      probeFetch: async (_url, init) => init.method === "POST"
+        ? new Response(JSON.stringify({ choices: [] }), { status: 200 })
+        : new Response("203.0.113.40", { status: 200 }),
+    });
+    await listen(app);
+    const addr = app.server.address();
+    if (!addr || typeof addr === "string") throw new Error("no addr");
+    const url = `http://127.0.0.1:${addr.port}/admin/api/proxy-pool/test-batch`;
+    const encoder = new TextEncoder();
+    let bodyController!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        bodyController = controller;
+        controller.enqueue(encoder.encode("{"));
+      },
+    });
+    const first = fetch(url, {
+      method: "POST",
+      body,
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+
+    let running = false;
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const status = await (await fetch(`${url}/status`)).json() as { running: boolean };
+      running = status.running;
+      if (running) break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(running).toBe(true);
+    expect((await fetch(url, { method: "POST", body: "{}" })).status).toBe(409);
+
+    bodyController.enqueue(encoder.encode("}"));
+    bodyController.close();
+    expect((await first).status).toBe(200);
+    expect((await fetch(url, { method: "POST", body: "{" })).status).toBe(400);
+    const released = await (await fetch(`${url}/status`)).json() as { running: boolean; error: string | null };
+    expect(released).toMatchObject({ running: false, error: "Invalid JSON" });
+  });
+
   it("batch test creates one anonymous worker per usable egress without duplicates", async () => {
     dir = await mkdtemp(join(tmpdir(), "ocfr-probe-workers-"));
     const store = new SettingsStore(join(dir, "settings.json"));
@@ -540,6 +845,56 @@ describe("admin proxy probe HTTP APIs", () => {
     expect(app.upstream.rotator.getAccounts().map((account) => account.id)).toContain(
       "anonymous-zen-usable"
     );
+  });
+
+  it("batch test repopulates an empty Worker list with every unique usable egress", async () => {
+    dir = await mkdtemp(join(tmpdir(), "ocfr-probe-empty-workers-"));
+    const store = new SettingsStore(join(dir, "settings.json"));
+    await store.save({
+      baseUrl: "https://opencode.ai/zen/v1",
+      accounts: [],
+      proxyPool: [
+        px({ id: "mexico", name: "Mexico", type: "http", host: "10.0.0.10", port: 8080 }),
+        px({ id: "japan", name: "Japan", type: "http", host: "10.0.0.11", port: 8080 }),
+      ],
+    });
+    let egressIndex = 0;
+    const probeFetch = vi.fn(async (_url: string, init: RequestInit & { dispatcher?: unknown }) => {
+      if (init.method === "POST") {
+        return new Response(JSON.stringify({ choices: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      const egressIp = `203.0.113.${80 + egressIndex++}`;
+      return new Response(egressIp, {
+        status: 200,
+      });
+    });
+    app = await createApp({ store, port: 0, probeFetch });
+    await listen(app);
+    const addr = app.server.address();
+    if (!addr || typeof addr === "string") throw new Error("no addr");
+
+    const response = await fetch(
+      `http://127.0.0.1:${addr.port}/admin/api/proxy-pool/test-batch`,
+      { method: "POST", body: "{}" }
+    );
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      autoWorkers: { added: number; addedIds: string[] };
+      settings: GatewaySettings;
+    };
+    expect(body.autoWorkers.added).toBe(2);
+    expect(body.autoWorkers.addedIds).toEqual([
+      "anonymous-zen-mexico",
+      "anonymous-zen-japan",
+    ]);
+    expect(body.settings.accounts).toEqual([
+      expect.objectContaining({ id: "anonymous-zen-mexico", proxyId: "mexico" }),
+      expect.objectContaining({ id: "anonymous-zen-japan", proxyId: "japan" }),
+    ]);
+    expect(app.upstream.rotator.getAccounts()).toHaveLength(2);
   });
 
   it("GET /admin/api/proxy-pool includes probeResults after test", async () => {

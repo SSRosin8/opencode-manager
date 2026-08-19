@@ -103,7 +103,7 @@ function normalizeProxy(raw: unknown): AccountProxy {
 }
 
 function normalizeAccounts(raw: unknown): AccountConfig[] {
-  if (!Array.isArray(raw) || raw.length === 0) {
+  if (!Array.isArray(raw)) {
     return [{
       id: "default",
       apiKey: "",
@@ -113,6 +113,9 @@ function normalizeAccounts(raw: unknown): AccountConfig[] {
       proxy: null,
     }];
   }
+  // An explicit empty list is meaningful: operators may remove every Worker
+  // and let a later batch proxy test repopulate anonymous Zen Workers.
+  if (raw.length === 0) return [];
   return raw.map((item, i) => {
     const a = (item && typeof item === "object" ? item : {}) as Record<string, unknown>;
     const proxyId =
@@ -176,6 +179,7 @@ export class SettingsStore {
   readonly path: string;
   private settings: GatewaySettings;
   private status: RuntimeStatus;
+  private mutationChain: Promise<void> = Promise.resolve();
 
   constructor(path = process.env.OCFREERELAY_SETTINGS_PATH || defaultDataPath()) {
     this.path = path;
@@ -255,10 +259,7 @@ export class SettingsStore {
   }
 
   async save(partial: Partial<GatewaySettings>): Promise<GatewaySettings> {
-    this.settings = normalizeSettings({ ...this.settings, ...partial });
-    await this.persist();
-    this.syncStatusFromSettings();
-    return this.get();
+    return this.enqueueMutation((current) => ({ ...current, ...partial }));
   }
 
   async addManualProxy(input: Partial<PoolProxy> & { host: string; port: number }): Promise<GatewaySettings> {
@@ -276,25 +277,42 @@ export class SettingsStore {
     entry.usable = true;
     entry.bridgeable = true;
     entry.enabled = input.enabled !== false;
-    this.settings.proxyPool = [...this.settings.proxyPool, entry];
-    await this.persist();
-    this.syncStatusFromSettings();
-    return this.get();
+    return this.enqueueMutation((current) => ({
+      ...current,
+      proxyPool: [...current.proxyPool, entry],
+    }));
   }
 
   async removeProxy(id: string): Promise<GatewaySettings> {
-    this.settings.proxyPool = this.settings.proxyPool.filter((p) => p.id !== id);
-    this.settings.accounts = this.settings.accounts.map((a) =>
-      a.proxyId === id ? { ...a, proxyId: null } : a
-    );
-    await this.persist();
-    this.syncStatusFromSettings();
-    return this.get();
+    return this.enqueueMutation((current) => ({
+      ...current,
+      proxyPool: current.proxyPool.filter((p) => p.id !== id),
+      accounts: current.accounts.map((a) =>
+        a.proxyId === id ? { ...a, proxyId: null } : a
+      ),
+    }));
   }
 
-  private async persist(): Promise<void> {
+  private enqueueMutation(
+    build: (current: GatewaySettings) => Partial<GatewaySettings>
+  ): Promise<GatewaySettings> {
+    const job = this.mutationChain.then(async () => {
+      const next = normalizeSettings(build(this.get()));
+      await this.persist(next);
+      this.settings = next;
+      this.syncStatusFromSettings();
+      return this.get();
+    });
+    this.mutationChain = job.then(
+      () => undefined,
+      () => undefined
+    );
+    return job;
+  }
+
+  private async persist(settings = this.settings): Promise<void> {
     await mkdir(dirname(this.path), { recursive: true });
-    await writeFile(this.path, JSON.stringify(this.settings, null, 2), "utf8");
+    await writeFile(this.path, JSON.stringify(settings, null, 2), "utf8");
   }
 
   private syncStatusFromSettings(): void {

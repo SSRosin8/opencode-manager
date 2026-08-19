@@ -6,6 +6,14 @@ export const ADMIN_HTML = `<!DOCTYPE html>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>OCFreeRelay — Admin</title>
+  <script>
+    try {
+      const storedTheme = localStorage.getItem("ocfr-theme");
+      const savedTheme = storedTheme === "light" || storedTheme === "dark" ? storedTheme : null;
+      const preferredTheme = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+      document.documentElement.dataset.theme = savedTheme || preferredTheme;
+    } catch { document.documentElement.dataset.theme = "dark"; }
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -42,6 +50,35 @@ export const ADMIN_HTML = `<!DOCTYPE html>
       --font: "IBM Plex Sans", system-ui, sans-serif;
       --mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
       --shadow: 0 8px 24px rgba(0,0,0,0.35);
+      color-scheme: dark;
+    }
+    :root[data-theme="light"] {
+      --bg: #f6f8fb;
+      --bg-elevated: #ffffff;
+      --sidebar: #ffffff;
+      --panel: #ffffff;
+      --panel-2: #eef2f7;
+      --border: #d8e0eb;
+      --border-hi: #aebdce;
+      --text: #172033;
+      --text-2: #40516a;
+      --muted: #586b84;
+      --faint: #a4b1c2;
+      --blue: #2563eb;
+      --blue-hi: #1d4ed8;
+      --blue-dim: rgba(37, 99, 235, 0.09);
+      --blue-border: rgba(37, 99, 235, 0.35);
+      --ok: #15803d;
+      --ok-dim: rgba(21, 128, 61, 0.08);
+      --ok-border: rgba(21, 128, 61, 0.3);
+      --warn: #a16207;
+      --warn-dim: rgba(161, 98, 7, 0.08);
+      --warn-border: rgba(161, 98, 7, 0.3);
+      --err: #dc2626;
+      --err-dim: rgba(220, 38, 38, 0.07);
+      --err-border: rgba(220, 38, 38, 0.3);
+      --shadow: 0 8px 24px rgba(40, 55, 75, 0.14);
+      color-scheme: light;
     }
     * { box-sizing: border-box; }
     html, body { height: 100%; }
@@ -143,6 +180,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
     }
     .nav-item svg { flex-shrink: 0; opacity: 0.85; }
     .nav-item:hover { background: rgba(255,255,255,0.03); color: var(--text); }
+    :root[data-theme="light"] .nav-item:hover { background: rgba(15,23,42,0.04); }
     .nav-item.active {
       background: var(--blue-dim); color: var(--blue-hi);
     }
@@ -215,6 +253,10 @@ export const ADMIN_HTML = `<!DOCTYPE html>
       margin: 0; font-size: 13px; font-weight: 600;
       display: flex; align-items: center; gap: 6px;
     }
+    .panel-hd-actions { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .collapse-toggle { width: 28px; padding: 0; font-size: 14px; }
+    .collapsible-body.is-collapsed { display: none; }
+    .metrics.is-collapsed { display: none; }
     .panel-bd { padding: 12px 14px; }
     .hint { color: var(--muted); font-size: 12px; margin: 0 0 10px; }
     .mono { font-family: var(--mono); font-size: 12px; }
@@ -260,6 +302,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
     .tag.err { background: var(--err-dim); border-color: var(--err-border); color: var(--err); }
     .tag.blue { background: var(--blue-dim); border-color: var(--blue-border); color: var(--blue-hi); }
     .tag.info { background: rgba(255,255,255,0.04); }
+    :root[data-theme="light"] .tag.info { background: rgba(15,23,42,0.04); }
 
     /* ── Metrics ── */
     .metrics {
@@ -429,6 +472,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
       vertical-align: middle; white-space: nowrap;
     }
     table.nodes tr:hover td { background: rgba(255,255,255,0.02); }
+    :root[data-theme="light"] table.nodes tr:hover td { background: rgba(15,23,42,0.025); }
     table.nodes tr.row-warn td { background: var(--warn-dim); }
     table.nodes tr.row-err td { background: rgba(239,68,68,0.06); }
     table.nodes .name-cell { display: flex; align-items: center; gap: 6px; font-weight: 500; }
@@ -497,11 +541,45 @@ export const ADMIN_HTML = `<!DOCTYPE html>
       background: var(--bg); padding: 12px 14px; margin-bottom: 10px;
     }
     .worker-card.disabled-worker { opacity: 0.68; }
+    .workers-stack { max-width: none; }
+    #accounts.worker-columns {
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;
+      align-items: start;
+    }
+    .worker-column {
+      min-width: 0;
+    }
+    .worker-column-hd {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      padding: 10px 12px; border-bottom: 1px solid var(--border);
+      color: var(--text); font-weight: 600;
+    }
+    .worker-column-count {
+      min-width: 24px; padding: 1px 7px; border-radius: 999px;
+      background: var(--panel-2); color: var(--text-2); text-align: center;
+      font-family: var(--mono); font-size: 11px;
+    }
+    .worker-column-list { padding-top: 10px; }
+    .worker-column-list.worker-list-scroll {
+      max-height: calc(100vh - 235px); overflow: auto; padding-right: 6px;
+    }
+    .worker-column-list .worker-card:last-child { margin-bottom: 0; }
+    .worker-column-empty {
+      margin: 0; padding: 20px 10px; text-align: center; color: var(--muted);
+    }
+    .worker-card.is-collapsed-card { padding: 9px 12px; margin-bottom: 6px; }
+    .worker-card.is-collapsed-card .hd { margin-bottom: 0; }
     .worker-card .hd {
       display: flex; justify-content: space-between; align-items: center;
       margin-bottom: 10px; font-weight: 600;
     }
-    .worker-card .worker-actions { display: flex; gap: 6px; align-items: center; }
+    .worker-card .worker-actions {
+      display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; align-items: center;
+    }
+    .worker-card .worker-title {
+      min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .worker-card .worker-body.is-collapsed { display: none; }
     .worker-test-result {
       margin-top: 10px; padding: 8px 10px; border: 1px solid var(--border);
       border-radius: var(--radius); color: var(--text-2); font-size: 12px;
@@ -619,6 +697,13 @@ export const ADMIN_HTML = `<!DOCTYPE html>
       body { overflow: auto; }
       .app { height: auto; min-height: 100vh; }
       .content { overflow: visible; padding: 14px 12px 24px; }
+      #accounts.worker-columns { grid-template-columns: 1fr; }
+      .worker-column-list.worker-list-scroll { max-height: 62vh; }
+      .worker-card .hd { flex-wrap: wrap; gap: 8px; }
+      .worker-card .hd { position: relative; }
+      .worker-card .worker-title { width: 100%; padding-right: 34px; }
+      .worker-card .worker-actions { flex-wrap: wrap; }
+      .worker-card .btn-toggle-worker { position: absolute; top: 0; right: 0; }
     }
   </style>
 </head>
@@ -646,6 +731,9 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         </div>
       </div>
       <div class="topbar-right">
+        <button type="button" class="icon-btn" id="btn-theme" title="Use light theme" aria-label="Use light theme">
+          <span id="theme-icon" aria-hidden="true">☀</span>
+        </button>
         <div class="lang-switch" role="group" aria-label="Language">
           <button type="button" id="lang-en" data-lang="en" class="active">EN</button>
           <span class="sep">|</span>
@@ -693,6 +781,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
               <p class="sub" data-i18n="overviewSub">Gateway health, workers, and proxy pool at a glance.</p>
             </div>
             <div class="page-actions">
+              <button type="button" class="btn btn-sm collapse-toggle" data-collapse-key="overview-metrics" data-collapse-target="ov-metrics" aria-expanded="true"><span aria-hidden="true">▴</span></button>
               <button type="button" class="btn" id="btn-reset-stats" data-i18n="resetStats">Reset stats</button>
             </div>
           </div>
@@ -700,10 +789,14 @@ export const ADMIN_HTML = `<!DOCTYPE html>
           <div class="panel" style="margin-top:12px">
             <div class="panel-hd">
               <h2 data-i18n="workerUsage">Worker usage</h2>
-              <span class="muted mono" id="ov-usage-totals"></span>
+              <div class="panel-hd-actions">
+                <span class="muted mono" id="ov-usage-totals"></span>
+                <button type="button" class="btn btn-sm collapse-toggle" data-collapse-key="overview-worker-usage" data-collapse-target="ov-worker-usage-body" aria-expanded="true"><span aria-hidden="true">▴</span></button>
+              </div>
             </div>
-            <div class="table-wrap">
-              <table class="nodes">
+            <div class="collapsible-body" id="ov-worker-usage-body">
+              <div class="table-wrap">
+                <table class="nodes">
                 <thead>
                   <tr>
                     <th data-i18n="colIdentity">Zen identity</th>
@@ -717,7 +810,8 @@ export const ADMIN_HTML = `<!DOCTYPE html>
                   </tr>
                 </thead>
                 <tbody id="ov-worker-stats"></tbody>
-              </table>
+                </table>
+              </div>
             </div>
           </div>
           <div class="panel" style="margin-top:12px">
@@ -812,6 +906,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
               <p class="sub" data-i18n="proxyPoolSub">Isolate every OpenCode account with a dedicated egress IP.</p>
             </div>
             <div class="page-actions">
+              <button type="button" class="btn btn-sm collapse-toggle" data-collapse-key="proxy-metrics" data-collapse-target="pp-metrics" aria-expanded="true"><span aria-hidden="true">▴</span></button>
               <button type="button" class="btn btn-primary" id="btn-add-proxy-open">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>
                 <span data-i18n="addProxy">Add Proxy</span>
@@ -848,8 +943,9 @@ export const ADMIN_HTML = `<!DOCTYPE html>
                     <span data-i18n="isoTitle">IP Isolation Overview</span>
                     <span class="muted" title="Worker → Proxy → Egress">ⓘ</span>
                   </h2>
+                  <button type="button" class="btn btn-sm collapse-toggle" data-collapse-key="proxy-isolation" data-collapse-target="proxy-isolation-body" aria-expanded="true"><span aria-hidden="true">▴</span></button>
                 </div>
-                <div class="iso-body">
+                <div class="iso-body collapsible-body" id="proxy-isolation-body">
                   <div class="iso-map">
                     <div class="iso-cols">
                       <div data-i18n="colWorker">Worker / API Key</div>
@@ -880,8 +976,10 @@ export const ADMIN_HTML = `<!DOCTYPE html>
               <div class="panel">
                 <div class="panel-hd">
                   <h2 data-i18n="proxyNodes">Proxy Nodes</h2>
+                  <button type="button" class="btn btn-sm collapse-toggle" data-collapse-key="proxy-nodes" data-collapse-target="proxy-nodes-body" aria-expanded="true"><span aria-hidden="true">▴</span></button>
                 </div>
-                <div class="table-tools">
+                <div class="collapsible-body" id="proxy-nodes-body">
+                  <div class="table-tools">
                   <div class="search">
                     <input class="input" id="node-search" type="search" data-i18n-placeholder="searchNodes" placeholder="Search nodes..." />
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3-3"/></svg>
@@ -904,8 +1002,8 @@ export const ADMIN_HTML = `<!DOCTYPE html>
                   <button type="button" class="btn btn-sm" id="btn-batch-test" data-i18n="batchTest">Batch Test</button>
                   <button type="button" class="btn btn-sm" id="btn-nodes-refresh" data-i18n="refresh">Refresh</button>
                 </div>
-                <div class="table-wrap">
-                  <table class="nodes">
+                  <div class="table-wrap">
+                    <table class="nodes">
                     <thead>
                       <tr>
                         <th data-i18n="colName">Name</th>
@@ -920,11 +1018,12 @@ export const ADMIN_HTML = `<!DOCTYPE html>
                       </tr>
                     </thead>
                     <tbody id="nodes-body"></tbody>
-                  </table>
-                </div>
-                <div class="table-foot">
-                  <div class="sum" id="nodes-sum"></div>
-                  <div class="pager" id="nodes-pager"></div>
+                    </table>
+                  </div>
+                  <div class="table-foot">
+                    <div class="sum" id="nodes-sum"></div>
+                    <div class="pager" id="nodes-pager"></div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1021,11 +1120,13 @@ export const ADMIN_HTML = `<!DOCTYPE html>
                 </select>
               </label>
               <button type="button" class="btn" id="btn-assign-proxies" data-i18n="assignHealthyProxies">Assign healthy proxies</button>
+              <button type="button" class="btn" id="btn-toggle-all-workers" data-i18n="collapseAll">Collapse all</button>
               <button type="button" class="btn" id="btn-add-account" data-i18n="addWorker">Add worker</button>
+              <button type="button" class="btn btn-danger" id="btn-remove-all-workers" data-i18n="removeAllWorkers">Remove all</button>
               <button type="button" class="btn btn-primary" id="btn-save-accounts" data-i18n="saveWorkers">Save workers</button>
             </div>
           </div>
-          <div class="stack"><div id="accounts"></div></div>
+          <div class="stack workers-stack"><div id="accounts" class="worker-columns"></div></div>
         </div>
 
         <!-- Client usage -->
@@ -1233,7 +1334,16 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         noUnassigned: "All workers are assigned",
         unassignedCount: (n) => n + " worker(s) without a pool binding",
         openaiBase: "OpenAI-compatible base", adminApis: "Admin APIs",
-        addWorker: "Add worker", saveWorkers: "Save workers",
+        addWorker: "Add worker", saveWorkers: "Save workers", removeAllWorkers: "Remove all",
+        removeGroupWorkers: "Clear group",
+        anonymousWorkers: "Anonymous Zen", authenticatedWorkers: "Signed-in Zen",
+        noAnonymousWorkers: "No anonymous Workers", noAuthenticatedWorkers: "No signed-in Workers",
+        confirmRemoveAllWorkers: "Remove all Workers?",
+        confirmRemoveAllWorkersBody: "All Workers will be removed from this form. Save Workers to apply the change.",
+        toastWorkersCleared: "All Workers removed from the form — save to apply",
+        confirmRemoveWorkerGroup: (name) => "Remove all " + name + " Workers?",
+        confirmRemoveWorkerGroupBody: (name) => "All " + name + " Workers will be removed from this form. Save Workers to apply the change.",
+        toastWorkerGroupCleared: (name) => name + " Workers removed from the form — save to apply",
         testWorker: "Test connection", testingWorker: "Testing…",
         saveBeforeWorkerTest: "Save this worker before testing",
         workerTestOk: "Connection succeeded", workerTestFail: "Connection failed",
@@ -1247,11 +1357,12 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         routingStrategy: "Routing strategy", anonymousFirst: "Anonymous first",
         authenticatedFirst: "Signed-in first", mixedStrategy: "Mixed",
         workerEnabled: "Receive traffic", disabledState: "Disabled",
+        collapse: "Collapse", expand: "Expand", collapseAll: "Collapse all", expandAll: "Expand all",
         bindProxy: "Bind pool node",
         directNoProxy: "(direct / no proxy)",
         tagDirect: "[direct] ", tagBridge: "[Clash bridge] ",
         tagNeedBridge: "[need bridge] ", tagUnusable: "[unusable] ",
-        noWorkers: "No workers — add one.",
+        noWorkers: "No workers configured. Run Batch Test to add anonymous Workers, or add a signed-in Worker manually.",
         noSubs: "No subscriptions yet. Add a Clash subscription to import nodes.",
         neverFetched: "Never pulled",
         lastPulled: "Last pulled",
@@ -1288,6 +1399,9 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         toastRefreshed: "Refreshed",
         toastCopied: "Copied",
         connected: "Connected", disconnected: "Disconnected", enabled: "Enabled", disabled: "Disabled",
+        useLightTheme: "Use light theme", useDarkTheme: "Use dark theme",
+        batchProgress: (done, total) => "Verifying nodes " + done + "/" + total,
+        batchScreening: (done, total) => "Screening nodes " + done + "/" + total,
         metricGateway: "Gateway", metricWorkers: "Workers", metricProxyNodes: "Proxy Nodes",
         metricDirect: "Direct Nodes", metricBridged: "Bridged Nodes", metricClash: "Clash Bridge",
         total: "total", ready: "ready", busy: "Busy",
@@ -1393,7 +1507,16 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         noUnassigned: "所有 Worker 均已绑定",
         unassignedCount: (n) => n + " 个 Worker 未绑定代理",
         openaiBase: "OpenAI 兼容 Base", adminApis: "管理 API",
-        addWorker: "添加 Worker", saveWorkers: "保存 Workers",
+        addWorker: "添加 Worker", saveWorkers: "保存 Workers", removeAllWorkers: "一键删除",
+        removeGroupWorkers: "清空此列",
+        anonymousWorkers: "匿名 Zen", authenticatedWorkers: "登录 Zen",
+        noAnonymousWorkers: "暂无匿名 Worker", noAuthenticatedWorkers: "暂无登录 Zen Worker",
+        confirmRemoveAllWorkers: "删除全部 Workers？",
+        confirmRemoveAllWorkersBody: "将从当前表单移除全部 Worker，点击保存 Workers 后生效。",
+        toastWorkersCleared: "已从表单移除全部 Workers，请保存后生效",
+        confirmRemoveWorkerGroup: (name) => "删除全部" + name + " Workers？",
+        confirmRemoveWorkerGroupBody: (name) => "将从当前表单移除全部" + name + " Worker，点击保存 Workers 后生效。",
+        toastWorkerGroupCleared: (name) => "已从表单移除全部" + name + " Workers，请保存后生效",
         testWorker: "测试连接", testingWorker: "测试中…",
         saveBeforeWorkerTest: "请先保存此 Worker 再测试",
         workerTestOk: "连接成功", workerTestFail: "连接失败",
@@ -1407,11 +1530,12 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         routingStrategy: "调度策略", anonymousFirst: "匿名优先",
         authenticatedFirst: "登录 Zen 优先", mixedStrategy: "混合轮询",
         workerEnabled: "参与流量调度", disabledState: "已禁用",
+        collapse: "折叠", expand: "展开", collapseAll: "全部折叠", expandAll: "全部展开",
         bindProxy: "绑定代理池节点",
         directNoProxy: "（直连 / 无代理）",
         tagDirect: "[直连] ", tagBridge: "[Clash桥接] ",
         tagNeedBridge: "[需开桥接] ", tagUnusable: "[不可用] ",
-        noWorkers: "暂无 Worker — 请添加。",
+        noWorkers: "暂无 Worker。可运行批量测试自动添加匿名 Worker，或手动添加登录 Zen Worker。",
         noSubs: "暂无订阅。添加 Clash 订阅以导入节点。",
         neverFetched: "从未拉取",
         lastPulled: "上次拉取",
@@ -1448,6 +1572,9 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         toastRefreshed: "已刷新",
         toastCopied: "已复制",
         connected: "已连接", disconnected: "未连接", enabled: "已启用", disabled: "已关闭",
+        useLightTheme: "切换到浅色模式", useDarkTheme: "切换到深色模式",
+        batchProgress: (done, total) => "正在验证节点 " + done + "/" + total,
+        batchScreening: (done, total) => "正在筛选节点 " + done + "/" + total,
         metricGateway: "网关", metricWorkers: "Workers", metricProxyNodes: "代理节点",
         metricDirect: "直连节点", metricBridged: "桥接节点", metricClash: "Clash 桥接",
         total: "总计", ready: "就绪", busy: "忙碌",
@@ -1461,13 +1588,22 @@ export const ADMIN_HTML = `<!DOCTYPE html>
       },
     };
 
-    let lang = localStorage.getItem("ocfr-lang") || "en";
+    function storageGet(key) {
+      try { return localStorage.getItem(key); } catch { return null; }
+    }
+
+    function storageSet(key, value) {
+      try { localStorage.setItem(key, value); } catch { /* storage may be unavailable */ }
+    }
+
+    let lang = storageGet("ocfr-lang") || "en";
     if (lang !== "en" && lang !== "zh") lang = "en";
     let settings = null;
     let status = null;
     const workerTestingIds = new Set();
     const workerTestResults = new Map();
-    let page = localStorage.getItem("ocfr-page") || "proxy";
+    let collapsedWorkerIds = readCollapsedWorkerIds();
+    let page = storageGet("ocfr-page") || "proxy";
     let nodePage = 1;
     const PAGE_SIZE = 8;
     let confirmCb = null;
@@ -1477,6 +1613,13 @@ export const ADMIN_HTML = `<!DOCTYPE html>
     /** @type {Set<string>} */
     const testingIds = new Set();
     let batchTesting = false;
+    let batchProgressTimer = null;
+    let batchRequestActive = false;
+    let batchProgressSeenRunning = false;
+    let batchProgress = null;
+    let lastBatchRenderedWorkerCount = 0;
+    let serverAccountIds = new Set();
+    let batchBaselineAccountIds = new Set();
     let recentProbeEvents = [];
 
     function t(key) {
@@ -1484,6 +1627,41 @@ export const ADMIN_HTML = `<!DOCTYPE html>
       const v = pack[key];
       if (v != null) return v;
       return I18N.en[key] != null ? I18N.en[key] : key;
+    }
+
+    function readCollapsedWorkerIds() {
+      try {
+        const value = JSON.parse(storageGet("ocfr-collapsed-workers") || "[]");
+        return new Set(Array.isArray(value) ? value.map(String) : []);
+      } catch {
+        return new Set();
+      }
+    }
+
+    function persistCollapsedWorkers() {
+      storageSet("ocfr-collapsed-workers", JSON.stringify([...collapsedWorkerIds]));
+    }
+
+    function syncCollapseToggle(btn, collapsed) {
+      const target = $(btn.dataset.collapseTarget);
+      if (!target) return;
+      target.classList.toggle("is-collapsed", collapsed);
+      btn.setAttribute("aria-expanded", String(!collapsed));
+      btn.title = t(collapsed ? "expand" : "collapse");
+      const icon = btn.querySelector("span");
+      if (icon) icon.textContent = collapsed ? "▾" : "▴";
+    }
+
+    function initSectionCollapsibles() {
+      document.querySelectorAll(".collapse-toggle[data-collapse-key]").forEach((btn) => {
+        const storageKey = "ocfr-collapse-" + btn.dataset.collapseKey;
+        syncCollapseToggle(btn, storageGet(storageKey) === "1");
+        btn.onclick = () => {
+          const collapsed = btn.getAttribute("aria-expanded") === "true";
+          storageSet(storageKey, collapsed ? "1" : "0");
+          syncCollapseToggle(btn, collapsed);
+        };
+      });
     }
 
     function applyStaticI18n() {
@@ -1515,11 +1693,35 @@ export const ADMIN_HTML = `<!DOCTYPE html>
       }
       $("lang-en").classList.toggle("active", lang === "en");
       $("lang-zh").classList.toggle("active", lang === "zh");
+      syncThemeControl();
+      document.querySelectorAll(".collapse-toggle[data-collapse-key]").forEach((btn) => {
+        syncCollapseToggle(btn, btn.getAttribute("aria-expanded") !== "true");
+      });
+    }
+
+    function currentTheme() {
+      return document.documentElement.dataset.theme === "light" ? "light" : "dark";
+    }
+
+    function syncThemeControl() {
+      const light = currentTheme() === "light";
+      const btn = $("btn-theme");
+      const label = t(light ? "useDarkTheme" : "useLightTheme");
+      btn.title = label;
+      btn.setAttribute("aria-label", label);
+      $("theme-icon").textContent = light ? "☾" : "☀";
+    }
+
+    function toggleTheme() {
+      const next = currentTheme() === "light" ? "dark" : "light";
+      document.documentElement.dataset.theme = next;
+      storageSet("ocfr-theme", next);
+      syncThemeControl();
     }
 
     function setLang(next) {
       lang = next;
-      localStorage.setItem("ocfr-lang", lang);
+      storageSet("ocfr-lang", lang);
       applyStaticI18n();
       if (settings) renderAll();
     }
@@ -1671,7 +1873,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
 
     function showPage(name) {
       page = name;
-      localStorage.setItem("ocfr-page", page);
+      storageSet("ocfr-page", page);
       document.querySelectorAll(".nav-item").forEach((el) => {
         el.classList.toggle("active", el.dataset.page === page);
       });
@@ -2070,7 +2272,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
       const list = settings.accounts || [];
       const strategy = $("routing-strategy");
       if (strategy) strategy.value = settings.routingStrategy || "anonymous_first";
-      root.innerHTML = list.map((a, idx) => {
+      const renderCard = (a, idx) => {
         const kind = a.kind === "authenticated_zen" || (!a.kind && String(a.apiKey || "").trim())
           ? "authenticated_zen"
           : "anonymous_zen";
@@ -2086,11 +2288,15 @@ export const ADMIN_HTML = `<!DOCTYPE html>
           (!testResult.ok && testResult.error?.message ? ' · ' + escapeHtml(testResult.error.message) : '') +
           '</div>';
         const enabled = a.enabled !== false;
-        return '<div class="worker-card' + (enabled ? '' : ' disabled-worker') + '" data-idx="' + idx + '">' +
-          '<div class="hd"><span>Worker ' + (idx + 1) + (enabled ? '' : ' · ' + escapeHtml(t("disabledState"))) + '</span>' +
+        const collapseKey = String(a.id || ("draft-" + (idx + 1)));
+        const collapsed = collapsedWorkerIds.has(collapseKey);
+        return '<div class="worker-card' + (enabled ? '' : ' disabled-worker') + '" data-idx="' + idx + '" data-worker-key="' + escapeAttr(collapseKey) + '">' +
+          '<div class="hd"><span class="worker-title">Worker ' + (idx + 1) + ' · ' + escapeHtml(a.id || t("unassigned")) + (enabled ? '' : ' · ' + escapeHtml(t("disabledState"))) + '</span>' +
           '<div class="worker-actions"><label class="field" style="margin:0;display:flex;align-items:center;gap:6px"><span>' + escapeHtml(t("workerEnabled")) + '</span><span class="toggle"><input class="acc-enabled" type="checkbox"' + (enabled ? ' checked' : '') + ' /><span></span></span></label>' +
           '<button type="button" class="btn btn-sm btn-test-worker" data-idx="' + idx + '"' + (testing ? ' disabled' : '') + '>' + escapeHtml(testing ? t("testingWorker") : t("testWorker")) + '</button>' +
-          '<button type="button" class="btn btn-sm btn-danger btn-remove-acc" data-idx="' + idx + '">' + escapeHtml(t("remove")) + '</button></div></div>' +
+          '<button type="button" class="btn btn-sm btn-danger btn-remove-acc" data-idx="' + idx + '">' + escapeHtml(t("remove")) + '</button>' +
+          '<button type="button" class="btn btn-sm collapse-toggle btn-toggle-worker" data-worker-key="' + escapeAttr(collapseKey) + '" aria-expanded="' + String(!collapsed) + '" title="' + escapeAttr(t(collapsed ? "expand" : "collapse")) + '"><span aria-hidden="true">' + (collapsed ? "▾" : "▴") + '</span></button></div></div>' +
+          '<div class="worker-body' + (collapsed ? ' is-collapsed' : '') + '">' +
           '<div class="row two"><div><label class="field">' + escapeHtml(t("idLabel")) + '</label>' +
           '<input class="input acc-id" type="text" value="' + escapeAttr(a.id || "") + '" /></div>' +
           '<div><label class="field">' + escapeHtml(t("workerKind")) + '</label>' +
@@ -2098,16 +2304,64 @@ export const ADMIN_HTML = `<!DOCTYPE html>
           '<div class="row"><div><label class="field">' + escapeHtml(t("apiKey")) + '</label>' +
           '<input class="input acc-key" type="password" value="' + escapeAttr(kind === "authenticated_zen" ? (a.apiKey || "") : "") + '" autocomplete="off"' + (kind === "anonymous_zen" ? " disabled" : "") + ' /></div></div>' +
           '<div class="row"><div><label class="field">' + escapeHtml(t("bindProxy")) + '</label>' +
-          '<select class="select acc-proxy-id">' + proxyOptions(a.proxyId || "") + '</select></div></div>' + resultHtml + '</div>';
-      }).join("") || '<p class="hint">' + escapeHtml(t("noWorkers")) + '</p>';
+          '<select class="select acc-proxy-id">' + proxyOptions(a.proxyId || "") + '</select></div></div>' + resultHtml + '</div></div>';
+      };
+      const indexed = list.map((account, idx) => ({ account, idx }));
+      const renderColumn = (kind, titleKey, emptyKey) => {
+        const items = indexed.filter(({ account }) => {
+          const accountKind = account.kind === "authenticated_zen" ||
+            (!account.kind && String(account.apiKey || "").trim())
+            ? "authenticated_zen"
+            : "anonymous_zen";
+          return accountKind === kind;
+        });
+        return '<section class="worker-column" data-worker-kind="' + kind + '">' +
+          '<div class="worker-column-hd"><span>' + escapeHtml(t(titleKey)) +
+          ' <span class="worker-column-count">' + items.length + '</span></span>' +
+          '<button type="button" class="btn btn-sm btn-danger btn-remove-worker-group" data-kind="' + kind + '"' +
+          (items.length ? '' : ' disabled') + '>' + escapeHtml(t("removeGroupWorkers")) + '</button></div>' +
+          '<div class="worker-column-list">' +
+          (items.length ? items.map(({ account, idx }) => renderCard(account, idx)).join("") :
+            '<p class="worker-column-empty">' + escapeHtml(t(emptyKey)) + '</p>') +
+          '</div></section>';
+      };
+      root.innerHTML = renderColumn("anonymous_zen", "anonymousWorkers", "noAnonymousWorkers") +
+        renderColumn("authenticated_zen", "authenticatedWorkers", "noAuthenticatedWorkers");
 
       root.querySelectorAll(".btn-remove-acc").forEach((btn) => {
         btn.onclick = () => {
-          settings.accounts.splice(Number(btn.dataset.idx), 1);
-          if (!settings.accounts.length) {
-            settings.accounts.push({ id: "default", kind: "anonymous_zen", apiKey: "", proxyId: null, proxy: null });
-          }
+          const card = btn.closest(".worker-card");
+          if (card?.dataset.workerKey) collapsedWorkerIds.delete(card.dataset.workerKey);
+          persistCollapsedWorkers();
+          const drafts = collectAccounts();
+          drafts.splice(Number(btn.dataset.idx), 1);
+          settings.accounts = drafts;
           renderAccounts();
+        };
+      });
+      root.querySelectorAll(".btn-remove-worker-group").forEach((btn) => {
+        btn.onclick = () => {
+          const kind = btn.dataset.kind;
+          const label = t(kind === "authenticated_zen" ? "authenticatedWorkers" : "anonymousWorkers");
+          openConfirm(t("confirmRemoveWorkerGroup")(label), t("confirmRemoveWorkerGroupBody")(label), () => {
+            const drafts = collectAccounts();
+            settings.accounts = drafts.filter((account) => account.kind !== kind);
+            for (const account of drafts) {
+              if (account.kind === kind) collapsedWorkerIds.delete(String(account.id));
+            }
+            persistCollapsedWorkers();
+            renderAccounts();
+            toast(t("toastWorkerGroupCleared")(label));
+          });
+        };
+      });
+      root.querySelectorAll(".btn-toggle-worker").forEach((btn) => {
+        btn.onclick = () => {
+          const key = btn.dataset.workerKey;
+          if (collapsedWorkerIds.has(key)) collapsedWorkerIds.delete(key);
+          else collapsedWorkerIds.add(key);
+          persistCollapsedWorkers();
+          syncWorkerCollapseControls();
         };
       });
       root.querySelectorAll(".acc-kind").forEach((select) => {
@@ -2115,13 +2369,14 @@ export const ADMIN_HTML = `<!DOCTYPE html>
           const input = select.closest(".worker-card").querySelector(".acc-key");
           input.disabled = select.value === "anonymous_zen";
           if (input.disabled) input.value = "";
+          settings.accounts = collectAccounts();
+          renderAccounts();
         };
       });
       root.querySelectorAll(".btn-test-worker").forEach((btn) => {
         btn.onclick = async () => {
           const idx = Number(btn.dataset.idx);
-          const cards = Array.from(document.querySelectorAll("#accounts .worker-card"));
-          const card = cards[idx];
+          const card = document.querySelector('#accounts .worker-card[data-idx="' + idx + '"]');
           const draft = {
             id: card.querySelector(".acc-id").value.trim() || "account",
             enabled: card.querySelector(".acc-enabled").checked,
@@ -2134,6 +2389,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
             toast(t("saveBeforeWorkerTest"), false);
             return;
           }
+          settings.accounts = collectAccounts();
           workerTestingIds.add(saved.id);
           workerTestResults.delete(saved.id);
           renderAccounts();
@@ -2154,17 +2410,49 @@ export const ADMIN_HTML = `<!DOCTYPE html>
           }
         };
       });
+      syncWorkerCollapseControls();
+    }
+
+    function syncWorkerCollapseControls() {
+      const cards = Array.from(document.querySelectorAll("#accounts .worker-card"));
+      for (const card of cards) {
+        const key = card.dataset.workerKey;
+        const collapsed = collapsedWorkerIds.has(key);
+        card.classList.toggle("is-collapsed-card", collapsed);
+        card.querySelector(".worker-body")?.classList.toggle("is-collapsed", collapsed);
+        const btn = card.querySelector(".btn-toggle-worker");
+        if (btn) {
+          btn.setAttribute("aria-expanded", String(!collapsed));
+          btn.title = t(collapsed ? "expand" : "collapse");
+          const icon = btn.querySelector("span");
+          if (icon) icon.textContent = collapsed ? "▾" : "▴";
+        }
+      }
+      const allCollapsed = cards.length > 0 && cards.every((card) => collapsedWorkerIds.has(card.dataset.workerKey));
+      document.querySelectorAll("#accounts .worker-column-list").forEach((list) => {
+        list.classList.toggle("worker-list-scroll", list.querySelectorAll(".worker-card").length > 4);
+      });
+      const toggleAll = $("btn-toggle-all-workers");
+      if (toggleAll) {
+        toggleAll.disabled = cards.length === 0;
+        toggleAll.textContent = t(allCollapsed ? "expandAll" : "collapseAll");
+        toggleAll.dataset.action = allCollapsed ? "expand" : "collapse";
+      }
+      const removeAll = $("btn-remove-all-workers");
+      if (removeAll) removeAll.disabled = cards.length === 0;
     }
 
     function collectAccounts() {
-      return Array.from(document.querySelectorAll("#accounts .worker-card")).map((el) => ({
-        id: el.querySelector(".acc-id").value.trim() || "account",
-        enabled: el.querySelector(".acc-enabled").checked,
-        kind: el.querySelector(".acc-kind").value,
-        apiKey: el.querySelector(".acc-kind").value === "anonymous_zen" ? "" : el.querySelector(".acc-key").value,
-        proxyId: el.querySelector(".acc-proxy-id").value || null,
-        proxy: null,
-      }));
+      return Array.from(document.querySelectorAll("#accounts .worker-card"))
+        .sort((a, b) => Number(a.dataset.idx) - Number(b.dataset.idx))
+        .map((el) => ({
+          id: el.querySelector(".acc-id").value.trim() || "account",
+          enabled: el.querySelector(".acc-enabled").checked,
+          kind: el.querySelector(".acc-kind").value,
+          apiKey: el.querySelector(".acc-kind").value === "anonymous_zen" ? "" : el.querySelector(".acc-key").value,
+          proxyId: el.querySelector(".acc-proxy-id").value || null,
+          proxy: null,
+        }));
     }
 
     function fillGateway() {
@@ -2340,6 +2628,17 @@ export const ADMIN_HTML = `<!DOCTYPE html>
     });
     $("lang-en").onclick = () => setLang("en");
     $("lang-zh").onclick = () => setLang("zh");
+    $("btn-theme").onclick = toggleTheme;
+    $("btn-toggle-all-workers").onclick = () => {
+      const cards = Array.from(document.querySelectorAll("#accounts .worker-card"));
+      const collapse = $("btn-toggle-all-workers").dataset.action !== "expand";
+      for (const card of cards) {
+        if (collapse) collapsedWorkerIds.add(card.dataset.workerKey);
+        else collapsedWorkerIds.delete(card.dataset.workerKey);
+      }
+      persistCollapsedWorkers();
+      syncWorkerCollapseControls();
+    };
 
     ["node-search", "flt-proto", "flt-source", "flt-health"].forEach((id) => {
       $(id).addEventListener("input", () => { nodePage = 1; renderNodes(); });
@@ -2347,9 +2646,10 @@ export const ADMIN_HTML = `<!DOCTYPE html>
     });
 
     async function loadSettings() {
-      const res = await fetch("/admin/api/settings");
+      const res = await fetch("/admin/api/settings", { cache: "no-store" });
       if (!res.ok) throw new Error("settings " + res.status);
       settings = await res.json();
+      serverAccountIds = new Set((settings.accounts || []).map((account) => account.id));
       if (!settings.proxyPool) settings.proxyPool = [];
       if (!settings.proxySubscriptions) settings.proxySubscriptions = [];
       if (!settings.clashBridge) {
@@ -2361,24 +2661,160 @@ export const ADMIN_HTML = `<!DOCTYPE html>
     }
 
     async function loadStatus() {
-      const res = await fetch("/admin/api/status");
+      const res = await fetch("/admin/api/status", { cache: "no-store" });
       if (!res.ok) throw new Error("status " + res.status);
       status = await res.json();
     }
 
     async function loadProbes() {
-      const res = await fetch("/admin/api/proxy-pool");
+      const res = await fetch("/admin/api/proxy-pool", { cache: "no-store" });
       if (!res.ok) return;
       const data = await res.json();
       if (data.probeResults && typeof data.probeResults === "object") {
         probeResults = data.probeResults;
       }
+      if (data.batchProbe) batchProgress = data.batchProbe;
     }
 
     async function refreshAll() {
-      await Promise.all([loadSettings(), loadStatus(), loadProbes()]);
+      if (settings && document.querySelector("#accounts .worker-card")) {
+        await reloadAfterBatchPreservingDrafts();
+      } else {
+        await Promise.all([loadSettings(), loadStatus(), loadProbes()]);
+      }
       renderAll();
+      syncBatchProgress(batchProgress);
       toast(t("toastRefreshed"));
+    }
+
+    function updateBatchProgress(progress) {
+      if (!progress) return;
+      const completedIds = new Set(progress.completedIds || []);
+      for (const id of completedIds) testingIds.delete(id);
+      const btn = $("btn-batch-test");
+      if (btn) {
+        btn.disabled = !!progress.running || batchTesting;
+        btn.textContent = progress.running
+          ? (progress.stage === "screening"
+              ? t("batchScreening")(progress.stageCompleted || 0, progress.stageTotal || progress.total || 0)
+              : t("batchProgress")(progress.completed || 0, progress.total || 0))
+          : t("batchTest");
+      }
+      ["btn-save-accounts", "btn-save-gateway", "btn-assign-proxies"].forEach((id) => {
+        const action = $(id);
+        if (action) action.disabled = !!progress.running;
+      });
+      renderNodes();
+    }
+
+    function stopBatchProgressPolling() {
+      if (batchProgressTimer) clearTimeout(batchProgressTimer);
+      batchProgressTimer = null;
+    }
+
+    function scheduleBatchProgressPoll(delay = 750) {
+      stopBatchProgressPolling();
+      batchProgressTimer = setTimeout(async () => {
+        batchProgressTimer = null;
+        await pollBatchProgress();
+        if (batchTesting) scheduleBatchProgressPoll();
+      }, delay);
+    }
+
+    function syncBatchProgress(progress) {
+      if (!progress) return;
+      batchProgress = progress;
+      if (progress.running) {
+        if (!batchTesting) batchBaselineAccountIds = new Set(serverAccountIds);
+        batchTesting = true;
+        batchProgressSeenRunning = true;
+        for (const proxy of settings?.proxyPool || []) testingIds.add(proxy.id);
+        scheduleBatchProgressPoll();
+      }
+      updateBatchProgress(progress);
+    }
+
+    async function reloadAfterBatchPreservingDrafts(includeProbes = true) {
+      const drafts = settings ? collectAccounts() : [];
+      const baseline = new Set(batchBaselineAccountIds);
+      const loaders = [loadSettings(), loadStatus()];
+      if (includeProbes) loaders.push(loadProbes());
+      await Promise.all(loaders);
+      const draftIds = new Set(drafts.map((account) => account.id));
+      const draftAnonymousProxyIds = new Set(drafts
+        .filter((account) => account.kind === "anonymous_zen" && account.proxyId)
+        .map((account) => account.proxyId));
+      const draftAnonymousEgressIps = new Set(drafts
+        .filter((account) => account.kind === "anonymous_zen" && account.proxyId)
+        .map((account) => probeResults[account.proxyId]?.egressIp)
+        .filter(Boolean));
+      const autoAdded = (settings.accounts || []).filter((account) =>
+        !baseline.has(account.id) && !draftIds.has(account.id) &&
+        !(account.kind === "anonymous_zen" && account.proxyId && (
+          draftAnonymousProxyIds.has(account.proxyId) ||
+          (probeResults[account.proxyId]?.egressIp &&
+            draftAnonymousEgressIps.has(probeResults[account.proxyId].egressIp))
+        ))
+      );
+      settings.accounts = [...drafts, ...autoAdded];
+      for (const account of autoAdded) batchBaselineAccountIds.add(account.id);
+    }
+
+    function renderBatchDerivedViews() {
+      const active = document.activeElement?.closest?.(".worker-card");
+      const activeField = document.activeElement;
+      const focusState = active && activeField ? {
+        workerKey: active.dataset.workerKey,
+        fieldClass: ["acc-id", "acc-key", "acc-proxy-id", "acc-kind", "acc-enabled"]
+          .find((name) => activeField.classList.contains(name)),
+        start: activeField.selectionStart,
+        end: activeField.selectionEnd,
+      } : null;
+      renderMetrics("pp-metrics");
+      renderMetrics("ov-metrics");
+      renderIsolation();
+      renderUnassigned();
+      renderAccounts();
+      renderStatusChrome();
+      if (focusState?.fieldClass) {
+        const card = Array.from(document.querySelectorAll("#accounts .worker-card"))
+          .find((item) => item.dataset.workerKey === focusState.workerKey);
+        const field = card?.querySelector("." + focusState.fieldClass);
+        field?.focus();
+        if (typeof field?.setSelectionRange === "function" && focusState.start != null) {
+          field.setSelectionRange(focusState.start, focusState.end ?? focusState.start);
+        }
+      }
+    }
+
+    async function pollBatchProgress() {
+      try {
+        const res = await fetch("/admin/api/proxy-pool", { cache: "no-store" });
+        if (!res.ok) return;
+        const poolState = await res.json();
+        const progress = poolState.batchProbe;
+        if (poolState.probeResults) probeResults = poolState.probeResults;
+        if (settings) renderIsolation();
+        batchProgress = progress;
+        if (progress?.running) batchProgressSeenRunning = true;
+        updateBatchProgress(progress);
+        const addedWorkerCount = progress?.addedWorkerIds?.length || 0;
+        if (progress?.running && addedWorkerCount > lastBatchRenderedWorkerCount) {
+          await reloadAfterBatchPreservingDrafts(false);
+          lastBatchRenderedWorkerCount = addedWorkerCount;
+          renderBatchDerivedViews();
+        }
+        if (progress && !progress.running && batchTesting && batchProgressSeenRunning && !batchRequestActive) {
+          batchTesting = false;
+          testingIds.clear();
+          stopBatchProgressPolling();
+          await reloadAfterBatchPreservingDrafts();
+          renderAll();
+          updateBatchProgress(batchProgress);
+        }
+      } catch {
+        // The original POST remains authoritative; the next poll retries.
+      }
     }
 
     async function testOneProxy(id, name) {
@@ -2389,6 +2825,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         const res = await fetch("/admin/api/proxy-pool/" + encodeURIComponent(id) + "/test", { method: "POST" });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error?.message || ("HTTP " + res.status));
+        if (data.progress) batchProgress = data.progress;
         if (data.probeResults) probeResults = data.probeResults;
         if (data.settings) settings = data.settings;
         else if (data.result) probeResults[id] = data.result;
@@ -2410,34 +2847,44 @@ export const ADMIN_HTML = `<!DOCTYPE html>
       const pool = settings.proxyPool || [];
       if (!pool.length) { toast(t("poolEmpty"), false); return; }
       batchTesting = true;
+      batchRequestActive = true;
+      batchProgressSeenRunning = false;
+      lastBatchRenderedWorkerCount = 0;
+      batchBaselineAccountIds = new Set(serverAccountIds);
       for (const p of pool) testingIds.add(p.id);
       const btn = $("btn-batch-test");
       if (btn) btn.disabled = true;
       renderNodes();
       toast(t("toastTesting"));
+      const request = fetch("/admin/api/proxy-pool/test-batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      scheduleBatchProgressPoll(200);
       try {
-        const res = await fetch("/admin/api/proxy-pool/test-batch", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({}),
-        });
+        const res = await request;
         const data = await res.json();
         if (!res.ok) throw new Error(data.error?.message || ("HTTP " + res.status));
+        if (data.progress) batchProgress = data.progress;
         if (data.probeResults) probeResults = data.probeResults;
         const byId = {};
         for (const p of pool) byId[p.id] = p.name;
         for (const r of data.results || []) pushProbeEvent(r, byId[r.id] || r.id);
         const s = data.summary || { ok: 0, fail: 0, skip: 0 };
         const added = data.autoWorkers?.added || 0;
-        await loadStatus();
+        await reloadAfterBatchPreservingDrafts();
         renderAll();
         toast(t("toastBatchDone")(s.ok || 0, s.fail || 0, s.skip || 0) + (added ? " · " + t("toastBatchWorkers")(added) : ""), (s.fail || 0) === 0);
       } catch (e) {
         toast(String(e.message || e), false);
       } finally {
+        batchRequestActive = false;
+        stopBatchProgressPolling();
         testingIds.clear();
         batchTesting = false;
-        if (btn) btn.disabled = false;
+        batchProgressSeenRunning = false;
+        if (btn) { btn.disabled = false; btn.textContent = t("batchTest"); }
         renderNodes();
         renderActivity();
       }
@@ -2572,11 +3019,23 @@ export const ADMIN_HTML = `<!DOCTYPE html>
     };
 
     $("btn-add-account").onclick = () => {
+      settings.accounts = collectAccounts();
       settings.accounts.push({
         id: "worker-" + (settings.accounts.length + 1),
         kind: "anonymous_zen", enabled: true, apiKey: "", proxyId: null, proxy: null,
       });
       renderAccounts();
+    };
+
+    $("btn-remove-all-workers").onclick = () => {
+      if (document.querySelectorAll("#accounts .worker-card").length === 0) return;
+      openConfirm(t("confirmRemoveAllWorkers"), t("confirmRemoveAllWorkersBody"), () => {
+        settings.accounts = [];
+        collapsedWorkerIds.clear();
+        persistCollapsedWorkers();
+        renderAccounts();
+        toast(t("toastWorkersCleared"));
+      });
     };
 
     $("btn-add-proxy").onclick = async () => {
@@ -2634,10 +3093,14 @@ export const ADMIN_HTML = `<!DOCTYPE html>
       } finally { btn.disabled = false; }
     };
 
+    initSectionCollapsibles();
     applyStaticI18n();
     showPage(page);
     $("run-label").textContent = t("loading");
-    Promise.all([loadSettings(), loadStatus(), loadProbes()]).then(renderAll).catch((e) => toast(String(e), false));
+    Promise.all([loadSettings(), loadStatus(), loadProbes()]).then(() => {
+      renderAll();
+      syncBatchProgress(batchProgress);
+    }).catch((e) => toast(String(e), false));
   </script>
 </body>
 </html>
