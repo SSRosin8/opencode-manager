@@ -180,6 +180,57 @@ describe("UpstreamClient chatCompletions", () => {
     expect(sent.temperature).toBe(0.1);
   });
 
+  it("never silently bypasses an invalid inline proxy", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, { choices: [] }));
+    const client = new UpstreamClient(
+      baseSettings({
+        accounts: [{
+          id: "invalid-proxy",
+          apiKey: "secret",
+          proxyId: null,
+          proxy: { type: "http", host: "", port: 8080 },
+        }],
+      }),
+      fetchImpl
+    );
+
+    await expect(client.chatCompletions({
+      body: { model: "big-pickle" },
+      stream: false,
+    })).rejects.toThrow("Invalid proxy configuration");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("uses only an intentionally unbound worker for direct fallback", async () => {
+    const authHeaders: string[] = [];
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      const auth = new Headers(init?.headers).get("authorization") || "";
+      authHeaders.push(auth);
+      if ((init as RequestInit & { dispatcher?: unknown })?.dispatcher) {
+        throw new Error("bound route failed");
+      }
+      return jsonResponse(200, { choices: [] });
+    });
+    const client = new UpstreamClient(
+      baseSettings({
+        routingStrategy: "mixed",
+        proxyPool: [{
+          id: "bound-proxy", name: "bound", type: "http", host: "127.0.0.1", port: 8080,
+          enabled: true, source: "manual", usable: true,
+        }],
+        accounts: [
+          { id: "bound", apiKey: "bound-key", kind: "authenticated_zen", proxyId: "bound-proxy" },
+          { id: "unbound", apiKey: "unbound-key", kind: "authenticated_zen", proxyId: null },
+        ],
+      }),
+      fetchImpl
+    );
+
+    const result = await client.chatCompletions({ body: { model: "big-pickle" }, stream: false });
+    expect(result.accountId).toBe("unbound");
+    expect(authHeaders.at(-1)).toBe("Bearer unbound-key");
+  });
+
   it("rotates to next key on 429", async () => {
     const authHeaders: string[] = [];
     const events: UpstreamAttemptEvent[] = [];

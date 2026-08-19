@@ -2,7 +2,7 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-Standalone **OpenCode free-worker** LLM gateway: an OpenAI-compatible relay that serves OpenCode's free models through your own API keys.
+Standalone **OpenCode free-worker** LLM gateway: an OpenAI-compatible gateway for free models through anonymous Zen egresses and signed-in Zen keys.
 
 > This repository is derived from [kirafishy/OCFreeRelay](https://github.com/kirafishy/OCFreeRelay), with attribution retained here. It extends the original project with local Clash Controller node import, per-worker egress binding, public-IP verification, faster batch probing, and real worker connection tests.
 
@@ -18,14 +18,20 @@ Standalone **OpenCode free-worker** LLM gateway: an OpenAI-compatible relay that
 
 ## Quick start
 
+Prerequisites: Node.js **20.18.1 or newer** and npm. Mihomo/Clash Meta with its Controller enabled is also required when using Clash protocol nodes.
+
 ```bash
-npm install
+git clone https://github.com/SSRosin8/opencode-manager.git
+cd opencode-manager
+npm ci
 npm run build
 npm start
 # or: npm run dev
 ```
 
-Default port: **9876** (override with `PORT` or admin settings).
+The service listens on `127.0.0.1:9876` by default. For first-time setup, Clash/Mihomo configuration, OpenCode integration, verification, backups, and troubleshooting, see:
+
+> **[Local usage guide](docs/USAGE.md)**
 
 - Admin UI: http://127.0.0.1:9876/
 - Chat: `POST http://127.0.0.1:9876/v1/chat/completions`
@@ -38,10 +44,16 @@ Default port: **9876** (override with `PORT` or admin settings).
 | Admin UI | Base URL, workers (API keys), proxy pool bindings, CLI header synthesis |
 | `data/settings.json` | Persisted settings (auto-created) |
 | `PORT` | Listen port |
+| `OCFREERELAY_HOST` | Bind address, defaults to `127.0.0.1`; use `0.0.0.0` only behind protected admin access |
 | `OCFREERELAY_SETTINGS_PATH` | Custom settings file path |
-| `OPENCODE_SYNTHESIZE_CLI_HEADERS` | `true` to synthesize CLI identity headers (also toggleable in admin) |
-| `OPENCODE_USER_AGENT` / `OPENCODE_CLIENT` / `OPENCODE_PROJECT` | CLI default values |
+| `OCFREERELAY_STATS_PATH` | Custom Worker statistics file path |
 | `OCFREERELAY_PRICING_URL` | Override the Zen pricing page URL used to scrape free models |
+| `OPENCODE_SYNTHESIZE_CLI_HEADERS` | `true` to synthesize CLI identity headers (also configurable in Admin) |
+| `OPENCODE_USER_AGENT` / `OPENCODE_CLIENT` / `OPENCODE_PROJECT` | Default values for synthesized CLI identity headers |
+
+The project does not load `.env` automatically. Export variables in the shell or start with `node --env-file=.env dist/index.js`. A port changed in Admin takes effect after restart.
+
+> Security: the relay token protects model relay endpoints only, not the Admin UI. Admin APIs can return Zen keys, proxy passwords, and subscription URLs. Never expose the admin port directly to the public Internet or an untrusted LAN.
 
 ### Native OpenCode setup
 
@@ -74,7 +86,7 @@ This gateway serves **only free models** — paid models are never exposed to cl
 - `POST /v1/chat/completions` rejects any request for a non-free model with `403 model_not_allowed` **before** any upstream call.
 - The scraped set is cached to `data/free-models.json`. If a scrape fails, the last successful set is kept; before the first successful scrape a static baseline of the currently-known free ids is used.
 
-Current free models:
+Static baseline models (the runtime refreshes from Zen pricing; use Admin/API as the authority):
 
 ```text
 big-pickle  deepseek-v4-flash-free  mimo-v2.5-free  laguna-s-2.1-free

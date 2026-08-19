@@ -13,6 +13,28 @@ type ClashProxyInfo = {
   now?: string;
 };
 
+export const DEFAULT_CONTROLLER_TIMEOUT_MS = 5000;
+
+async function fetchController(
+  fetchImpl: typeof fetch,
+  input: string | URL | Request,
+  init: RequestInit = {},
+  timeoutMs = DEFAULT_CONTROLLER_TIMEOUT_MS
+): Promise<Response> {
+  const controller = new AbortController();
+  const externalSignal = init.signal;
+  const forwardAbort = () => controller.abort(externalSignal?.reason);
+  if (externalSignal?.aborted) forwardAbort();
+  else externalSignal?.addEventListener("abort", forwardAbort, { once: true });
+  const timer = setTimeout(() => controller.abort(), Math.max(1, timeoutMs));
+  try {
+    return await fetchImpl(input, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+    externalSignal?.removeEventListener("abort", forwardAbort);
+  }
+}
+
 function controllerHeaders(bridge: ClashBridgeConfig): Record<string, string> {
   const headers: Record<string, string> = {};
   if (bridge.apiSecret) headers.Authorization = `Bearer ${bridge.apiSecret}`;
@@ -30,7 +52,8 @@ function controllerNodeId(apiBase: string, group: string, name: string): string 
 /** Import leaf nodes already loaded by a running Clash/Mihomo Controller. */
 export async function importClashControllerNodes(
   bridge: ClashBridgeConfig,
-  fetchImpl: typeof fetch = globalThis.fetch
+  fetchImpl: typeof fetch = globalThis.fetch,
+  timeoutMs = DEFAULT_CONTROLLER_TIMEOUT_MS
 ): Promise<{
   proxies: PoolProxy[];
   group: string;
@@ -38,9 +61,9 @@ export async function importClashControllerNodes(
   groups: string[];
 }> {
   const base = bridge.apiBase.replace(/\/+$/, "");
-  const res = await fetchImpl(`${base}/proxies`, {
+  const res = await fetchController(fetchImpl, `${base}/proxies`, {
     headers: controllerHeaders(bridge),
-  });
+  }, timeoutMs);
   if (!res.ok) {
     await res.text().catch(() => "");
     throw new Error(`controller HTTP ${res.status} on /proxies`);
@@ -140,12 +163,15 @@ export async function probeClashNodeDelay(
 
 export async function getClashSelectorCurrent(
   bridge: ClashBridgeConfig,
-  fetchImpl: typeof fetch = globalThis.fetch
+  fetchImpl: typeof fetch = globalThis.fetch,
+  timeoutMs = DEFAULT_CONTROLLER_TIMEOUT_MS
 ): Promise<string | null> {
   const base = bridge.apiBase.replace(/\/+$/, "");
-  const res = await fetchImpl(
+  const res = await fetchController(
+    fetchImpl,
     `${base}/proxies/${encodeURIComponent(bridge.selectorGroup)}`,
-    { headers: controllerHeaders(bridge) }
+    { headers: controllerHeaders(bridge) },
+    timeoutMs
   );
   if (!res.ok) {
     await res.text().catch(() => "");
@@ -163,7 +189,8 @@ export async function getClashSelectorCurrent(
 export async function selectClashProxy(
   bridge: ClashBridgeConfig,
   nodeName: string,
-  fetchImpl: typeof fetch = globalThis.fetch
+  fetchImpl: typeof fetch = globalThis.fetch,
+  timeoutMs = DEFAULT_CONTROLLER_TIMEOUT_MS
 ): Promise<{ group: string }> {
   const base = bridge.apiBase.replace(/\/+$/, "");
   const headers: Record<string, string> = {
@@ -175,11 +202,11 @@ export async function selectClashProxy(
 
   const trySwitch = async (group: string): Promise<boolean> => {
     const url = `${base}/proxies/${encodeURIComponent(group)}`;
-    const res = await fetchImpl(url, {
+    const res = await fetchController(fetchImpl, url, {
       method: "PUT",
       headers,
       body: JSON.stringify({ name: nodeName }),
-    });
+    }, timeoutMs);
     if (res.ok) return true;
     // drain body
     await res.text().catch(() => "");
@@ -199,20 +226,21 @@ export async function selectClashProxy(
 /** Probe controller: GET /version or /proxies */
 export async function probeClashBridge(
   bridge: ClashBridgeConfig,
-  fetchImpl: typeof fetch = globalThis.fetch
+  fetchImpl: typeof fetch = globalThis.fetch,
+  timeoutMs = DEFAULT_CONTROLLER_TIMEOUT_MS
 ): Promise<{ ok: boolean; message: string; groups?: string[] }> {
   const base = bridge.apiBase.replace(/\/+$/, "");
   const headers = controllerHeaders(bridge);
 
   try {
-    const verRes = await fetchImpl(`${base}/version`, { headers });
+    const verRes = await fetchController(fetchImpl, `${base}/version`, { headers }, timeoutMs);
     if (!verRes.ok) {
       return { ok: false, message: `controller HTTP ${verRes.status} on /version` };
     }
     const ver = (await verRes.json().catch(() => ({}))) as { version?: string };
     let groups: string[] | undefined;
     try {
-      const pRes = await fetchImpl(`${base}/proxies`, { headers });
+      const pRes = await fetchController(fetchImpl, `${base}/proxies`, { headers }, timeoutMs);
       if (pRes.ok) {
         const body = (await pRes.json()) as {
           proxies?: Record<string, { type?: string }>;

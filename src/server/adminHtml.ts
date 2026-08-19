@@ -698,12 +698,13 @@ export const ADMIN_HTML = `<!DOCTYPE html>
       .app { height: auto; min-height: 100vh; }
       .content { overflow: visible; padding: 14px 12px 24px; }
       #accounts.worker-columns { grid-template-columns: 1fr; }
-      .worker-column-list.worker-list-scroll { max-height: 62vh; }
+      .worker-column-list.worker-list-scroll { max-height: none; overflow: visible; padding-right: 0; }
       .worker-card .hd { flex-wrap: wrap; gap: 8px; }
       .worker-card .hd { position: relative; }
       .worker-card .worker-title { width: 100%; padding-right: 34px; }
       .worker-card .worker-actions { flex-wrap: wrap; }
       .worker-card .btn-toggle-worker { position: absolute; top: 0; right: 0; }
+      .confirm-float { left: 12px; right: 12px; bottom: 12px; width: auto; }
     }
   </style>
 </head>
@@ -1121,7 +1122,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
               </label>
               <button type="button" class="btn" id="btn-assign-proxies" data-i18n="assignHealthyProxies">Assign healthy proxies</button>
               <button type="button" class="btn" id="btn-toggle-all-workers" data-i18n="collapseAll">Collapse all</button>
-              <button type="button" class="btn" id="btn-add-account" data-i18n="addWorker">Add worker</button>
+              <button type="button" class="btn" id="btn-add-account" data-i18n="addAuthenticatedWorker">Add signed-in Worker</button>
               <button type="button" class="btn btn-danger" id="btn-remove-all-workers" data-i18n="removeAllWorkers">Remove all</button>
               <button type="button" class="btn btn-primary" id="btn-save-accounts" data-i18n="saveWorkers">Save workers</button>
             </div>
@@ -1334,16 +1335,16 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         noUnassigned: "All workers are assigned",
         unassignedCount: (n) => n + " worker(s) without a pool binding",
         openaiBase: "OpenAI-compatible base", adminApis: "Admin APIs",
-        addWorker: "Add worker", saveWorkers: "Save workers", removeAllWorkers: "Remove all",
+        addWorker: "Add worker", addAuthenticatedWorker: "Add signed-in Worker", saveWorkers: "Save workers", removeAllWorkers: "Remove all",
         removeGroupWorkers: "Clear group",
         anonymousWorkers: "Anonymous Zen", authenticatedWorkers: "Signed-in Zen",
         noAnonymousWorkers: "No anonymous Workers", noAuthenticatedWorkers: "No signed-in Workers",
         confirmRemoveAllWorkers: "Remove all Workers?",
-        confirmRemoveAllWorkersBody: "All Workers will be removed from this form. Save Workers to apply the change.",
-        toastWorkersCleared: "All Workers removed from the form — save to apply",
+        confirmRemoveAllWorkersBody: "All Workers will be permanently removed.",
+        toastWorkersCleared: "All Workers removed",
         confirmRemoveWorkerGroup: (name) => "Remove all " + name + " Workers?",
-        confirmRemoveWorkerGroupBody: (name) => "All " + name + " Workers will be removed from this form. Save Workers to apply the change.",
-        toastWorkerGroupCleared: (name) => name + " Workers removed from the form — save to apply",
+        confirmRemoveWorkerGroupBody: (name) => "All " + name + " Workers will be permanently removed.",
+        toastWorkerGroupCleared: (name) => name + " Workers removed",
         testWorker: "Test connection", testingWorker: "Testing…",
         saveBeforeWorkerTest: "Save this worker before testing",
         workerTestOk: "Connection succeeded", workerTestFail: "Connection failed",
@@ -1507,16 +1508,16 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         noUnassigned: "所有 Worker 均已绑定",
         unassignedCount: (n) => n + " 个 Worker 未绑定代理",
         openaiBase: "OpenAI 兼容 Base", adminApis: "管理 API",
-        addWorker: "添加 Worker", saveWorkers: "保存 Workers", removeAllWorkers: "一键删除",
+        addWorker: "添加 Worker", addAuthenticatedWorker: "添加登录 Zen", saveWorkers: "保存 Workers", removeAllWorkers: "一键删除",
         removeGroupWorkers: "清空此列",
         anonymousWorkers: "匿名 Zen", authenticatedWorkers: "登录 Zen",
         noAnonymousWorkers: "暂无匿名 Worker", noAuthenticatedWorkers: "暂无登录 Zen Worker",
         confirmRemoveAllWorkers: "删除全部 Workers？",
-        confirmRemoveAllWorkersBody: "将从当前表单移除全部 Worker，点击保存 Workers 后生效。",
-        toastWorkersCleared: "已从表单移除全部 Workers，请保存后生效",
+        confirmRemoveAllWorkersBody: "所有 Worker 将被永久删除。",
+        toastWorkersCleared: "已删除所有 Worker",
         confirmRemoveWorkerGroup: (name) => "删除全部" + name + " Workers？",
-        confirmRemoveWorkerGroupBody: (name) => "将从当前表单移除全部" + name + " Worker，点击保存 Workers 后生效。",
-        toastWorkerGroupCleared: (name) => "已从表单移除全部" + name + " Workers，请保存后生效",
+        confirmRemoveWorkerGroupBody: (name) => "全部" + name + " Worker 将被永久删除。",
+        toastWorkerGroupCleared: (name) => "已删除全部" + name + " Worker",
         testWorker: "测试连接", testingWorker: "测试中…",
         saveBeforeWorkerTest: "请先保存此 Worker 再测试",
         workerTestOk: "连接成功", workerTestFail: "连接失败",
@@ -1614,6 +1615,8 @@ export const ADMIN_HTML = `<!DOCTYPE html>
     const testingIds = new Set();
     let batchTesting = false;
     let batchProgressTimer = null;
+    let batchProgressAbort = null;
+    let batchPollGeneration = 0;
     let batchRequestActive = false;
     let batchProgressSeenRunning = false;
     let batchProgress = null;
@@ -2343,14 +2346,14 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         btn.onclick = () => {
           const kind = btn.dataset.kind;
           const label = t(kind === "authenticated_zen" ? "authenticatedWorkers" : "anonymousWorkers");
-          openConfirm(t("confirmRemoveWorkerGroup")(label), t("confirmRemoveWorkerGroupBody")(label), () => {
+          openConfirm(t("confirmRemoveWorkerGroup")(label), t("confirmRemoveWorkerGroupBody")(label), async () => {
             const drafts = collectAccounts();
-            settings.accounts = drafts.filter((account) => account.kind !== kind);
+            const remaining = drafts.filter((account) => account.kind !== kind);
+            if (!await persistWorkerAccounts(remaining)) return;
             for (const account of drafts) {
               if (account.kind === kind) collapsedWorkerIds.delete(String(account.id));
             }
             persistCollapsedWorkers();
-            renderAccounts();
             toast(t("toastWorkerGroupCleared")(label));
           });
         };
@@ -2453,6 +2456,31 @@ export const ADMIN_HTML = `<!DOCTYPE html>
           proxyId: el.querySelector(".acc-proxy-id").value || null,
           proxy: null,
         }));
+    }
+
+    async function persistWorkerAccounts(accounts) {
+      const body = {
+        ...settings,
+        routingStrategy: $("routing-strategy")?.value || settings.routingStrategy || "anonymous_first",
+        accounts,
+      };
+      try {
+        const res = await fetch("/admin/api/settings", {
+          method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error?.message || t("toastSaveFail"));
+        }
+        settings = await res.json();
+        serverAccountIds = new Set((settings.accounts || []).map((account) => account.id));
+        await loadStatus();
+        renderAll();
+        return true;
+      } catch (error) {
+        toast(String(error.message || error), false);
+        return false;
+      }
     }
 
     function fillGateway() {
@@ -2673,7 +2701,19 @@ export const ADMIN_HTML = `<!DOCTYPE html>
       if (data.probeResults && typeof data.probeResults === "object") {
         probeResults = data.probeResults;
       }
-      if (data.batchProbe) batchProgress = data.batchProbe;
+      acceptBatchProgress(data.batchProbe);
+    }
+
+    function acceptBatchProgress(progress) {
+      if (!progress) return false;
+      const currentStarted = batchProgress?.startedAt || "";
+      const nextStarted = progress.startedAt || "";
+      const currentUpdated = batchProgress?.updatedAt || "";
+      const nextUpdated = progress.updatedAt || "";
+      if (currentStarted && nextStarted && nextStarted < currentStarted) return false;
+      if (nextStarted === currentStarted && currentUpdated && nextUpdated < currentUpdated) return false;
+      batchProgress = progress;
+      return true;
     }
 
     async function refreshAll() {
@@ -2710,14 +2750,17 @@ export const ADMIN_HTML = `<!DOCTYPE html>
     function stopBatchProgressPolling() {
       if (batchProgressTimer) clearTimeout(batchProgressTimer);
       batchProgressTimer = null;
+      if (batchProgressAbort) batchProgressAbort.abort();
+      batchProgressAbort = null;
     }
 
-    function scheduleBatchProgressPoll(delay = 750) {
+    function scheduleBatchProgressPoll(delay = 500) {
       stopBatchProgressPolling();
+      const generation = batchPollGeneration;
       batchProgressTimer = setTimeout(async () => {
         batchProgressTimer = null;
-        await pollBatchProgress();
-        if (batchTesting) scheduleBatchProgressPoll();
+        await pollBatchProgress(generation);
+        if (batchTesting && generation === batchPollGeneration) scheduleBatchProgressPoll();
       }, delay);
     }
 
@@ -2787,20 +2830,26 @@ export const ADMIN_HTML = `<!DOCTYPE html>
       }
     }
 
-    async function pollBatchProgress() {
+    async function pollBatchProgress(generation = batchPollGeneration) {
+      const controller = new AbortController();
+      batchProgressAbort = controller;
       try {
-        const res = await fetch("/admin/api/proxy-pool", { cache: "no-store" });
+        const res = await fetch("/admin/api/proxy-pool", { cache: "no-store", signal: controller.signal });
         if (!res.ok) return;
         const poolState = await res.json();
+        if (generation !== batchPollGeneration || controller.signal.aborted) return;
         const progress = poolState.batchProbe;
+        if (!acceptBatchProgress(progress)) return;
         if (poolState.probeResults) probeResults = poolState.probeResults;
-        if (settings) renderIsolation();
-        batchProgress = progress;
         if (progress?.running) batchProgressSeenRunning = true;
         updateBatchProgress(progress);
+        renderMetrics("pp-metrics");
+        renderMetrics("ov-metrics");
+        renderIsolation();
         const addedWorkerCount = progress?.addedWorkerIds?.length || 0;
-        if (progress?.running && addedWorkerCount > lastBatchRenderedWorkerCount) {
+        if (addedWorkerCount > lastBatchRenderedWorkerCount) {
           await reloadAfterBatchPreservingDrafts(false);
+          if (generation !== batchPollGeneration || controller.signal.aborted) return;
           lastBatchRenderedWorkerCount = addedWorkerCount;
           renderBatchDerivedViews();
         }
@@ -2814,6 +2863,8 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         }
       } catch {
         // The original POST remains authoritative; the next poll retries.
+      } finally {
+        if (batchProgressAbort === controller) batchProgressAbort = null;
       }
     }
 
@@ -2825,7 +2876,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         const res = await fetch("/admin/api/proxy-pool/" + encodeURIComponent(id) + "/test", { method: "POST" });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error?.message || ("HTTP " + res.status));
-        if (data.progress) batchProgress = data.progress;
+        acceptBatchProgress(data.progress);
         if (data.probeResults) probeResults = data.probeResults;
         if (data.settings) settings = data.settings;
         else if (data.result) probeResults[id] = data.result;
@@ -2848,6 +2899,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
       if (!pool.length) { toast(t("poolEmpty"), false); return; }
       batchTesting = true;
       batchRequestActive = true;
+      batchPollGeneration += 1;
       batchProgressSeenRunning = false;
       lastBatchRenderedWorkerCount = 0;
       batchBaselineAccountIds = new Set(serverAccountIds);
@@ -2866,7 +2918,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         const res = await request;
         const data = await res.json();
         if (!res.ok) throw new Error(data.error?.message || ("HTTP " + res.status));
-        if (data.progress) batchProgress = data.progress;
+        acceptBatchProgress(data.progress);
         if (data.probeResults) probeResults = data.probeResults;
         const byId = {};
         for (const p of pool) byId[p.id] = p.name;
@@ -2880,13 +2932,25 @@ export const ADMIN_HTML = `<!DOCTYPE html>
         toast(String(e.message || e), false);
       } finally {
         batchRequestActive = false;
-        stopBatchProgressPolling();
-        testingIds.clear();
-        batchTesting = false;
-        batchProgressSeenRunning = false;
-        if (btn) { btn.disabled = false; btn.textContent = t("batchTest"); }
-        renderNodes();
-        renderActivity();
+        await pollBatchProgress();
+        if (batchProgress?.running) {
+          batchTesting = true;
+          batchProgressSeenRunning = true;
+          scheduleBatchProgressPoll();
+          updateBatchProgress(batchProgress);
+        } else {
+          batchPollGeneration += 1;
+          stopBatchProgressPolling();
+          testingIds.clear();
+          batchTesting = false;
+          batchProgressSeenRunning = false;
+          const finishedProgress = { ...(batchProgress || {}), running: false };
+          batchProgress = finishedProgress;
+          updateBatchProgress(finishedProgress);
+          if (btn) btn.textContent = t("batchTest");
+          renderNodes();
+          renderActivity();
+        }
       }
     }
 
@@ -2977,15 +3041,7 @@ export const ADMIN_HTML = `<!DOCTYPE html>
     };
 
     $("btn-save-accounts").onclick = async () => {
-      const body = { ...settings, routingStrategy: $("routing-strategy").value, accounts: collectAccounts() };
-      const res = await fetch("/admin/api/settings", {
-        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-      });
-      if (!res.ok) { toast(t("toastSaveFail"), false); return; }
-      settings = await res.json();
-      await loadStatus();
-      renderAll();
-      toast(t("toastWorkersSaved"));
+      if (await persistWorkerAccounts(collectAccounts())) toast(t("toastWorkersSaved"));
     };
 
     $("btn-assign-proxies").onclick = async () => {
@@ -3020,20 +3076,22 @@ export const ADMIN_HTML = `<!DOCTYPE html>
 
     $("btn-add-account").onclick = () => {
       settings.accounts = collectAccounts();
+      const used = new Set(settings.accounts.map((account) => account.id));
+      let number = settings.accounts.length + 1;
+      while (used.has("worker-" + number)) number += 1;
       settings.accounts.push({
-        id: "worker-" + (settings.accounts.length + 1),
-        kind: "anonymous_zen", enabled: true, apiKey: "", proxyId: null, proxy: null,
+        id: "worker-" + number,
+        kind: "authenticated_zen", enabled: true, apiKey: "", proxyId: null, proxy: null,
       });
       renderAccounts();
     };
 
     $("btn-remove-all-workers").onclick = () => {
       if (document.querySelectorAll("#accounts .worker-card").length === 0) return;
-      openConfirm(t("confirmRemoveAllWorkers"), t("confirmRemoveAllWorkersBody"), () => {
-        settings.accounts = [];
+      openConfirm(t("confirmRemoveAllWorkers"), t("confirmRemoveAllWorkersBody"), async () => {
+        if (!await persistWorkerAccounts([])) return;
         collapsedWorkerIds.clear();
         persistCollapsedWorkers();
-        renderAccounts();
         toast(t("toastWorkersCleared"));
       });
     };

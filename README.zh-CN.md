@@ -2,7 +2,7 @@
 
 [English](README.md) | **简体中文**
 
-独立的 **OpenCode 免费 Worker** LLM 网关：一个 OpenAI 兼容的中继，用自己的 API Key 提供 OpenCode 免费模型。
+独立的 **OpenCode 免费 Worker** LLM 网关：通过匿名 Zen 出口和登录 Zen Key 提供 OpenCode 免费模型的 OpenAI 兼容网关。
 
 > 本仓库基于 [kirafishy/OCFreeRelay](https://github.com/kirafishy/OCFreeRelay) 二次开发，并在此保留来源说明；新增本机 Clash Controller 节点导入、Worker 独立出口绑定、真实出口 IP 验证、快速批量测试和 Worker 真实连接测试等功能。
 
@@ -18,14 +18,20 @@
 
 ## 快速开始
 
+前置条件：Node.js **20.18.1 或更高版本**、npm。使用 Clash/Mihomo 协议节点时，还需要已开启 Controller 的 Mihomo/Clash Meta。
+
 ```bash
-npm install
+git clone https://github.com/SSRosin8/opencode-manager.git
+cd opencode-manager
+npm ci
 npm run build
 npm start
 # 或: npm run dev
 ```
 
-默认端口：**9876**（可通过 `PORT` 或管理后台设置覆盖）。
+默认仅监听 `127.0.0.1:9876`。完整的首次配置、Clash/Mihomo、OpenCode 接入、验证、备份和故障排查步骤请阅读：
+
+> **[本机使用指南](docs/USAGE.zh-CN.md)**
 
 - 管理后台：http://127.0.0.1:9876/
 - 对话：`POST http://127.0.0.1:9876/v1/chat/completions`
@@ -38,10 +44,16 @@ npm start
 | 管理后台 | Base URL、Worker（API Key）、代理池绑定、CLI 请求头合成 |
 | `data/settings.json` | 持久化设置（自动创建） |
 | `PORT` | 监听端口 |
+| `OCFREERELAY_HOST` | 监听地址，默认 `127.0.0.1`；仅在已保护后台时改为 `0.0.0.0` |
 | `OCFREERELAY_SETTINGS_PATH` | 自定义设置文件路径 |
-| `OPENCODE_SYNTHESIZE_CLI_HEADERS` | 设为 `true` 合成 CLI 身份请求头（也可在管理后台开关） |
-| `OPENCODE_USER_AGENT` / `OPENCODE_CLIENT` / `OPENCODE_PROJECT` | CLI 默认值 |
+| `OCFREERELAY_STATS_PATH` | 自定义 Worker 统计文件路径 |
 | `OCFREERELAY_PRICING_URL` | 覆盖用于抓取免费模型的 Zen 定价页面 URL |
+| `OPENCODE_SYNTHESIZE_CLI_HEADERS` | 设为 `true` 时合成 CLI 身份请求头（也可在后台配置） |
+| `OPENCODE_USER_AGENT` / `OPENCODE_CLIENT` / `OPENCODE_PROJECT` | 合成 CLI 身份请求头时使用的默认值 |
+
+项目不会自动读取 `.env`；请使用 shell 环境变量，或通过 `node --env-file=.env dist/index.js` 启动。后台修改端口后需要重启服务。
+
+> 安全提示：网关令牌只保护模型转发接口，不保护管理后台。管理 API 可读取 Zen Key、代理口令和订阅 URL，因此不要将管理端口直接暴露到公网或不可信局域网。
 
 ### OpenCode 原生接入
 
@@ -74,7 +86,7 @@ npm start
 - `POST /v1/chat/completions` 会在**任何上游调用之前**，以 `403 model_not_allowed` 拒绝非免费模型的请求。
 - 抓取结果缓存到 `data/free-models.json`。抓取失败时保留上一次成功的集合；首次成功抓取之前使用当前已知免费 ID 的静态基线。
 
-当前免费模型：
+静态基线模型（运行时会从 Zen 定价页刷新，以后台/API显示为准）：
 
 ```text
 big-pickle  deepseek-v4-flash-free  mimo-v2.5-free  laguna-s-2.1-free

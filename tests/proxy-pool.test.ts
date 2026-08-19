@@ -17,7 +17,11 @@ import {
 } from "../src/proxy/pool.js";
 import { parseSubscriptionBody, fetchClashSubscription } from "../src/proxy/clash.js";
 import { UpstreamClient } from "../src/proxy/upstream.js";
-import { importClashControllerNodes } from "../src/proxy/clashBridge.js";
+import {
+  getClashSelectorCurrent,
+  importClashControllerNodes,
+  selectClashProxy,
+} from "../src/proxy/clashBridge.js";
 import { SettingsStore, type GatewaySettings } from "../src/settings/store.js";
 import { createApp, close, listen, type App } from "../src/server/http.js";
 import { ProbeResultCache } from "../src/proxy/probe.js";
@@ -160,6 +164,44 @@ proxy-groups:
 });
 
 describe("Clash Controller import", () => {
+  function hangingControllerFetch(onSignal?: (signal: AbortSignal) => void): typeof fetch {
+    return (async (_url: string | URL | Request, init?: RequestInit) => {
+      const signal = init?.signal;
+      if (!signal) throw new Error("missing abort signal");
+      onSignal?.(signal);
+      return await new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener(
+          "abort",
+          () => reject(new DOMException("aborted", "AbortError")),
+          { once: true }
+        );
+      });
+    }) as typeof fetch;
+  }
+
+  it("bounds selector reads and switches with an abort timeout", async () => {
+    const bridge = {
+      ...settings().clashBridge,
+      enabled: true,
+      selectorGroup: "Proxy",
+    };
+    let readSignal: AbortSignal | undefined;
+    await expect(
+      getClashSelectorCurrent(bridge, hangingControllerFetch((signal) => {
+        readSignal = signal;
+      }), 20)
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(readSignal?.aborted).toBe(true);
+
+    let switchSignal: AbortSignal | undefined;
+    await expect(
+      selectClashProxy(bridge, "Mexico", hangingControllerFetch((signal) => {
+        switchSignal = signal;
+      }), 20)
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(switchSignal?.aborted).toBe(true);
+  });
+
   it("imports only leaf nodes with stable ids and exact names", async () => {
     const calls: Array<{ url: string; auth: string | null }> = [];
     const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
@@ -391,6 +433,17 @@ describe("assignHealthyProxiesToWorkers", () => {
     expect(result.unassigned).toBe(1);
     expect(result.accounts[0].proxyId).toBe("only");
     expect(result.accounts[1].proxyId).toBeNull();
+  });
+
+  it("preserves disabled state while assigning proxies", () => {
+    const result = assignHealthyProxiesToWorkers({
+      accounts: [{ id: "paused", apiKey: "", enabled: false, proxyId: null, proxy: null }],
+      pool: [px("only")],
+      probeResults: {
+        only: { ok: true, health: "healthy", latencyMs: 10, anonymousZen: { ok: true } },
+      },
+    });
+    expect(result.accounts[0]).toMatchObject({ id: "paused", enabled: false, proxyId: "only" });
   });
 
   it("does not assign two nodes with the same measured egress IP", () => {
@@ -784,6 +837,7 @@ proxies:
       proxyName: "Mexico",
     });
     expect(upstreamFetch).toHaveBeenCalledTimes(1);
+    expect(app.probes.get("px")?.anonymousZen).toBeNull();
 
     const unbound = await fetch(`${base}/admin/api/workers/other/test`, { method: "POST" });
     expect(unbound.status).toBe(400);

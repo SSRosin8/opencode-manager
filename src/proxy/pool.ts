@@ -469,8 +469,7 @@ export function assignHealthyProxiesToWorkers(
       assigned += 1;
       assignments.push({ accountId: a.id, proxyId: p.id, proxyName: p.name });
       return {
-        id: a.id,
-        apiKey: a.apiKey ?? "",
+        ...a,
         kind,
         proxyId: p.id,
         proxy: null as AccountProxy,
@@ -479,8 +478,7 @@ export function assignHealthyProxiesToWorkers(
     unassigned += 1;
     assignments.push({ accountId: a.id, proxyId: null, proxyName: null });
     return {
-      id: a.id,
-      apiKey: a.apiKey ?? "",
+      ...a,
       kind,
       proxyId: null,
       proxy: null as AccountProxy,

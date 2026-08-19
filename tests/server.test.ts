@@ -68,7 +68,7 @@ describe("gateway HTTP entry", () => {
     }
   });
 
-  it("protects only /v1 routes with X-OC-Relay-Key when configured", async () => {
+  it("protects all relay route aliases with X-OC-Relay-Key when configured", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ocfr-"));
     const store = new SettingsStore(join(dir, "settings.json"));
     await store.save({
@@ -110,6 +110,16 @@ describe("gateway HTTP entry", () => {
       expect(incorrect.status).toBe(401);
       expect(upstreamCalls).toBe(0);
 
+      const aliasMissing = await fetch(`http://127.0.0.1:${port}/models`);
+      expect(aliasMissing.status).toBe(401);
+
+      const chatAliasMissing = await fetch(`http://127.0.0.1:${port}/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "big-pickle", messages: [] }),
+      });
+      expect(chatAliasMissing.status).toBe(401);
+
       const authorized = await fetch(`http://127.0.0.1:${port}/v1/models`, {
         headers: { "X-OC-Relay-Key": "relay-secret" },
       });
@@ -120,6 +130,7 @@ describe("gateway HTTP entry", () => {
       expect(health.status).toBe(200);
       const admin = await fetch(`http://127.0.0.1:${port}/admin/api/settings`);
       expect(admin.status).toBe(200);
+      expect(admin.headers.get("access-control-allow-origin")).toBeNull();
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -167,6 +178,19 @@ describe("gateway HTTP entry", () => {
         }),
       });
       expect(duplicateRes.status).toBe(400);
+
+      const duplicateIds = await fetch(`http://127.0.0.1:${port}/admin/api/settings`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accounts: [
+            { id: "same", apiKey: "a", proxy: null },
+            { id: "same", apiKey: "b", proxy: null },
+          ],
+        }),
+      });
+      expect(duplicateIds.status).toBe(400);
+      expect(await duplicateIds.json()).toMatchObject({ error: { type: "invalid_worker_ids" } });
       expect(await duplicateRes.json()).toMatchObject({
         error: { type: "duplicate_worker_egress" },
       });
@@ -564,6 +588,19 @@ describe("gateway HTTP entry", () => {
         }),
       });
       expect(okRes.status).toBe(200);
+
+      const prefixedRes = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "opencode/big-pickle",
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      });
+      expect(prefixedRes.status).toBe(200);
+      expect(await prefixedRes.json()).toMatchObject({
+        choices: [{ message: { content: "ok-big-pickle" } }],
+      });
 
       // chat to a paid model is rejected up front (no upstream call)
       const paidRes = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {

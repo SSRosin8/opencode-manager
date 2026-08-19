@@ -254,12 +254,9 @@ export class UpstreamClient {
   }
 
   private dispatcherFor(proxy: AccountProxy) {
-    if (!proxy?.host || !proxy.port) return undefined;
-    try {
-      return createProxyDispatcher(proxy);
-    } catch {
-      return undefined;
-    }
+    if (!proxy) return undefined;
+    if (!proxy.host || !proxy.port) throw new Error("Invalid proxy configuration");
+    return createProxyDispatcher(proxy);
   }
 
   private async rawFetch(
@@ -348,7 +345,7 @@ export class UpstreamClient {
     const maxAttempts = Math.max(1, this.rotator.getAccounts().length);
     const directFallbackAllowed = this.rotator
       .getAccounts()
-      .some((account) => !account.proxyId);
+      .some((account) => !account.proxyId && !account.proxy);
     const totalAttempts = maxAttempts + (directFallbackAllowed ? 1 : 0);
     const requestId = randomUUID();
     let last: UpstreamResult | null = null;
@@ -461,7 +458,10 @@ export class UpstreamClient {
 
     // Last resort: direct (no proxy) so a misconfigured Clash doesn't total black-hole chat
     const fallbackStartedAt = Date.now();
-    const fallbackAccount = this.rotator.getAccounts()[0];
+    const fallbackAccount = this.rotator
+      .getAccounts()
+      .find((account) => !account.proxyId && !account.proxy);
+    if (!fallbackAccount) throw lastError ?? new Error("All bound worker egress routes failed");
     try {
       const headers = this.buildHeaders(
         effectiveApiKey(
@@ -479,8 +479,8 @@ export class UpstreamClient {
       this.emitAttempt({
         requestId,
         operation: "chat",
-        accountId: "direct-fallback",
-        accountKind: fallbackAccount?.kind ?? "anonymous_zen",
+        accountId: fallbackAccount.id,
+        accountKind: fallbackAccount.kind,
         proxyId: null,
         clashNodeName: null,
         model: model || null,
@@ -497,7 +497,7 @@ export class UpstreamClient {
         status: response.status,
         headers: response.headers,
         body: response.body,
-        accountId: "direct-fallback",
+        accountId: fallbackAccount.id,
         proxyId: null,
         clashNodeName: null,
       };
@@ -505,8 +505,8 @@ export class UpstreamClient {
       this.emitAttempt({
         requestId,
         operation: "chat",
-        accountId: "direct-fallback",
-        accountKind: fallbackAccount?.kind ?? "anonymous_zen",
+        accountId: fallbackAccount.id,
+        accountKind: fallbackAccount.kind,
         proxyId: null,
         clashNodeName: null,
         model: model || null,
@@ -514,7 +514,7 @@ export class UpstreamClient {
         maxAttempts: totalAttempts,
         status: null,
         outcome: "transport_error",
-        error: safeErrorMessage(error, fallbackAccount?.apiKey ?? ""),
+        error: safeErrorMessage(error, fallbackAccount.apiKey),
         latencyMs: Date.now() - fallbackStartedAt,
         willRetry: false,
         at: new Date().toISOString(),
@@ -536,7 +536,7 @@ export class UpstreamClient {
     const maxAttempts = Math.max(1, this.rotator.getAccounts().length);
     const directFallbackAllowed = this.rotator
       .getAccounts()
-      .some((account) => !account.proxyId);
+      .some((account) => !account.proxyId && !account.proxy);
     const totalAttempts = maxAttempts + (directFallbackAllowed ? 1 : 0);
     const requestId = randomUUID();
     let lastError: Error | null = null;
@@ -648,25 +648,25 @@ export class UpstreamClient {
     }
 
     // Direct fallback is allowed only when at least one worker is intentionally unbound.
+    const fallbackAccount = this.rotator
+      .getAccounts()
+      .find((account) => !account.proxyId && !account.proxy);
+    if (!fallbackAccount) throw lastError ?? new Error("All bound worker egress routes failed");
     const headers = this.buildHeaders(
-      effectiveApiKey(
-        this.rotator.getAccounts()[0]?.apiKey || "",
-        this.rotator.getAccounts()[0]?.kind ?? "anonymous_zen"
-      ),
+      effectiveApiKey(fallbackAccount.apiKey, fallbackAccount.kind),
       false,
       clientHeaders
     );
     headers["Accept"] = "application/json";
 
     const fallbackStartedAt = Date.now();
-    const fallbackAccount = this.rotator.getAccounts()[0];
     try {
       const response = await this.rawFetch(url, { method: "GET", headers }, null);
       this.emitAttempt({
         requestId,
         operation: "models",
-        accountId: "direct-fallback",
-        accountKind: fallbackAccount?.kind ?? "anonymous_zen",
+        accountId: fallbackAccount.id,
+        accountKind: fallbackAccount.kind,
         proxyId: null,
         clashNodeName: null,
         model: null,
@@ -683,7 +683,7 @@ export class UpstreamClient {
         status: response.status,
         headers: response.headers,
         body: response.body,
-        accountId: "direct-fallback",
+        accountId: fallbackAccount.id,
         proxyId: null,
         clashNodeName: null,
       };
@@ -691,8 +691,8 @@ export class UpstreamClient {
       this.emitAttempt({
         requestId,
         operation: "models",
-        accountId: "direct-fallback",
-        accountKind: fallbackAccount?.kind ?? "anonymous_zen",
+        accountId: fallbackAccount.id,
+        accountKind: fallbackAccount.kind,
         proxyId: null,
         clashNodeName: null,
         model: null,
@@ -700,7 +700,7 @@ export class UpstreamClient {
         maxAttempts: totalAttempts,
         status: null,
         outcome: "transport_error",
-        error: safeErrorMessage(err, fallbackAccount?.apiKey ?? ""),
+        error: safeErrorMessage(err, fallbackAccount.apiKey),
         latencyMs: Date.now() - fallbackStartedAt,
         willRetry: false,
         at: new Date().toISOString(),

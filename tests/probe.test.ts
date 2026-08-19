@@ -569,7 +569,16 @@ describe("admin proxy probe HTTP APIs", () => {
     dir = "";
   });
 
-  async function boot(pool: PoolProxy[]) {
+  async function boot(
+    pool: PoolProxy[],
+    probeFetch: (
+      url: string,
+      init: RequestInit & { dispatcher?: unknown }
+    ) => Promise<Response> = async () => {
+      await new Promise((r) => setTimeout(r, 5));
+      return new Response(null, { status: 204 });
+    }
+  ) {
     dir = await mkdtemp(join(tmpdir(), "ocfr-probe-"));
     const store = new SettingsStore(join(dir, "settings.json"));
     const base: GatewaySettings = {
@@ -588,10 +597,7 @@ describe("admin proxy probe HTTP APIs", () => {
     app = await createApp({
       store,
       port: 0,
-      probeFetch: async () => {
-        await new Promise((r) => setTimeout(r, 5));
-        return new Response(null, { status: 204 });
-      },
+      probeFetch,
     });
     await listen(app);
     const addr = app.server.address();
@@ -644,6 +650,37 @@ describe("admin proxy probe HTTP APIs", () => {
     expect(data.summary.ok).toBe(1);
     expect(data.summary.skip).toBe(1);
     expect(data.results.find((r) => r.id === "b")?.skipped).toBe(true);
+  });
+
+  it("runs twelve direct probes concurrently through the batch API", async () => {
+    let active = 0;
+    let maxActive = 0;
+    const pool = Array.from({ length: 12 }, (_, index) =>
+      px({
+        id: `direct-${index}`,
+        name: `direct-${index}`,
+        type: "http",
+        host: `10.0.0.${index + 1}`,
+        port: 8080,
+      })
+    );
+    const port = await boot(pool, async (_url, init) => {
+      if (init.method === "POST") {
+        return new Response(JSON.stringify({ choices: [] }), { status: 200 });
+      }
+      active++;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      active--;
+      return new Response("203.0.113.10", { status: 200 });
+    });
+
+    const response = await fetch(
+      `http://127.0.0.1:${port}/admin/api/proxy-pool/test-batch`,
+      { method: "POST", body: "{}" }
+    );
+    expect(response.status).toBe(200);
+    expect(maxActive).toBe(12);
   });
 
   it("publishes incremental batch progress and rejects overlapping batches", async () => {

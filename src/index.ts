@@ -8,10 +8,10 @@ import { createApp, listen } from "./server/http.js";
 async function main(): Promise<void> {
   const app = await createApp();
   await listen(app);
-  const { port } = app;
-  console.log(`[oc-free-relay] listening on http://0.0.0.0:${port}`);
-  console.log(`[oc-free-relay] admin UI  http://127.0.0.1:${port}/`);
-  console.log(`[oc-free-relay] OpenAI    http://127.0.0.1:${port}/v1`);
+  const { host, port } = app;
+  console.log(`[oc-free-relay] listening on http://${host}:${port}`);
+  console.log(`[oc-free-relay] admin UI  http://${host}:${port}/`);
+  console.log(`[oc-free-relay] OpenAI    http://${host}:${port}/v1`);
   console.log(`[oc-free-relay] upstream  ${app.store.get().baseUrl}`);
 
   const shutdown = () => {

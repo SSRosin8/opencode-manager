@@ -17,7 +17,6 @@ import {
   mergeControllerProxies,
   mergeSubscriptionProxies,
   newProxyId,
-  type PoolProxy,
   type ProxySubscription,
 } from "../proxy/pool.js";
 import {
@@ -113,7 +112,6 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
     "Content-Length": Buffer.byteLength(data),
-    "Access-Control-Allow-Origin": "*",
   });
   res.end(data);
 }
@@ -308,6 +306,7 @@ export type App = {
   store: SettingsStore;
   upstream: UpstreamClient;
   port: number;
+  host: string;
   probes: ProbeResultCache;
   workerStats: WorkerStatsStore;
   freeModels: FreeModelRegistry;
@@ -356,6 +355,7 @@ function batchProbeSnapshot(progress: BatchProbeProgress): BatchProbeProgress {
 export async function createApp(opts?: {
   store?: SettingsStore;
   port?: number;
+  host?: string;
   fetchImpl?: ConstructorParameters<typeof UpstreamClient>[1];
   /** For subscription fetch tests. */
   subscriptionFetch?: typeof fetch;
@@ -424,6 +424,7 @@ export async function createApp(opts?: {
     (process.env.PORT ? Number(process.env.PORT) : undefined) ??
     settings.port ??
     9876;
+  const host = opts?.host ?? (process.env.OCFREERELAY_HOST?.trim() || "127.0.0.1");
 
   const server = createServer(async (req, res) => {
     try {
@@ -447,7 +448,7 @@ export async function createApp(opts?: {
     }
   });
 
-  return { server, store, upstream, port, probes, workerStats, freeModels };
+  return { server, store, upstream, port, host, probes, workerStats, freeModels };
 }
 
 async function handleRequest(
@@ -474,20 +475,23 @@ async function handleRequest(
   const method = (req.method || "GET").toUpperCase();
   const url = new URL(req.url || "/", "http://localhost");
   const path = url.pathname.replace(/\/+$/, "") || "/";
+  const relayPath = path === "/models" || path === "/chat/completions" || path.startsWith("/v1/");
+
+  if (relayPath) {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Headers", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  }
 
   if (method === "OPTIONS") {
-    res.writeHead(204, {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Headers": "*",
-      "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-    });
+    res.writeHead(204);
     res.end();
     return;
   }
 
   const relayAccessToken = store.get().relayAccessToken;
   if (
-    path.startsWith("/v1/") &&
+    relayPath &&
     relayAccessToken &&
     req.headers["x-oc-relay-key"] !== relayAccessToken
   ) {
@@ -539,6 +543,13 @@ async function handleRequest(
         return;
       }
       if (Array.isArray(parsed.accounts)) {
+        const ids = parsed.accounts.map((account) => String(account?.id || "").trim());
+        if (ids.some((id) => !id) || new Set(ids).size !== ids.length) {
+          sendJson(res, 400, {
+            error: { type: "invalid_worker_ids", message: "Worker IDs must be non-empty and unique" },
+          });
+          return;
+        }
         if (batchProbeProgress.running) {
           sendJson(res, 409, {
             error: {
@@ -780,12 +791,13 @@ async function handleRequest(
     }
     const started = performance.now();
     try {
+      const kind = inferAccountKind(account);
       const networkProbe = await probePoolProxy(proxy, s.clashBridge, {
         fetchImpl: ctx?.probeFetch,
         bridgeFetch: subscriptionFetch ?? globalThis.fetch,
         clashQueue: clashProbeQueue,
       });
-      const probe = networkProbe.ok
+      const probe = kind === "anonymous_zen" && networkProbe.ok
         ? attachAnonymousZenResult(
             networkProbe,
             await probeAnonymousZenProxy(proxy, s.clashBridge, {
@@ -810,7 +822,7 @@ async function handleRequest(
         });
         return;
       }
-      if (!probe.anonymousZen?.ok) {
+      if (kind === "anonymous_zen" && !probe.anonymousZen?.ok) {
         sendJson(res, 502, {
           ok: false,
           workerId: id,
@@ -827,16 +839,16 @@ async function handleRequest(
       }
       const model = freeModels.has("big-pickle") ? "big-pickle" : freeModels.ids()[0];
       if (!model) throw new Error("No free model available for worker test");
-      if (account.kind === "anonymous_zen") {
+      if (kind === "anonymous_zen") {
         sendJson(res, 200, {
           ok: true,
           workerId: id,
-          workerKind: account.kind,
+          workerKind: kind,
           proxyId: proxy.id,
           proxyName: proxy.name,
           egressIp: probe.egressIp ?? null,
           model,
-          upstreamStatus: probe.anonymousZen.httpStatus,
+          upstreamStatus: probe.anonymousZen?.httpStatus ?? null,
           latencyMs: Math.round(performance.now() - started),
           anonymousZen: probe.anonymousZen,
           reply: null,
@@ -1020,7 +1032,7 @@ async function handleRequest(
         fetchImpl: ctx?.probeFetch,
         bridgeFetch,
         clashQueue: clashProbeQueue,
-        concurrency: 8,
+        concurrency: 12,
         fastController: true,
         // Anonymous quotas are IP-sensitive, so every candidate needs a verified egress IP.
         verifyEgressCount: Math.max(1, targets.length),
@@ -1038,7 +1050,7 @@ async function handleRequest(
               model: anonymousModel,
               // Batch checks share one Clash selector. Do not let one dead
               // egress block every remaining node for the 45s manual-test timeout.
-              timeoutMs: 12_000,
+              timeoutMs: 8_000,
               fetchImpl: ctx?.probeFetch,
               bridgeFetch,
               clashQueue: clashProbeQueue,
@@ -1627,6 +1639,9 @@ async function handleRequest(
       });
       return;
     }
+    if (reqModel && body && typeof body === "object" && !Array.isArray(body)) {
+      body = { ...(body as Record<string, unknown>), model: reqModel };
+    }
 
     try {
       const result = await upstream.chatCompletions({
@@ -1699,7 +1714,7 @@ async function handleRequest(
 export function listen(app: App): Promise<void> {
   return new Promise((resolve, reject) => {
     app.server.once("error", reject);
-    app.server.listen(app.port, "0.0.0.0", () => {
+    app.server.listen(app.port, app.host, () => {
       app.store.setRunning(true);
       resolve();
     });
