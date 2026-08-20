@@ -12,7 +12,7 @@ export async function handleModels(
   const { store, upstream, freeModels } = ctx;
   // OpenAI-compatible models
   if (method === "GET" && (path === "/v1/models" || path === "/models")) {
-    if (rejectUnavailableWorkerPool(res, store, path)) return true;
+    if (rejectUnavailableWorkerPool(res, store, path, method)) return true;
     try {
       const result = await upstream.listModels(clientHeadersFrom(req));
       store.recordRequest(path, result.status);

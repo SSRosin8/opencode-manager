@@ -18,12 +18,18 @@ export async function handleChat(
     try {
       body = JSON.parse(raw.toString("utf8") || "{}");
     } catch {
+      store.recordGatewayRejection({
+        method,
+        path,
+        status: 400,
+        type: "invalid_request_error",
+      });
       sendJson(res, 400, {
         error: { message: "Invalid JSON body", type: "invalid_request_error" },
       });
       return true;
     }
-    if (rejectUnavailableWorkerPool(res, store, path)) return true;
+    if (rejectUnavailableWorkerPool(res, store, path, method)) return true;
     const stream = Boolean(
       body &&
         typeof body === "object" &&
@@ -36,7 +42,13 @@ export async function handleChat(
       ? String((body as { model?: unknown }).model ?? "").replace(/^opencode\//, "")
       : "";
     if (reqModel && !freeModels.has(reqModel)) {
-      store.recordRequest(path, 403, `model not allowed: ${reqModel}`);
+      store.recordGatewayRejection({
+        method,
+        path,
+        status: 403,
+        type: "model_not_allowed",
+        model: reqModel,
+      });
       sendJson(res, 403, {
         error: {
           message: `Model "${reqModel}" is not a free model and is not served by this gateway (free-only).`,

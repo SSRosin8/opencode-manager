@@ -4,7 +4,7 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
       const list = settings.accounts || [];
       const strategy = $("routing-strategy");
       if (strategy) strategy.value = settings.routingStrategy || "anonymous_first";
-      const renderCard = (a, idx) => {
+      const renderCard = (a, idx, hidden) => {
         const kind = a.kind === "authenticated_zen" || (!a.kind && String(a.apiKey || "").trim())
           ? "authenticated_zen"
           : "anonymous_zen";
@@ -22,8 +22,11 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
         const enabled = a.enabled !== false;
         const collapseKey = String(a.id || ("draft-" + (idx + 1)));
         const collapsed = collapsedWorkerIds.has(collapseKey);
-        return '<div class="worker-card' + (enabled ? '' : ' disabled-worker') + '" data-idx="' + idx + '" data-worker-key="' + escapeAttr(collapseKey) + '">' +
-          '<div class="hd"><span class="worker-title">Worker ' + (idx + 1) + ' · ' + escapeHtml(a.id || t("unassigned")) + (enabled ? '' : ' · ' + escapeHtml(t("disabledState"))) + '</span>' +
+        const displayName = kind === "anonymous_zen"
+          ? t("anonymousWorkerName")(idx + 1)
+          : "Worker " + (idx + 1) + " · " + (a.id || t("unassigned"));
+        return '<div class="worker-card' + (enabled ? '' : ' disabled-worker') + '" data-idx="' + idx + '" data-worker-key="' + escapeAttr(collapseKey) + '"' + (hidden ? ' hidden' : '') + '>' +
+          '<div class="hd"><span class="worker-title" title="' + escapeAttr(a.id || displayName) + '">' + escapeHtml(displayName) + (enabled ? '' : ' · ' + escapeHtml(t("disabledState"))) + '</span>' +
           '<div class="worker-actions"><label class="field" style="margin:0;display:flex;align-items:center;gap:6px"><span>' + escapeHtml(t("workerEnabled")) + '</span><span class="toggle"><input class="acc-enabled" type="checkbox"' + (enabled ? ' checked' : '') + ' /><span></span></span></label>' +
           '<button type="button" class="btn btn-sm btn-test-worker" data-idx="' + idx + '"' + (testing ? ' disabled' : '') + '>' + escapeHtml(testing ? t("testingWorker") : t("testWorker")) + '</button>' +
           '<button type="button" class="btn btn-sm btn-danger btn-remove-acc" data-idx="' + idx + '">' + escapeHtml(t("remove")) + '</button>' +
@@ -47,15 +50,20 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
             : "anonymous_zen";
           return accountKind === kind;
         });
+        const pageData = pageSlice(items, workerPages[kind]);
+        workerPages[kind] = pageData.page;
         return '<section class="worker-column" data-worker-kind="' + kind + '">' +
           '<div class="worker-column-hd"><span>' + escapeHtml(t(titleKey)) +
           ' <span class="worker-column-count">' + items.length + '</span></span>' +
           '<button type="button" class="btn btn-sm btn-danger btn-remove-worker-group" data-kind="' + kind + '"' +
           (items.length ? '' : ' disabled') + '>' + escapeHtml(t("removeGroupWorkers")) + '</button></div>' +
           '<div class="worker-column-list">' +
-          (items.length ? items.map(({ account, idx }) => renderCard(account, idx)).join("") :
+          (items.length ? items.map(({ account, idx }, position) => renderCard(account, idx, position < (pageData.page - 1) * PAGE_SIZE || position >= pageData.page * PAGE_SIZE)).join("") :
             '<p class="worker-column-empty">' + escapeHtml(t(emptyKey)) + '</p>') +
-          '</div></section>';
+          '</div>' +
+          '<div class="table-foot list-pagination worker-pagination"' + (items.length <= PAGE_SIZE ? ' hidden' : '') + '>' +
+          '<div class="sum">' + (items.length ? escapeHtml(t("pageSummary")((pageData.page - 1) * PAGE_SIZE + 1, Math.min(pageData.page * PAGE_SIZE, items.length), items.length)) : '') + '</div>' +
+          '<div class="pager">' + pagerHtml(pageData.page, pageData.totalPages) + '</div></div></section>';
       };
       root.innerHTML = renderColumn("anonymous_zen", "anonymousWorkers", "noAnonymousWorkers") +
         renderColumn("authenticated_zen", "authenticatedWorkers", "noAuthenticatedWorkers");
@@ -70,6 +78,18 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
           settings.accounts = drafts;
           renderAccounts();
         };
+      });
+      root.querySelectorAll(".worker-column").forEach((column) => {
+        const kind = column.dataset.workerKind;
+        const total = indexed.filter(({ account }) => {
+          const accountKind = account.kind === "authenticated_zen" || (!account.kind && String(account.apiKey || "").trim()) ? "authenticated_zen" : "anonymous_zen";
+          return accountKind === kind;
+        }).length;
+        bindPager(column.querySelector(".pager"), Math.max(1, Math.ceil(total / PAGE_SIZE)), (nextPage) => {
+          settings.accounts = collectAccounts();
+          workerPages[kind] = nextPage;
+          renderAccounts();
+        });
       });
       root.querySelectorAll(".btn-remove-worker-group").forEach((btn) => {
         btn.onclick = () => {
@@ -161,9 +181,7 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
         }
       }
       const allCollapsed = cards.length > 0 && cards.every((card) => collapsedWorkerIds.has(card.dataset.workerKey));
-      document.querySelectorAll("#accounts .worker-column-list").forEach((list) => {
-        list.classList.toggle("worker-list-scroll", list.querySelectorAll(".worker-card").length > 4);
-      });
+      document.querySelectorAll("#accounts .worker-column-list").forEach((list) => list.classList.remove("worker-list-scroll"));
       const toggleAll = $("btn-toggle-all-workers");
       if (toggleAll) {
         toggleAll.disabled = cards.length === 0;
@@ -235,23 +253,35 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
     function renderWorkerStats() {
       const body = $("ov-worker-stats");
       const attemptsBody = $("ov-attempts");
-      const totalsEl = $("ov-usage-totals");
+      const summary = $("ov-usage-summary");
+      const toggleIdle = $("ov-toggle-idle");
       if (!body) return;
       const workers = status?.workers || [];
       const totals = status?.usageTotals || {};
-      const byKind = status?.usageTotalsByKind || {};
-      if (totalsEl) {
-        totalsEl.textContent =
-          t("totalsLabel") + ": " +
-          fmtNum(totals.requestCount) + " " + t("attemptCount") + " · " +
-          fmtNum(totals.totalTokens) + " tok · " +
-          t("anonymousZen") + " " + fmtNum(byKind.anonymous_zen?.requestCount) + " req · " +
-          t("authenticatedZen") + " " + fmtNum(byKind.authenticated_zen?.requestCount) + " req";
+      const successCount = workers.reduce((sum, worker) => sum + (Number(worker.successCount) || 0), 0);
+      const errorCount = workers.reduce((sum, worker) => sum + (Number(worker.errorCount) || 0), 0);
+      const finishedCount = successCount + errorCount;
+      if (summary) {
+        summary.innerHTML = [
+          [t("summaryAttempts"), fmtNum(totals.requestCount), "Chat " + fmtNum(totals.chatCount) + " · Models " + fmtNum(totals.modelsCount)],
+          [t("summarySuccessRate"), finishedCount ? fmtRate(successCount / finishedCount) : "—", fmtNum(successCount) + " / " + fmtNum(errorCount)],
+          [t("summaryTokens"), fmtNum(totals.totalTokens), "in " + fmtNum(totals.promptTokens) + " · out " + fmtNum(totals.completionTokens)],
+          [t("summaryCacheRate"), fmtRate(totals.cacheRate), "read " + fmtNum(totals.cacheReadTokens)],
+        ].map((item) => '<div class="usage-summary-item"><div class="label">' + escapeHtml(item[0]) + '</div><div class="value">' + escapeHtml(item[1]) + '</div><div class="detail">' + escapeHtml(item[2]) + '</div></div>').join("");
       }
+      const idleWorkers = workers.filter((worker) => !worker.requestCount && worker.ready && worker.enabled);
+      const visibleWorkers = showIdleWorkers ? workers : workers.filter((worker) => worker.requestCount || !worker.ready || !worker.enabled);
+      const workerPageData = pageSlice(visibleWorkers, overviewWorkerPage);
+      overviewWorkerPage = workerPageData.page;
+      toggleIdle.hidden = idleWorkers.length === 0;
+      toggleIdle.textContent = showIdleWorkers ? t("hideIdleWorkers") : t("showIdleWorkers")(idleWorkers.length);
+      toggleIdle.onclick = () => { showIdleWorkers = !showIdleWorkers; renderWorkerStats(); };
       if (!workers.length) {
-        body.innerHTML = '<tr><td colspan="8" class="muted" style="padding:14px">' + escapeHtml(t("noWorkers")) + '</td></tr>';
+        body.innerHTML = '<tr><td colspan="6" class="muted" style="padding:14px">' + escapeHtml(t("noWorkers")) + '</td></tr>';
+      } else if (!visibleWorkers.length) {
+        body.innerHTML = '<tr><td colspan="6" class="muted" style="padding:14px">' + escapeHtml(t("idleWorkersSummary")(idleWorkers.length)) + '</td></tr>';
       } else {
-        body.innerHTML = workers.map((w) => {
+        body.innerHTML = workerPageData.items.map((w) => {
           const kindLabel = t(w.kind === "authenticated_zen" ? "authenticatedZen" : "anonymousZen");
           const routeName = w.proxyName || (w.proxyId ? w.proxyId : t("directEgress"));
           const egress = w.egressIp || t("unknownEgress");
@@ -260,12 +290,8 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
             ? (w.lastRequestAt ? t("outcomeTransportError") : "—")
             : "HTTP " + w.lastStatus;
           return '<tr>' +
-            '<td><strong>' + escapeHtml(w.accountId) + '</strong><div style="margin-top:4px"><span class="tag ' + (w.kind === "anonymous_zen" ? "blue" : "info") + '">' + escapeHtml(kindLabel) + '</span></div><div class="muted mono" style="margin-top:4px">' + escapeHtml(w.credentialLabel || "—") + '</div></td>' +
-            '<td><strong>' + escapeHtml(routeName) + '</strong><div class="muted mono">' + escapeHtml(egress) + '</div></td>' +
-            '<td class="mono"><strong>' + fmtNum(w.requestCount) + '</strong><div class="muted">Chat ' + fmtNum(w.chatCount) + ' · ' + escapeHtml(t("modelsUsed")) + ' ' + fmtNum(w.distinctModelCount) + '</div>' +
-              (Object.keys(w.modelUsage || {}).length ? '<div class="muted" style="margin-top:4px">' + Object.entries(w.modelUsage).sort((a, b) => Number(b[1]) - Number(a[1])).map(([model, count]) => escapeHtml(model) + ' ×' + fmtNum(count)).join(' · ') + '</div>' : '') +
-              (w.modelsCount ? '<div class="muted">' + escapeHtml(t("modelsEndpoint")) + ' ' + fmtNum(w.modelsCount) + '</div>' : '') + '</td>' +
-            '<td><span class="ok mono">' + fmtNum(w.successCount) + '</span> / <span class="err mono">' + fmtNum(w.errorCount) + '</span><div class="muted">' + escapeHtml(statusText) + '</div></td>' +
+            '<td title="' + escapeAttr(w.accountId) + '"><div class="worker-route-primary"><strong>' + escapeHtml(routeName) + '</strong></div><div class="muted mono">' + escapeHtml(egress) + '</div><div class="worker-meta"><span class="tag ' + (w.kind === "anonymous_zen" ? "blue" : "info") + '">' + escapeHtml(kindLabel) + '</span></div></td>' +
+            '<td class="mono"><strong>' + fmtNum(w.requestCount) + '</strong><div><span class="ok">' + fmtNum(w.successCount) + '</span> / <span class="err">' + fmtNum(w.errorCount) + '</span></div><div class="muted">' + escapeHtml(statusText) + '</div></td>' +
             '<td class="mono"><strong>' + fmtNum(w.totalTokens) + '</strong><div class="muted">in ' + fmtNum(w.promptTokens) + ' · out ' + fmtNum(w.completionTokens) + '</div></td>' +
             '<td class="mono">' + escapeHtml(fmtRate(w.cacheRate)) + '<div class="muted">read ' + fmtNum(w.cacheReadTokens) + ' · write ' + fmtNum(w.cacheWriteTokens) + '</div></td>' +
             '<td><span class="tag ' + (!w.enabled ? "" : w.ready ? "ok" : "warn") + '">' + escapeHtml(stateLabel) + '</span>' + (w.enabled && !w.ready && w.cooldownUntil ? '<div class="muted">' + escapeHtml(relTime(new Date(w.cooldownUntil).toISOString())) + '</div>' : '') + '</td>' +
@@ -273,11 +299,21 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
             '</tr>';
         }).join("");
       }
+      const workerPagination = $("ov-workers-pagination");
+      workerPagination.hidden = visibleWorkers.length <= PAGE_SIZE;
+      $("ov-workers-page-summary").textContent = visibleWorkers.length
+        ? t("pageSummary")((workerPageData.page - 1) * PAGE_SIZE + 1, Math.min(workerPageData.page * PAGE_SIZE, visibleWorkers.length), visibleWorkers.length)
+        : "";
+      $("ov-workers-pager").innerHTML = pagerHtml(workerPageData.page, workerPageData.totalPages);
+      bindPager($("ov-workers-pager"), workerPageData.totalPages, (nextPage) => { overviewWorkerPage = nextPage; renderWorkerStats(); });
 
       const attempts = status?.recentAttempts || [];
+      const attemptPageData = pageSlice(attempts, attemptPage);
+      attemptPage = attemptPageData.page;
       if (!attemptsBody) return;
       if (!attempts.length) {
-        attemptsBody.innerHTML = '<tr><td colspan="8" class="muted" style="padding:14px">' + escapeHtml(t("noAttempts")) + '</td></tr>';
+        attemptsBody.innerHTML = '<tr><td colspan="6" class="muted" style="padding:14px">' + escapeHtml(t("noAttempts")) + '</td></tr>';
+        $("ov-attempts-pagination").hidden = true;
         return;
       }
       const outcomeText = {
@@ -287,7 +323,7 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
         upstream_error: "outcomeUpstreamError",
         transport_error: "outcomeTransportError",
       };
-      attemptsBody.innerHTML = attempts.map((a) => {
+      attemptsBody.innerHTML = attemptPageData.items.map((a) => {
         const ok = a.outcome === "success";
         const warn = a.outcome === "rate_limited" || a.outcome === "upstream_error";
         const resultClass = ok ? "ok" : warn ? "warn" : "err";
@@ -297,16 +333,19 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
         const egress = a.egressIp || t("unknownEgress");
         const statusLabel = a.status == null ? resultLabel : "HTTP " + a.status + " · " + resultLabel;
         return '<tr class="' + (ok ? "" : warn ? "row-warn" : "row-err") + '">' +
-          '<td class="muted">' + escapeHtml(relTime(a.at)) + '</td>' +
-          '<td><span class="mono">' + escapeHtml(String(a.requestId || "").slice(0, 8)) + '</span><div class="muted">' + escapeHtml(a.attempt + "/" + a.maxAttempts) + '</div></td>' +
+          '<td><span class="mono">' + escapeHtml(String(a.requestId || "").slice(0, 8)) + '</span><div class="muted attempt-position" title="' + escapeAttr(t("attemptPositionHint")) + '">' + escapeHtml(t("attemptPosition")(a.attempt, a.maxAttempts)) + '</div><div class="muted">' + escapeHtml(relTime(a.at)) + '</div></td>' +
           '<td><strong>' + escapeHtml(a.operation) + '</strong><div class="muted mono">' + escapeHtml(a.model || "—") + '</div></td>' +
-          '<td><strong>' + escapeHtml(a.accountId) + '</strong><div><span class="tag ' + (a.accountKind === "anonymous_zen" ? "blue" : "info") + '">' + escapeHtml(kindLabel) + '</span></div><div class="muted mono">' + escapeHtml(a.credentialLabel || (a.accountKind === "anonymous_zen" ? "public" : "—")) + '</div></td>' +
-          '<td><strong>' + escapeHtml(route) + '</strong><div class="muted mono">' + escapeHtml(egress) + '</div></td>' +
+          '<td title="' + escapeAttr(a.accountId) + '"><div class="worker-route-primary"><strong>' + escapeHtml(route) + '</strong></div><div class="muted mono">' + escapeHtml(egress) + '</div><div class="worker-meta"><span class="tag ' + (a.accountKind === "anonymous_zen" ? "blue" : "info") + '">' + escapeHtml(kindLabel) + '</span></div></td>' +
           '<td><span class="tag ' + resultClass + '">' + escapeHtml(statusLabel) + '</span>' + (a.error ? '<div class="attempt-error" title="' + escapeAttr(a.error) + '">' + escapeHtml(a.error) + '</div>' : '') + '</td>' +
           '<td class="mono">' + fmtNum(a.latencyMs) + ' ms</td>' +
           '<td><span class="tag ' + (a.willRetry ? "warn" : ok ? "ok" : "err") + '">' + escapeHtml(a.willRetry ? t("retrying") : ok ? t("returned") : t("noRetry")) + '</span></td>' +
           '</tr>';
-      }).join("");
+        }).join("");
+      const attemptsPagination = $("ov-attempts-pagination");
+      attemptsPagination.hidden = attempts.length <= PAGE_SIZE;
+      $("ov-attempts-page-summary").textContent = t("pageSummary")((attemptPageData.page - 1) * PAGE_SIZE + 1, Math.min(attemptPageData.page * PAGE_SIZE, attempts.length), attempts.length);
+      $("ov-attempts-pager").innerHTML = pagerHtml(attemptPageData.page, attemptPageData.totalPages);
+      bindPager($("ov-attempts-pager"), attemptPageData.totalPages, (nextPage) => { attemptPage = nextPage; renderWorkerStats(); });
     }
 
     function renderStatusChrome() {
@@ -319,11 +358,36 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
 
       renderWorkerStats();
 
-      // overview errors
-      const errs = status?.recentErrors || [];
-      $("ov-errors").innerHTML = errs.length
-        ? errs.map((e) => '<li><i class="dot err"></i><div><div class="title">' + escapeHtml(e.message) + '</div><div class="sub mono">' + escapeHtml(e.path || "") + '</div></div><div class="time">' + escapeHtml(relTime(e.at)) + '</div></li>').join("")
+      // Requests rejected by the gateway are separate from upstream Worker attempts.
+      const rejections = status?.recentGatewayRejections || [];
+      const rejectionPageData = pageSlice(rejections, rejectionPage);
+      rejectionPage = rejectionPageData.page;
+      const rejectionLabels = {
+        not_found: "rejectionNotFound",
+        model_not_allowed: "rejectionModelNotAllowed",
+        invalid_request_error: "rejectionInvalidRequest",
+        no_workers_configured: "rejectionNoWorkers",
+        no_enabled_workers: "rejectionNoEnabledWorkers",
+        authentication_error: "rejectionAuthentication",
+        request_body_too_large: "rejectionBodyTooLarge",
+        server_error: "rejectionServerError",
+      };
+      $("overview-errors-panel").hidden = rejections.length === 0;
+      $("ov-errors").innerHTML = rejections.length
+        ? rejectionPageData.items.map((event) => {
+          const label = t(rejectionLabels[event.type] || "gatewayRejected");
+          const request = String(event.requestId || "").slice(0, 8);
+          const detail = event.method + " " + event.path + (event.model ? " · " + event.model : "");
+          return '<li><i class="dot err"></i><div><div class="title">' + escapeHtml(label) + ' <span class="tag err">HTTP ' + escapeHtml(event.status) + '</span></div><div class="sub mono">' + escapeHtml(detail) + '</div><div class="sub mono">' + escapeHtml(request) + '</div></div><div class="time">' + escapeHtml(relTime(event.at)) + '</div></li>';
+        }).join("")
         : '<li style="grid-template-columns:1fr"><span class="muted">' + escapeHtml(t("none")) + '</span></li>';
+      const rejectionPagination = $("ov-errors-pagination");
+      rejectionPagination.hidden = rejections.length <= PAGE_SIZE;
+      $("ov-errors-page-summary").textContent = rejections.length
+        ? t("pageSummary")((rejectionPageData.page - 1) * PAGE_SIZE + 1, Math.min(rejectionPageData.page * PAGE_SIZE, rejections.length), rejections.length)
+        : "";
+      $("ov-errors-pager").innerHTML = pagerHtml(rejectionPageData.page, rejectionPageData.totalPages);
+      bindPager($("ov-errors-pager"), rejectionPageData.totalPages, (nextPage) => { rejectionPage = nextPage; renderStatusChrome(); });
     }
 
     function renderAll() {

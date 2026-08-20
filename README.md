@@ -124,9 +124,9 @@ Testing an individual node verifies its public IP and anonymous Zen access, then
 
 The Worker page controls routing strategy and whether each Worker receives traffic. The default `Anonymous first` strategy exhausts all usable anonymous Workers before signed-in keys. `Signed-in first` reverses that preference, while `Mixed` follows the configured Worker order. Connection probes use a one-token input and `max_tokens: 1` to minimize free-quota consumption. After saving a signed-in Worker, click **Test connection** on its card to verify the exact key and route. Results include HTTP status, total latency, node, and public egress IP.
 
-The Overview page reports actual chat model usage per Worker. `/v1/models` list requests are tracked separately from models used by chat requests.
+The Overview page reports actual chat model usage per Worker. `/v1/models` list requests are tracked separately from models used by chat requests. Failures that happen before upstream routing, such as unsupported endpoints, invalid JSON, blocked models, authentication failures, or an unavailable Worker pool, appear in a separate Gateway rejections list instead of being attributed to a Worker.
 
-Workers may be saved as an empty list. In that state relay requests return a clear `503` until Workers are added manually or recreated by Batch Test. Long Worker lists, status metrics, Worker usage, IP isolation, and proxy-node sections can be collapsed; the browser remembers those display preferences.
+Workers may be saved as an empty list. In that state relay requests return a clear `503` until Workers are added manually or recreated by Batch Test. Dense Worker, IP-isolation, proxy-node, upstream-attempt, and gateway-rejection lists use eight-item pages. The desktop sidebar and long status sections can be collapsed, and the browser remembers those display preferences; mobile keeps the compact horizontal navigation.
 
 ## Tests
 

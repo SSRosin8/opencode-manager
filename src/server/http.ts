@@ -114,7 +114,12 @@ export async function createApp(opts?: {
       const message = error instanceof Error ? error.message : String(error);
       const status = error instanceof RequestBodyTooLargeError ? error.status : 500;
       const type = status === 413 ? "request_body_too_large" : "server_error";
-      store.recordRequest(req.url || "/", status, message);
+      store.recordGatewayRejection({
+        method: req.method || "UNKNOWN",
+        path: safeRequestPath(req.url),
+        status,
+        type,
+      });
       if (!res.headersSent) {
         sendJson(res, status, { error: { message, type } });
       } else {
@@ -149,6 +154,7 @@ async function handleRequest(
 
   const relayAccessToken = ctx.store.get().relayAccessToken;
   if (relayPath && relayAccessToken && req.headers["x-oc-relay-key"] !== relayAccessToken) {
+    ctx.store.recordGatewayRejection({ method, path, status: 401, type: "authentication_error" });
     sendJson(res, 401, {
       error: {
         message: "Invalid or missing relay access token",
@@ -171,7 +177,18 @@ async function handleRequest(
   if (await handleCoreAdmin(req, res, method, path, ctx)) return;
   if (await handleProxyAdmin(req, res, method, path, ctx)) return;
   if (await handleRelay(req, res, method, path, ctx)) return;
+  if (relayPath) {
+    ctx.store.recordGatewayRejection({ method, path, status: 404, type: "not_found" });
+  }
   sendJson(res, 404, { error: { message: `Not found: ${path}`, type: "not_found" } });
+}
+
+function safeRequestPath(rawUrl: string | undefined): string {
+  try {
+    return new URL(rawUrl || "/", "http://localhost").pathname;
+  } catch {
+    return "/";
+  }
 }
 
 export function listen(app: App): Promise<void> {

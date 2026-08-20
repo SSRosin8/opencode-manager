@@ -76,7 +76,8 @@ export function sendJson(res: ServerResponse, status: number, body: unknown): vo
 export function rejectUnavailableWorkerPool(
   res: ServerResponse,
   store: SettingsStore,
-  path: string
+  path: string,
+  method: string
 ): boolean {
   const accounts = store.get().accounts;
   if (accounts.some((account) => account.enabled !== false)) return false;
@@ -86,7 +87,7 @@ export function rejectUnavailableWorkerPool(
     ? "No Zen workers are configured. Add a Worker or run a batch proxy test to create anonymous Workers."
     : "All configured Zen workers are disabled. Enable at least one Worker before sending requests.";
   const type = empty ? "no_workers_configured" : "no_enabled_workers";
-  store.recordRequest(path, 503, message);
+  store.recordGatewayRejection({ method, path, status: 503, type });
   sendJson(res, 503, { error: { message, type } });
   return true;
 }

@@ -2,6 +2,7 @@
  * Simple file-backed settings store for admin-managed gateway config.
  */
 
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import {
@@ -61,7 +62,43 @@ export type RuntimeStatus = {
   lastRequestStatus: number | null;
   lastError: string | null;
   recentErrors: Array<{ at: string; message: string; path?: string }>;
+  recentGatewayRejections: GatewayRejectionEvent[];
 };
+
+export type GatewayRejectionEvent = {
+  requestId: string;
+  at: string;
+  method: string;
+  path: string;
+  status: number;
+  type: string;
+  model?: string;
+  stage: "gateway";
+};
+
+export type GatewayRejectionInput = {
+  method: string;
+  path: string;
+  status: number;
+  type: string;
+  model?: string;
+};
+
+const MAX_RECENT_GATEWAY_REJECTIONS = 50;
+
+function safeEventText(value: string, maxLength: number): string {
+  return value.replace(/[\r\n\t]/g, " ").trim().slice(0, maxLength);
+}
+
+function safeEventPath(path: string): string {
+  return safeEventText(path.split(/[?#]/, 1)[0] || "/", 200) || "/";
+}
+
+function safeEventModel(model: string): string {
+  const value = safeEventText(model.split(/[?#]/, 1)[0], 120);
+  if (/^(?:bearer|key|sk|token)[-_ :]/i.test(value)) return "[redacted]";
+  return value;
+}
 
 const DEFAULT_SETTINGS: GatewaySettings = {
   baseUrl: DEFAULT_BASE_URL,
@@ -203,6 +240,7 @@ export class SettingsStore {
       lastRequestStatus: null,
       lastError: null,
       recentErrors: [],
+      recentGatewayRejections: [],
     };
   }
 
@@ -234,6 +272,36 @@ export class SettingsStore {
       });
       this.status.recentErrors = this.status.recentErrors.slice(0, 20);
     }
+  }
+
+  recordGatewayRejection(input: GatewayRejectionInput): void {
+    const at = new Date().toISOString();
+    const path = safeEventPath(input.path);
+    const type = safeEventText(input.type, 80) || "request_rejected";
+    const method = safeEventText(input.method.toUpperCase(), 12) || "UNKNOWN";
+    const model = input.model ? safeEventModel(input.model) : "";
+    const event: GatewayRejectionEvent = {
+      requestId: randomUUID(),
+      at,
+      method,
+      path,
+      status: input.status,
+      type,
+      ...(model ? { model } : {}),
+      stage: "gateway",
+    };
+
+    this.status.lastRequestAt = at;
+    this.status.lastRequestPath = path;
+    this.status.lastRequestStatus = input.status;
+    this.status.lastError = `gateway rejected: ${type}`;
+    this.status.recentErrors.unshift({ at, message: this.status.lastError, path });
+    this.status.recentErrors = this.status.recentErrors.slice(0, 20);
+    this.status.recentGatewayRejections.unshift(event);
+    this.status.recentGatewayRejections = this.status.recentGatewayRejections.slice(
+      0,
+      MAX_RECENT_GATEWAY_REJECTIONS
+    );
   }
 
   updateReadyCount(ready: number, total: number): void {

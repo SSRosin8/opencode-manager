@@ -17,7 +17,14 @@ export const ADMIN_CLIENT_CORE = `    function storageGet(key) {
     let page = storageGet("opencode-manager-page") || "proxy";
     let proxyTab = storageGet("opencode-manager-proxy-tab") || "nodes";
     if (!["nodes", "sources", "bindings"].includes(proxyTab)) proxyTab = "nodes";
+    let showIdleWorkers = false;
+    let sidebarCollapsed = storageGet("opencode-manager-sidebar-collapsed") === "1";
     let nodePage = 1;
+    let isolationPage = 1;
+    let overviewWorkerPage = 1;
+    let attemptPage = 1;
+    let rejectionPage = 1;
+    const workerPages = { anonymous_zen: 1, authenticated_zen: 1 };
     const PAGE_SIZE = 8;
     let confirmCb = null;
     let bridgeProbeOk = null;
@@ -81,6 +88,31 @@ export const ADMIN_CLIENT_CORE = `    function storageGet(key) {
       });
     }
 
+    function syncSidebar() {
+      const sidebar = $("sidebar");
+      const btn = $("btn-sidebar-toggle");
+      if (!sidebar || !btn) return;
+      sidebar.classList.toggle("is-collapsed", sidebarCollapsed);
+      btn.setAttribute("aria-expanded", String(!sidebarCollapsed));
+      const label = t(sidebarCollapsed ? "sidebarExpand" : "sidebarCollapse");
+      btn.title = label;
+      btn.setAttribute("aria-label", label);
+      document.querySelectorAll(".nav-item").forEach((item) => {
+        const text = item.querySelector("[data-i18n]");
+        if (sidebarCollapsed && text) item.title = text.textContent || "";
+        else item.removeAttribute("title");
+      });
+    }
+
+    function initSidebar() {
+      syncSidebar();
+      $("btn-sidebar-toggle").onclick = () => {
+        sidebarCollapsed = !sidebarCollapsed;
+        storageSet("opencode-manager-sidebar-collapsed", sidebarCollapsed ? "1" : "0");
+        syncSidebar();
+      };
+    }
+
     function applyStaticI18n() {
       document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
       document.querySelectorAll("[data-i18n]").forEach((el) => {
@@ -114,6 +146,7 @@ export const ADMIN_CLIENT_CORE = `    function storageGet(key) {
       document.querySelectorAll(".collapse-toggle[data-collapse-key]").forEach((btn) => {
         syncCollapseToggle(btn, btn.getAttribute("aria-expanded") !== "true");
       });
+      syncSidebar();
     }
 
     function currentTheme() {
@@ -186,6 +219,36 @@ export const ADMIN_CLIENT_CORE = `    function storageGet(key) {
       if (!s) return "—";
       if (s.length <= 10) return s.slice(0, 2) + "…" + s.slice(-2);
       return s.slice(0, 6) + "…" + s.slice(-4);
+    }
+
+    function pageSlice(items, currentPage) {
+      const totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
+      const pageNumber = Math.max(1, Math.min(currentPage, totalPages));
+      return {
+        page: pageNumber,
+        totalPages,
+        items: items.slice((pageNumber - 1) * PAGE_SIZE, pageNumber * PAGE_SIZE),
+      };
+    }
+
+    function pagerHtml(pageNumber, totalPages) {
+      let html = '<button type="button" data-p="' + (pageNumber - 1) + '" ' + (pageNumber <= 1 ? "disabled" : "") + ' aria-label="' + escapeAttr(t("previousPage")) + '">&lt;</button>';
+      const pageStart = Math.max(1, Math.min(pageNumber - 2, totalPages - 4));
+      const pageEnd = Math.min(totalPages, pageStart + 4);
+      for (let i = pageStart; i <= pageEnd; i++) {
+        html += '<button type="button" data-p="' + i + '" class="' + (i === pageNumber ? "active" : "") + '" aria-current="' + (i === pageNumber ? "page" : "false") + '">' + i + '</button>';
+      }
+      return html + '<button type="button" data-p="' + (pageNumber + 1) + '" ' + (pageNumber >= totalPages ? "disabled" : "") + ' aria-label="' + escapeAttr(t("nextPage")) + '">&gt;</button>';
+    }
+
+    function bindPager(root, totalPages, onPage) {
+      if (!root) return;
+      root.querySelectorAll("button").forEach((button) => {
+        button.onclick = () => {
+          const nextPage = Number(button.dataset.p);
+          if (nextPage >= 1 && nextPage <= totalPages) onPage(nextPage);
+        };
+      });
     }
 
     function relTime(iso) {

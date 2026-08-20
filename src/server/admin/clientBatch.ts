@@ -218,9 +218,9 @@ export const ADMIN_CLIENT_BATCH = `    async function loadSettings() {
         if (progress?.running) batchProgressSeenRunning = true;
         const workerCount = (progress?.addedWorkerIds || []).length;
         if (workerCount !== lastBatchPatchedWorkerCount) {
-          await loadStatus();
+          await reloadAfterBatchPreservingDrafts();
           if (generation !== batchPollGeneration || controller.signal.aborted) return;
-          patchBatchWorkerMetrics();
+          renderBatchDerivedViews();
           lastBatchPatchedWorkerCount = workerCount;
         }
         updateBatchProgress(progress, refreshNodes);

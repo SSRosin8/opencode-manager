@@ -51,6 +51,8 @@ function createBatchHarness(responses: BatchProgress[], options: {
   const renderIsolation = vi.fn();
   const renderAll = vi.fn();
   const renderNodes = vi.fn();
+  const renderAccounts = vi.fn();
+  const renderStatusChrome = vi.fn();
   const patchBatchWorkerMetrics = vi.fn();
   const loadStatus = vi.fn(async () => undefined);
   const reload = vi.fn(async () => undefined);
@@ -115,8 +117,8 @@ function createBatchHarness(responses: BatchProgress[], options: {
     patchBatchWorkerMetrics,
     loadStatus,
     renderUnassigned: vi.fn(),
-    renderAccounts: vi.fn(),
-    renderStatusChrome: vi.fn(),
+    renderAccounts,
+    renderStatusChrome,
     renderActivity: vi.fn(),
     pushProbeEvent: vi.fn(),
     $: (id: string) => {
@@ -151,11 +153,11 @@ function createBatchHarness(responses: BatchProgress[], options: {
 
   const api = (context as typeof context & { __batchHarness: BatchHarnessApi }).__batchHarness;
   api.stubReload(reload);
-  return { api, fetchMock, loadStatus, patchBatchWorkerMetrics, reload, renderAll, renderIsolation, renderMetrics, renderNodes };
+  return { api, fetchMock, loadStatus, patchBatchWorkerMetrics, reload, renderAccounts, renderAll, renderIsolation, renderMetrics, renderNodes, renderStatusChrome };
 }
 
 describe("admin batch progress rendering", () => {
-  it("does not rebuild overview or proxy summary views during running polls", async () => {
+  it("refreshes Worker-derived views when a running batch adds Workers", async () => {
     const first = progress();
     const withWorker = progress({
       addedWorkerIds: ["anonymous-zen-proxy-a"],
@@ -171,13 +173,14 @@ describe("admin batch progress rendering", () => {
       batchProgress: withWorker,
       batchTesting: true,
     });
-    expect(harness.reload).not.toHaveBeenCalled();
-    expect(harness.renderMetrics).not.toHaveBeenCalled();
-    expect(harness.renderIsolation).not.toHaveBeenCalled();
+    expect(harness.reload).toHaveBeenCalledTimes(1);
+    expect(harness.renderMetrics).toHaveBeenCalledTimes(2);
+    expect(harness.renderIsolation).toHaveBeenCalledTimes(1);
+    expect(harness.renderAccounts).toHaveBeenCalledTimes(1);
+    expect(harness.renderStatusChrome).toHaveBeenCalledTimes(1);
     expect(harness.renderAll).not.toHaveBeenCalled();
     expect(harness.renderNodes).toHaveBeenCalledTimes(1);
-    expect(harness.fetchMock).toHaveBeenCalledWith("/admin/api/status", { cache: "no-store" });
-    expect(harness.patchBatchWorkerMetrics).toHaveBeenCalledTimes(1);
+    expect(harness.patchBatchWorkerMetrics).not.toHaveBeenCalled();
   });
 
   it("performs one unified full render when polling observes completion", async () => {

@@ -130,6 +130,8 @@ export const ADMIN_CLIENT_ACTIONS = `    $("btn-top-refresh").onclick = () => re
         id: "worker-" + number,
         kind: "authenticated_zen", enabled: true, apiKey: "", proxyId: null, proxy: null,
       });
+      const authenticatedCount = settings.accounts.filter((account) => account.kind === "authenticated_zen").length;
+      workerPages.authenticated_zen = Math.max(1, Math.ceil(authenticatedCount / PAGE_SIZE));
       renderAccounts();
     };
 
@@ -227,6 +229,7 @@ export const ADMIN_CLIENT_ACTIONS = `    $("btn-top-refresh").onclick = () => re
     };
 
     initSectionCollapsibles();
+    initSidebar();
     initAccentSwitcher();
     applyStaticI18n();
     showPage(page);

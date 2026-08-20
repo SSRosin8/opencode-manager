@@ -87,12 +87,13 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
 
     function renderIsolation() {
       const rows = isolationRows();
+      const isolation = pageSlice(rows, isolationPage);
+      isolationPage = isolation.page;
       const root = $("iso-rows");
       if (!rows.length) {
         root.innerHTML = '<p class="hint">' + escapeHtml(t("noWorkers")) + '</p>';
       } else {
-        root.innerHTML = rows.map(({ a, idx, p, probe, shared, state }) => {
-          const route = p ? nodeRoute(p) : { label: t("directRoute"), key: "direct" };
+        root.innerHTML = isolation.items.map(({ a, idx, p, probe, shared, state }) => {
           const showBridge = p && p.bridgeable && !p.usable;
           const egressCls = shared || !p ? "shared" : "";
           const egressTitle = !p
@@ -134,6 +135,13 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
       const btn = $("btn-review-bind");
       if (btn) btn.onclick = () => showPage("workers");
       $("iso-updated").textContent = t("lastUpdated");
+      const pagination = $("iso-pagination");
+      pagination.hidden = rows.length <= PAGE_SIZE;
+      $("iso-page-summary").textContent = rows.length
+        ? t("pageSummary")((isolation.page - 1) * PAGE_SIZE + 1, Math.min(isolation.page * PAGE_SIZE, rows.length), rows.length)
+        : "";
+      $("iso-pager").innerHTML = pagerHtml(isolation.page, isolation.totalPages);
+      bindPager($("iso-pager"), isolation.totalPages, (nextPage) => { isolationPage = nextPage; renderIsolation(); });
     }
 
     function renderSubs() {
@@ -319,21 +327,8 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
       }
 
       const pager = $("nodes-pager");
-      let ph = '';
-      ph += '<button type="button" data-p="' + (nodePage - 1) + '" ' + (nodePage <= 1 ? "disabled" : "") + '>&lt;</button>';
-      const pageStart = Math.max(1, Math.min(nodePage - 2, totalPages - 4));
-      const pageEnd = Math.min(totalPages, pageStart + 4);
-      for (let i = pageStart; i <= pageEnd; i++) {
-        ph += '<button type="button" data-p="' + i + '" class="' + (i === nodePage ? "active" : "") + '">' + i + '</button>';
-      }
-      ph += '<button type="button" data-p="' + (nodePage + 1) + '" ' + (nodePage >= totalPages ? "disabled" : "") + '>&gt;</button>';
-      pager.innerHTML = ph;
-      pager.querySelectorAll("button").forEach((b) => {
-        b.onclick = () => {
-          const p = Number(b.dataset.p);
-          if (p >= 1 && p <= totalPages) { nodePage = p; renderNodes(); }
-        };
-      });
+      pager.innerHTML = pagerHtml(nodePage, totalPages);
+      bindPager(pager, totalPages, (nextPage) => { nodePage = nextPage; renderNodes(); });
     }
 
     function renderActivity() {

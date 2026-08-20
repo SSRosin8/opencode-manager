@@ -96,6 +96,21 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
     .iso-health .status-txt { font-weight: 600; font-size: 12px; color: var(--ok); }
     .iso-health .status-txt.warn { color: var(--warn); }
     .iso-health .status-txt.err { color: var(--err); }
+    .info-tooltip {
+      position: relative; display: inline-grid; place-items: center; width: 18px; height: 18px;
+      color: var(--muted); font-size: 12px; cursor: help; outline: none;
+    }
+    .info-tooltip [role="tooltip"] {
+      position: absolute; z-index: 20; top: calc(100% + 8px); left: 50%; width: min(300px, 75vw);
+      padding: 9px 11px; border: 1px solid var(--border-hi); border-radius: var(--radius-sm);
+      background: var(--surface); box-shadow: 0 8px 24px rgba(0,0,0,.18); color: var(--text-2);
+      font-size: 12px; font-weight: 400; line-height: 1.5; text-align: left;
+      opacity: 0; visibility: hidden; pointer-events: none; transform: translate(-50%, -3px);
+      transition: opacity .15s ease, transform .15s ease, visibility .15s;
+    }
+    .info-tooltip:hover [role="tooltip"], .info-tooltip:focus [role="tooltip"], .info-tooltip:focus-within [role="tooltip"] {
+      opacity: 1; visibility: visible; transform: translate(-50%, 0);
+    }
 
     /* Subscriptions */
     .sub-grid {
@@ -144,6 +159,15 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
       max-width: 260px; overflow: hidden; text-overflow: ellipsis;
       white-space: nowrap; color: var(--muted); font-size: 11px; margin-top: 3px;
     }
+    .usage-summary { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:1px; background:var(--border); border-bottom:1px solid var(--border); }
+    .usage-summary-item { min-width:0; padding:12px 16px; background:var(--panel-solid); }
+    .usage-summary-item .label { color:var(--muted); font-size:10px; text-transform:uppercase; }
+    .usage-summary-item .value { margin-top:3px; color:var(--text); font-size:18px; font-weight:700; }
+    .usage-summary-item .detail { margin-top:2px; color:var(--muted); font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .overview-workers-table { min-width:760px; }
+    .worker-route-primary { max-width:380px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .worker-meta { display:flex; align-items:center; gap:6px; margin-top:4px; min-width:0; }
+    .attempt-position { cursor:help; }
     table.nodes {
       width: 100%; border-collapse: collapse; font-size: 12px;
     }
@@ -179,6 +203,8 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
     .pager button:hover { border-color: var(--accent-border); background: var(--accent-dim); }
     .pager button.active { background: var(--accent); border-color: var(--accent); color: #fff; box-shadow: 0 2px 8px var(--accent-glow); }
     .pager button:disabled { opacity: 0.4; }
+    .list-pagination[hidden] { display:none; }
+    .worker-pagination { margin-top:2px; border:1px solid var(--border); border-radius:var(--radius-sm); }
     .lat { font-family: var(--mono); font-size: 12px; }
     .lat.ok { color: var(--ok); }
     .lat.err { color: var(--err); }
@@ -410,8 +436,22 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
         left: 10px; right: 10px; top: auto; bottom: -6px;
         width: auto; height: 2px; border-radius: 2px 2px 0 0;
       }
-      .sidebar-foot { display: none; }
+      .sidebar.is-collapsed { width:100%; }
+      .sidebar.is-collapsed .nav { padding:0; }
+      .sidebar.is-collapsed .nav-item { justify-content:flex-start; gap:10px; padding:0 10px; }
+      .sidebar.is-collapsed .nav-item span { width:auto; opacity:1; overflow:visible; pointer-events:auto; }
+      .sidebar-actions { display: none; }
       .metrics { grid-template-columns: repeat(2, 1fr); }
+      .usage-summary { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+      .overview-workers-table, .attempts-table { min-width:0; }
+      .overview-workers-table thead, .attempts-table thead { display:none; }
+      .overview-workers-table tbody, .attempts-table tbody { display:block; padding:8px; }
+      .overview-workers-table tr, .attempts-table tr { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px 12px; padding:12px; margin-bottom:8px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--panel-solid); }
+      .overview-workers-table tr:last-child, .attempts-table tr:last-child { margin-bottom:0; }
+      .overview-workers-table td, .attempts-table td { min-width:0; padding:0; border:0; position:static !important; background:transparent !important; }
+      .overview-workers-table td:first-child, .attempts-table td:first-child { grid-column:1 / -1; }
+      .attempts-table td:nth-child(3), .attempts-table td:nth-child(4) { grid-column:1 / -1; }
+      .worker-route-primary { max-width:none; }
       .row.two, .row.three { grid-template-columns: 1fr; }
       body { overflow: auto; }
       .app { height: auto; min-height: 100vh; }

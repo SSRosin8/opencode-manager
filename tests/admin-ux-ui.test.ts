@@ -3,6 +3,7 @@ import { ADMIN_CLIENT_ACTIONS } from "../src/server/admin/clientActions.js";
 import { ADMIN_CLIENT_CORE } from "../src/server/admin/clientCore.js";
 import { ADMIN_CLIENT_I18N } from "../src/server/admin/clientI18n.js";
 import { ADMIN_CLIENT_PROXY_VIEWS } from "../src/server/admin/clientProxyViews.js";
+import { ADMIN_CLIENT_WORKER_VIEWS } from "../src/server/admin/clientWorkerViews.js";
 import { ADMIN_DOCUMENT_HEAD } from "../src/server/admin/documentHead.js";
 import { ADMIN_MARKUP } from "../src/server/admin/markup.js";
 import { ADMIN_FEATURE_STYLES } from "../src/server/admin/featureStyles.js";
@@ -69,5 +70,53 @@ describe("admin proxy-pool UX contracts", () => {
     expect(ADMIN_FEATURE_STYLES).toContain("align-items: stretch");
     expect(ADMIN_FEATURE_STYLES).toContain(".pp-main > .proxy-section-active, .pp-side > .proxy-section-active { flex:1; }");
     expect(ADMIN_FEATURE_STYLES).toContain(".pp-main, .pp-side { height:auto; }");
+  });
+
+  it("keeps Overview summaries concise and explains retry attempt positions", () => {
+    expect(ADMIN_MARKUP).toContain('id="ov-usage-summary"');
+    expect(ADMIN_MARKUP).toContain('id="ov-toggle-idle"');
+    expect(ADMIN_MARKUP).not.toContain('data-collapse-key="overview-metrics"');
+    expect(ADMIN_CLIENT_I18N).toContain('attemptPosition: (n, max) => "尝试 " + n + " / 最多 " + max');
+    expect(ADMIN_FEATURE_STYLES).toContain(".overview-workers-table thead, .attempts-table thead { display:none; }");
+  });
+
+  it("explains isolation health with an accessible tooltip", () => {
+    expect(ADMIN_MARKUP).toContain('class="info-tooltip" tabindex="0" aria-describedby="iso-tooltip"');
+    expect(ADMIN_MARKUP).toContain('role="tooltip" data-i18n="isoTooltip"');
+    expect(ADMIN_CLIENT_I18N).toContain('isoTooltip: "展示每个 Worker');
+    expect(ADMIN_FEATURE_STYLES).toContain('.info-tooltip:hover [role="tooltip"]');
+  });
+
+  it("keeps anonymous Worker IDs available without showing long generated IDs in card titles", () => {
+    expect(ADMIN_CLIENT_WORKER_VIEWS).toContain('t("anonymousWorkerName")(idx + 1)');
+    expect(ADMIN_CLIENT_WORKER_VIEWS).toContain('title="\' + escapeAttr(a.id || displayName)');
+    expect(ADMIN_CLIENT_WORKER_VIEWS).toContain('value="\' + escapeAttr(a.id || "")');
+  });
+
+  it("provides a persisted desktop sidebar toggle without redundant footer text", () => {
+    expect(ADMIN_MARKUP).toContain('id="btn-sidebar-toggle"');
+    expect(ADMIN_MARKUP).toContain('aria-controls="main-nav"');
+    expect(ADMIN_MARKUP).not.toContain("v1.0.0");
+    expect(ADMIN_MARKUP).not.toContain('data-i18n="selfHosted"');
+    expect(ADMIN_CLIENT_CORE).toContain('"opencode-manager-sidebar-collapsed"');
+    expect(ADMIN_CLIENT_CORE).toContain('sidebar.classList.toggle("is-collapsed", sidebarCollapsed)');
+    expect(ADMIN_CLIENT_I18N).toContain('sidebarCollapse: "收起侧边栏"');
+    expect(ADMIN_DOCUMENT_HEAD).toContain(".sidebar.is-collapsed { width: 60px; }");
+    expect(ADMIN_FEATURE_STYLES).toContain(".sidebar-actions { display: none; }");
+  });
+
+  it("paginates dense admin lists with one shared eight-item control", () => {
+    expect(ADMIN_CLIENT_CORE).toContain("const PAGE_SIZE = 8");
+    expect(ADMIN_CLIENT_CORE).toContain("function pageSlice(items, currentPage)");
+    expect(ADMIN_CLIENT_CORE).toContain("function pagerHtml(pageNumber, totalPages)");
+    expect(ADMIN_MARKUP).toContain('id="iso-pager"');
+    expect(ADMIN_MARKUP).toContain('id="ov-workers-pager"');
+    expect(ADMIN_MARKUP).toContain('id="ov-attempts-pager"');
+    expect(ADMIN_MARKUP).toContain('id="ov-errors-pager"');
+    expect(ADMIN_CLIENT_PROXY_VIEWS).toContain("pageSlice(rows, isolationPage)");
+    expect(ADMIN_CLIENT_WORKER_VIEWS).toContain("pageSlice(items, workerPages[kind])");
+    expect(ADMIN_CLIENT_WORKER_VIEWS).toContain("pageSlice(attempts, attemptPage)");
+    expect(ADMIN_CLIENT_WORKER_VIEWS).toContain("position < (pageData.page - 1) * PAGE_SIZE");
+    expect(ADMIN_CLIENT_ACTIONS).toContain("workerPages.authenticated_zen = Math.max");
   });
 });

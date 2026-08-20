@@ -42,7 +42,7 @@ export const ADMIN_MARKUP = `</head>
     </header>
 
     <div class="body">
-      <aside class="sidebar">
+      <aside class="sidebar" id="sidebar">
         <nav class="nav" id="main-nav">
           <button type="button" class="nav-item" data-page="overview">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 10.5 12 3l9 7.5V21a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1v-10.5z"/></svg>
@@ -65,9 +65,10 @@ export const ADMIN_MARKUP = `</head>
             <span data-i18n="navUsage">Client Usage</span>
           </button>
         </nav>
-        <div class="sidebar-foot">
-          <div class="ver">v1.0.0</div>
-          <div data-i18n="selfHosted">Self-hosted</div>
+        <div class="sidebar-actions">
+          <button type="button" class="sidebar-toggle" id="btn-sidebar-toggle" aria-controls="main-nav" aria-expanded="true">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+          </button>
         </div>
       </aside>
 
@@ -80,7 +81,6 @@ export const ADMIN_MARKUP = `</head>
               <p class="sub" data-i18n="overviewSub">Gateway health, workers, and proxy pool at a glance.</p>
             </div>
             <div class="page-actions">
-              <button type="button" class="btn btn-sm collapse-toggle" data-collapse-key="overview-metrics" data-collapse-target="ov-metrics" aria-expanded="true"><span aria-hidden="true">▴</span></button>
               <button type="button" class="btn" id="btn-reset-stats" data-i18n="resetStats">Reset stats</button>
             </div>
           </div>
@@ -89,19 +89,18 @@ export const ADMIN_MARKUP = `</head>
             <div class="panel-hd">
               <h2 data-i18n="workerUsage">Worker usage</h2>
               <div class="panel-hd-actions">
-                <span class="muted mono" id="ov-usage-totals"></span>
+                <button type="button" class="btn btn-sm" id="ov-toggle-idle" hidden></button>
                 <button type="button" class="btn btn-sm collapse-toggle" data-collapse-key="overview-worker-usage" data-collapse-target="ov-worker-usage-body" aria-expanded="true"><span aria-hidden="true">▴</span></button>
               </div>
             </div>
             <div class="collapsible-body" id="ov-worker-usage-body">
+              <div class="usage-summary" id="ov-usage-summary"></div>
               <div class="table-wrap">
-                <table class="nodes">
+                <table class="nodes overview-workers-table">
                 <thead>
                   <tr>
-                    <th data-i18n="colIdentity">Zen identity</th>
-                    <th data-i18n="colRouteEgress">Route / egress</th>
-                    <th data-i18n="colRequests">Requests</th>
-                    <th data-i18n="colSuccessErrors">Success / errors</th>
+                    <th data-i18n="colWorkerRoute">Worker / route</th>
+                    <th data-i18n="colTraffic">Traffic</th>
                     <th data-i18n="colTokens">Tokens</th>
                     <th data-i18n="colCache">Cache</th>
                     <th data-i18n="colState">State</th>
@@ -110,6 +109,10 @@ export const ADMIN_MARKUP = `</head>
                 </thead>
                 <tbody id="ov-worker-stats"></tbody>
                 </table>
+              </div>
+              <div class="table-foot list-pagination" id="ov-workers-pagination" hidden>
+                <div class="sum" id="ov-workers-page-summary"></div>
+                <div class="pager" id="ov-workers-pager"></div>
               </div>
             </div>
           </div>
@@ -122,11 +125,9 @@ export const ADMIN_MARKUP = `</head>
               <table class="nodes attempts-table">
                 <thead>
                   <tr>
-                    <th data-i18n="colTime">Time</th>
-                    <th data-i18n="colRequest">Request</th>
+                    <th data-i18n="colRequestAttempt">Request / attempt</th>
                     <th data-i18n="colOperation">Operation</th>
-                    <th data-i18n="colIdentity">Zen identity</th>
-                    <th data-i18n="colRouteEgress">Route / egress</th>
+                    <th data-i18n="colWorkerRoute">Worker / route</th>
                     <th data-i18n="colResult">Result</th>
                     <th data-i18n="colLatency">Latency</th>
                     <th data-i18n="colSwitch">Switch</th>
@@ -135,10 +136,21 @@ export const ADMIN_MARKUP = `</head>
                 <tbody id="ov-attempts"></tbody>
               </table>
             </div>
+            <div class="table-foot list-pagination" id="ov-attempts-pagination" hidden>
+              <div class="sum" id="ov-attempts-page-summary"></div>
+              <div class="pager" id="ov-attempts-pager"></div>
+            </div>
           </div>
-          <div class="panel" style="margin-top:12px">
-            <div class="panel-hd"><h2 data-i18n="recentErrors">Recent errors</h2></div>
+          <div class="panel" id="overview-errors-panel" style="margin-top:12px" hidden>
+            <div class="panel-hd">
+              <h2 data-i18n="gatewayRejections">Gateway rejections</h2>
+              <span class="muted" data-i18n="gatewayRejectionsSub">Requests rejected before an upstream Worker was called.</span>
+            </div>
             <div class="panel-bd"><ul class="activity-list" id="ov-errors"></ul></div>
+            <div class="table-foot list-pagination" id="ov-errors-pagination" hidden>
+              <div class="sum" id="ov-errors-page-summary"></div>
+              <div class="pager" id="ov-errors-pager"></div>
+            </div>
           </div>
         </div>
 
@@ -247,7 +259,7 @@ export const ADMIN_MARKUP = `</head>
                 <div class="panel-hd">
                   <h2>
                     <span data-i18n="isoTitle">IP Isolation Overview</span>
-                    <span class="muted" title="Worker → Proxy → Egress">ⓘ</span>
+                    <span class="info-tooltip" tabindex="0" aria-describedby="iso-tooltip">ⓘ<span id="iso-tooltip" role="tooltip" data-i18n="isoTooltip">Shows each Worker route from its proxy binding to the detected egress IP. Green means unique, yellow means shared or unverified, and red means unavailable.</span></span>
                   </h2>
                   <button type="button" class="btn btn-sm collapse-toggle" data-collapse-key="proxy-isolation" data-collapse-target="proxy-isolation-body" aria-expanded="true"><span aria-hidden="true">▴</span></button>
                 </div>
@@ -266,6 +278,10 @@ export const ADMIN_MARKUP = `</head>
                         <span><i class="dot err"></i><span data-i18n="legIssue">Issue</span></span>
                       </div>
                       <div id="iso-updated" class="muted"></div>
+                    </div>
+                    <div class="table-foot list-pagination" id="iso-pagination" hidden>
+                      <div class="sum" id="iso-page-summary"></div>
+                      <div class="pager" id="iso-pager"></div>
                     </div>
                   </div>
                   <div class="iso-health" id="iso-health"></div>
