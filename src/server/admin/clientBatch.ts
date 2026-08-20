@@ -204,12 +204,26 @@ export const ADMIN_CLIENT_BATCH = `    async function loadSettings() {
         if (!res.ok) throw new Error(data.error?.message || ("HTTP " + res.status));
         acceptBatchProgress(data.progress);
         if (data.probeResults) probeResults = data.probeResults;
-        if (data.settings) settings = data.settings;
+        if (data.settings) {
+          settings = data.settings;
+          serverAccountIds = new Set((settings.accounts || []).map((account) => account.id));
+        }
         else if (data.result) probeResults[id] = data.result;
         const result = data.result || probeResults[id];
+        const addedWorkers = data.autoWorkers?.added || 0;
+        if (addedWorkers) renderBatchDerivedViews();
         if (result) pushProbeEvent(result, name || result.id);
-        if (result?.ok) toast(t("toastTestOk")(name || id, result.latencyMs ?? "—"));
-        else toast(t("toastTestFail")(name || id, result?.error || ""), false);
+        const anonymousOk = result?.anonymousZen == null || result.anonymousZen.ok;
+        if (result?.ok && anonymousOk) {
+          const message = t("toastTestOk")(name || id, result.latencyMs ?? "—") +
+            (addedWorkers ? " · " + t("toastBatchWorkers")(addedWorkers) : "");
+          toast(message);
+        } else {
+          const error = result?.anonymousZen && !result.anonymousZen.ok
+            ? (result.anonymousZen.error || result.anonymousZen.status)
+            : result?.error || "";
+          toast(t("toastTestFail")(name || id, error), false);
+        }
       } catch (e) {
         toast(String(e.message || e), false);
       } finally {

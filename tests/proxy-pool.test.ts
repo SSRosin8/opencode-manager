@@ -8,7 +8,6 @@ import { join } from "node:path";
 import {
   assignHealthyProxiesToWorkers,
   mergeSubscriptionProxies,
-  mergeControllerProxies,
   resolveAccountEgress,
   normalizeProxyPool,
   newProxyId,
@@ -16,11 +15,6 @@ import {
 } from "../src/proxy/pool.js";
 import { parseSubscriptionBody, fetchClashSubscription } from "../src/proxy/clash.js";
 import { UpstreamClient } from "../src/proxy/upstream.js";
-import {
-  getClashSelectorCurrent,
-  importClashControllerNodes,
-  selectClashProxy,
-} from "../src/proxy/clashBridge.js";
 import { SettingsStore, type GatewaySettings } from "../src/settings/store.js";
 import { createApp, close, listen, type App } from "../src/server/http.js";
 import { ProbeResultCache } from "../src/proxy/probe.js";
@@ -159,113 +153,6 @@ proxy-groups:
     expect(result.proxies.find((p) => p.name === "HK2-HY2")?.port).toBe(20200);
     expect(result.clashHints?.mixedPort).toBe(7892);
     expect(result.clashHints?.selectorGroups?.[0]).toBe("主代理");
-  });
-});
-
-describe("Clash Controller import", () => {
-  function hangingControllerFetch(onSignal?: (signal: AbortSignal) => void): typeof fetch {
-    return (async (_url: string | URL | Request, init?: RequestInit) => {
-      const signal = init?.signal;
-      if (!signal) throw new Error("missing abort signal");
-      onSignal?.(signal);
-      return await new Promise<Response>((_resolve, reject) => {
-        signal.addEventListener(
-          "abort",
-          () => reject(new DOMException("aborted", "AbortError")),
-          { once: true }
-        );
-      });
-    }) as typeof fetch;
-  }
-
-  it("bounds selector reads and switches with an abort timeout", async () => {
-    const bridge = {
-      ...settings().clashBridge,
-      enabled: true,
-      selectorGroup: "Proxy",
-    };
-    let readSignal: AbortSignal | undefined;
-    await expect(
-      getClashSelectorCurrent(bridge, hangingControllerFetch((signal) => {
-        readSignal = signal;
-      }), 20)
-    ).rejects.toMatchObject({ name: "AbortError" });
-    expect(readSignal?.aborted).toBe(true);
-
-    let switchSignal: AbortSignal | undefined;
-    await expect(
-      selectClashProxy(bridge, "Mexico", hangingControllerFetch((signal) => {
-        switchSignal = signal;
-      }), 20)
-    ).rejects.toMatchObject({ name: "AbortError" });
-    expect(switchSignal?.aborted).toBe(true);
-  });
-
-  it("imports only leaf nodes with stable ids and exact names", async () => {
-    const calls: Array<{ url: string; auth: string | null }> = [];
-    const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
-      const headers = new Headers(init?.headers);
-      calls.push({ url: String(url), auth: headers.get("authorization") });
-      return new Response(
-        JSON.stringify({
-          proxies: {
-            Proxy: {
-              type: "Selector",
-              now: "Mexico",
-              all: ["Mexico", "Spain  ", "Auto", "Fallback", "DIRECT", "Blocked"],
-            },
-            Mexico: { type: "AnyTLS" },
-            "Spain  ": { type: "AnyTLS" },
-            Auto: { type: "URLTest" },
-            Fallback: { type: "Fallback" },
-            DIRECT: { type: "Direct" },
-            Blocked: { type: "Reject" },
-            GLOBAL: { type: "Selector", all: ["Proxy", "DIRECT"] },
-          },
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
-      );
-    };
-    const bridge = {
-      enabled: true,
-      apiBase: "http://127.0.0.1:9090",
-      apiSecret: "secret",
-      localProxyHost: "127.0.0.1",
-      localProxyPort: 17891,
-      selectorGroup: "Proxy",
-    };
-
-    const first = await importClashControllerNodes(bridge, fetchImpl as typeof fetch);
-    const second = await importClashControllerNodes(bridge, fetchImpl as typeof fetch);
-
-    expect(first.proxies.map((p) => p.name)).toEqual(["Mexico", "Spain  "]);
-    expect(first.proxies.map((p) => p.clashNodeName)).toEqual(["Mexico", "Spain  "]);
-    expect(first.proxies.every((p) => p.type === "anytls")).toBe(true);
-    expect(first.proxies.every((p) => !p.usable && p.bridgeable)).toBe(true);
-    expect(first.proxies.map((p) => p.id)).toEqual(second.proxies.map((p) => p.id));
-    expect(calls.every((call) => call.auth === "Bearer secret")).toBe(true);
-  });
-
-  it("replaces one Controller group without duplicating stable nodes", async () => {
-    const imported = [
-      {
-        id: "controller_a",
-        name: "Mexico",
-        type: "anytls",
-        host: "127.0.0.1",
-        port: 17891,
-        enabled: true,
-        source: "controller" as const,
-        controllerGroup: "Proxy",
-        usable: false,
-        bridgeable: true,
-        clashNodeName: "Mexico",
-      },
-    ];
-    const once = mergeControllerProxies([], "Proxy", imported);
-    const twice = mergeControllerProxies(once, "Proxy", imported);
-    expect(twice).toHaveLength(1);
-    expect(twice[0].id).toBe("controller_a");
   });
 });
 
@@ -688,87 +575,6 @@ proxies:
     expect(html).toContain("Clash");
     expect(html).toContain("btn-assign-proxies");
     expect(html).toContain("/admin/api/workers/assign-proxies");
-  });
-
-  it("imports running Controller nodes and preserves worker bindings on refresh", async () => {
-    dir = await mkdtemp(join(tmpdir(), "ocfr-controller-"));
-    const store = new SettingsStore(join(dir, "settings.json"));
-    await store.save(
-      settings({
-        accounts: [
-          { id: "w1", apiKey: "a", proxyId: null, proxy: null },
-          { id: "w2", apiKey: "b", proxyId: null, proxy: null },
-        ],
-      })
-    );
-    const controllerFetch = vi.fn(async (url: string | URL | Request) => {
-      if (String(url).endsWith("/proxies")) {
-        return new Response(
-          JSON.stringify({
-            proxies: {
-              Proxy: { type: "Selector", now: "Mexico", all: ["Mexico", "Spain", "Auto"] },
-              Mexico: { type: "AnyTLS" },
-              Spain: { type: "AnyTLS" },
-              Auto: { type: "URLTest", all: ["Mexico", "Spain"] },
-            },
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        );
-      }
-      return new Response(null, { status: 404 });
-    });
-    app = await createApp({
-      store,
-      port: 0,
-      fetchImpl: async () => new Response("{}", { status: 200 }),
-      subscriptionFetch: controllerFetch as unknown as typeof fetch,
-    });
-    await listen(app);
-    const addr = app.server.address();
-    if (!addr || typeof addr === "string") throw new Error("no addr");
-    const base = `http://127.0.0.1:${addr.port}`;
-    const bridge = {
-      enabled: true,
-      apiBase: "http://127.0.0.1:9090",
-      apiSecret: "",
-      localProxyHost: "127.0.0.1",
-      localProxyPort: 17891,
-      selectorGroup: "Proxy",
-    };
-
-    const firstRes = await fetch(`${base}/admin/api/clash-bridge/import`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(bridge),
-    });
-    expect(firstRes.status).toBe(200);
-    const first = (await firstRes.json()) as { imported: number; settings: GatewaySettings };
-    expect(first.imported).toBe(2);
-    expect(first.settings.clashBridge).toEqual(bridge);
-    expect(first.settings.proxyPool.every((p) => p.source === "controller")).toBe(true);
-    const ids = first.settings.proxyPool.map((p) => p.id);
-
-    const bound = await store.save({
-      accounts: [
-        { id: "w1", apiKey: "a", proxyId: ids[0], proxy: null },
-        { id: "w2", apiKey: "b", proxyId: ids[1], proxy: null },
-      ],
-    });
-    app.upstream.updateSettings(bound);
-
-    const secondRes = await fetch(`${base}/admin/api/clash-bridge/import`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(bridge),
-    });
-    const second = (await secondRes.json()) as { settings: GatewaySettings };
-    expect(secondRes.status).toBe(200);
-    expect(second.settings.proxyPool.map((p) => p.id)).toEqual(ids);
-    expect(second.settings.accounts.map((a) => a.proxyId)).toEqual(ids);
-
-    const html = await (await fetch(`${base}/`)).text();
-    expect(html).toContain("btn-import-clash");
-    expect(html).toContain("/admin/api/clash-bridge/import");
   });
 
   it("tests exactly one bound worker with a real proxied chat request", async () => {

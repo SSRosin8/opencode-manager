@@ -259,7 +259,14 @@ export class SettingsStore {
   }
 
   async save(partial: Partial<GatewaySettings>): Promise<GatewaySettings> {
-    return this.enqueueMutation((current) => ({ ...current, ...partial }));
+    return this.update((current) => ({ ...current, ...partial }));
+  }
+
+  /** Atomically derive and persist a mutation from the latest saved settings. */
+  update(
+    builder: (current: GatewaySettings) => Partial<GatewaySettings>
+  ): Promise<GatewaySettings> {
+    return this.enqueueMutation(builder);
   }
 
   async addManualProxy(input: Partial<PoolProxy> & { host: string; port: number }): Promise<GatewaySettings> {
@@ -297,7 +304,8 @@ export class SettingsStore {
     build: (current: GatewaySettings) => Partial<GatewaySettings>
   ): Promise<GatewaySettings> {
     const job = this.mutationChain.then(async () => {
-      const next = normalizeSettings(build(this.get()));
+      const current = this.get();
+      const next = normalizeSettings({ ...current, ...build(current) });
       await this.persist(next);
       this.settings = next;
       this.syncStatusFromSettings();

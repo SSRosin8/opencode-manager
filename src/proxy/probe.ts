@@ -133,6 +133,17 @@ export class ProbeResultCache {
     this.map.delete(id);
   }
 
+  remap(oldId: string, newId: string): void {
+    if (oldId === newId) return;
+    const result = this.map.get(oldId);
+    if (!result) return;
+    const current = this.map.get(newId);
+    if (!current || result.testedAt >= current.testedAt) {
+      this.map.set(newId, { ...result, id: newId });
+    }
+    this.map.delete(oldId);
+  }
+
   clear(): void {
     this.map.clear();
   }

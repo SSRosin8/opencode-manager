@@ -56,9 +56,13 @@ HTTP and SOCKS5 proxies work directly. VLESS, Hysteria2, TUIC, AnyTLS, and simil
 
 Do not switch the same Selector from another client while probing or relaying traffic.
 
+`Proxy` and `GLOBAL` are selector/routing groups, not separate node pools or separate quotas. `GLOBAL` normally controls Clash global mode, while custom groups such as `Proxy` usually receive rule-mode traffic. Choose the group used by the active mode and make sure it can directly select leaf nodes. In common configurations, `GLOBAL` contains only upper-level policies such as `Proxy` and `DIRECT`; such a group cannot be imported as a leaf-node group. Node identity is based on the Controller address and exact leaf name, so importing the same nodes through `Proxy` and `GLOBAL` no longer creates duplicates. Re-importing after changing the selector on the same Controller replaces the current view and migrates bindings for nodes that still exist; changing the Controller address clears the old egress state and requires rebinding and retesting.
+
 ## 5. Create Anonymous Zen Workers
 
-After importing nodes, click Batch Test. It has two phases:
+After importing nodes, test an individual node or click Batch Test. A successful individual test also reads the public egress IP, sends the minimal anonymous Zen request, and immediately creates the corresponding anonymous Worker. Repeating the test does not create a duplicate.
+
+Batch Test has two phases:
 
 - Screening calls Mihomo's delay API concurrently.
 - Verification switches each node, reads its public IP, and sends one minimal anonymous Zen request.

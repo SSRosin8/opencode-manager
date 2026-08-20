@@ -331,15 +331,12 @@ export function mergeSubscriptionProxies(
   return [...kept, ...tagged];
 }
 
-/** Replace nodes imported from one Controller selector while preserving stable bindings. */
-export function mergeControllerProxies(
+/** One bridge has one active selector, so a fresh import replaces its old Controller view. */
+export function replaceControllerProxies(
   pool: PoolProxy[],
-  controllerGroup: string,
   imported: PoolProxy[]
 ): PoolProxy[] {
-  const kept = pool.filter(
-    (p) => !(p.source === "controller" && p.controllerGroup === controllerGroup)
-  );
+  const kept = pool.filter((proxy) => proxy.source !== "controller");
   return [...kept, ...imported];
 }
 

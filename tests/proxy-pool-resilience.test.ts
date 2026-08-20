@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { fetchClashSubscription } from "../src/proxy/clash.js";
-import { newProxyId, normalizeProxyPool } from "../src/proxy/pool.js";
+import {
+  newProxyId,
+  normalizeProxyPool,
+  replaceControllerProxies,
+} from "../src/proxy/pool.js";
+import { importClashControllerNodes } from "../src/proxy/clashBridge.js";
 import { UpstreamClient } from "../src/proxy/upstream.js";
 import type { GatewaySettings } from "../src/settings/store.js";
 
@@ -39,6 +44,48 @@ describe("normalizeProxyPool", () => {
     expect(pool).toHaveLength(1);
     expect(pool[0].host).toBe("1.1.1.1");
     expect(newProxyId().startsWith("px_")).toBe(true);
+  });
+});
+
+describe("Controller import resilience", () => {
+  it("replaces the previous Controller view without duplicating stable nodes", () => {
+    const imported = [{
+      id: "controller_a",
+      name: "Mexico",
+      type: "anytls",
+      host: "127.0.0.1",
+      port: 17891,
+      enabled: true,
+      source: "controller" as const,
+      controllerGroup: "Proxy",
+      usable: false,
+      bridgeable: true,
+      clashNodeName: "Mexico",
+    }];
+    const once = replaceControllerProxies([], imported);
+    const twice = replaceControllerProxies(once, imported);
+    expect(twice).toHaveLength(1);
+    expect(twice[0].id).toBe("controller_a");
+  });
+
+  it("rejects a selector that only contains nested groups", async () => {
+    const bridge = {
+      ...settings().clashBridge,
+      enabled: true,
+      selectorGroup: "GLOBAL",
+    };
+    const fetchImpl = async () => new Response(JSON.stringify({
+      proxies: {
+        GLOBAL: { type: "Selector", all: ["Proxy", "DIRECT"] },
+        Proxy: { type: "Selector", all: ["Mexico"] },
+        Mexico: { type: "AnyTLS" },
+        DIRECT: { type: "Direct" },
+      },
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+
+    await expect(
+      importClashControllerNodes(bridge, fetchImpl as typeof fetch)
+    ).rejects.toThrow('selector group "GLOBAL" contains no importable leaf nodes');
   });
 });
 

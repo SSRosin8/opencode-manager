@@ -50,10 +50,14 @@ export const ADMIN_CLIENT_ACTIONS = `    $("btn-top-refresh").onclick = () => re
         const data = await res.json();
         if (!res.ok) throw new Error(data.error?.message || ("HTTP " + res.status));
         settings = data.settings;
+        if (data.probeResults) probeResults = data.probeResults;
         bridgeProbeOk = true;
         await loadStatus();
         renderAll();
-        toast(t("toastControllerImported")(data.imported || 0, data.group || bridge.selectorGroup), (data.imported || 0) > 0);
+        const conflicts = data.bindingConflicts?.length || 0;
+        const message = t("toastControllerImported")(data.imported || 0, data.group || bridge.selectorGroup) +
+          (conflicts ? " · " + t("toastControllerConflicts")(conflicts) : "");
+        toast(message, (data.imported || 0) > 0 && conflicts === 0);
       } catch (e) {
         toast(String(e.message || e), false);
       } finally {

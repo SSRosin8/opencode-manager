@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { RequestContext } from "../context.js";
 import { probeAnonymousZenProxy, probePoolProxy, type ProbeResult } from "../../proxy/probe.js";
-import { attachAnonymousZenResult } from "../workerEgress.js";
+import { attachAnonymousZenResult, syncAnonymousWorkers } from "../workerEgress.js";
 import { readBody, sendJson } from "../httpIO.js";
 
 export async function handleProxyPool(
@@ -41,7 +41,29 @@ export async function handleProxyPool(
         )
       : attachAnonymousZenResult(networkProbe, null);
     probes.set(result);
-    sendJson(res, 200, { result, probeResults: probes.getAll() });
+    let addedIds: string[] = [];
+    let proxyStillExists = false;
+    const settings = await store.update((current) => {
+      proxyStillExists = current.proxyPool.some((item) => item.id === result.id);
+      if (!proxyStillExists) return {};
+      const synced = syncAnonymousWorkers(current, [result], probes);
+      addedIds = synced.addedIds;
+      return addedIds.length ? { accounts: synced.accounts } : {};
+    });
+    if (!proxyStillExists) probes.delete(result.id);
+    if (addedIds.length) {
+      upstream.updateSettings(settings);
+      store.updateReadyCount(
+        upstream.rotator.readyCount(),
+        upstream.rotator.getAccounts().length
+      );
+    }
+    sendJson(res, 200, {
+      result,
+      probeResults: probes.getAll(),
+      settings,
+      autoWorkers: { added: addedIds.length, addedIds },
+    });
     return true;
   }
 

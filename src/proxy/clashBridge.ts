@@ -41,9 +41,9 @@ function controllerHeaders(bridge: ClashBridgeConfig): Record<string, string> {
   return headers;
 }
 
-function controllerNodeId(apiBase: string, group: string, name: string): string {
+function controllerNodeId(apiBase: string, name: string): string {
   const digest = createHash("sha256")
-    .update(`${apiBase.replace(/\/+$/, "")}\n${group}\n${name}`)
+    .update(`${apiBase.replace(/\/+$/, "")}\n${name}`)
     .digest("hex")
     .slice(0, 24);
   return `controller_${digest}`;
@@ -105,7 +105,7 @@ export async function importClashControllerNodes(
     const clashType = String(info.type || "controller");
     if (groupTypes.has(clashType.toLowerCase().replace(/[-_\s]/g, ""))) continue;
     proxies.push({
-      id: controllerNodeId(base, bridge.selectorGroup, name),
+      id: controllerNodeId(base, name),
       name,
       type: clashType.toLowerCase(),
       host: bridge.localProxyHost,
