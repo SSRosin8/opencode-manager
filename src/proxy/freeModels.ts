@@ -1,0 +1,192 @@
+/**
+ * Free-model registry for opencode-manager.
+ *
+ * Determines which upstream models are "free" by scraping the OpenCode Zen
+ * pricing page (https://opencode.ai/docs/zen) and keeping every model whose
+ * Input & Output price columns are marked "Free". The HTTP layer serves ONLY
+ * these models (both /v1/models and /v1/chat/completions) so no paid model is
+ * ever exposed to clients — that is the point of this project.
+ *
+ * Resilience:
+ *  - The parsed result is cached to data/free-models.json (last success).
+ *  - On refresh failure we keep the previous set (disk / memory), and before
+ *    any successful scrape we use a static baseline of the currently-known
+ *    free model ids so a fresh boot is not empty and no paid model leaks.
+ */
+
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+
+export const ZEN_PRICING_URL =
+  process.env.OPENCODE_MANAGER_PRICING_URL || "https://opencode.ai/docs/zen";
+
+/**
+ * Baseline free-model ids (snapshot of the Zen pricing page "Free" rows).
+ * Used as the starting set / last-resort fallback; refreshed by scraping.
+ */
+export const KNOWN_FREE_MODELS: string[] = [
+  "big-pickle",
+  "deepseek-v4-flash-free",
+  "mimo-v2.5-free",
+  "laguna-s-2.1-free",
+  "ling-3.0-flash-free",
+  "longcat-2.0-free",
+  "north-mini-code-free",
+  "nemotron-3-ultra-free",
+];
+
+/** "DeepSeek V4 Flash Free" -> "deepseek-v4-flash-free" (lowercase, dash-separated). */
+export function normalizeModelName(name: string): string {
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9.]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function stripTags(s: string): string {
+  return s
+    .replace(/<[^>]*>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&#x3C;/g, "<")
+    .replace(/&#x26;/g, "&")
+    .trim();
+}
+
+/**
+ * Parse free model ids out of the OpenCode Zen pricing page HTML.
+ * Pure + unit-testable: finds the table whose header includes Model + Cached
+ * Write, then keeps rows whose Input & Output columns are "Free".
+ */
+export function parseFreeModelIds(html: string): string[] {
+  const found = new Set<string>();
+  const tableRe = /<table>([\s\S]*?)<\/table>/gi;
+  for (const m of html.matchAll(tableRe)) {
+    const table = m[1];
+    if (!/<th[^>]*>\s*Model\s*<\/th>/i.test(table)) continue;
+    if (!/<th[^>]*>\s*Cached\s*Write\s*<\/th>/i.test(table)) continue;
+    const rows = table.match(/<tr[^>]*>([\s\S]*?)<\/tr>/gi) || [];
+    for (const tr of rows) {
+      const tds = tr.match(/<td[^>]*>([\s\S]*?)<\/td>/gi);
+      if (!tds || tds.length < 3) continue;
+      const cells = tds.map(stripTags);
+      const name = cells[0];
+      if (!name) continue;
+      if (/^free$/i.test(cells[1]) && /^free$/i.test(cells[2])) {
+        found.add(normalizeModelName(name));
+      }
+    }
+  }
+  return [...found];
+}
+
+export type FreeModelStatus = {
+  count: number;
+  ids: string[];
+  lastFetchedAt: string | null;
+  lastError: string | null;
+  usingBaseline: boolean;
+};
+
+function defaultCachePath(): string {
+  const settingsPath = process.env.OPENCODE_MANAGER_SETTINGS_PATH;
+  const base = settingsPath ? dirname(settingsPath) : resolve(process.cwd(), "data");
+  return resolve(base, "free-models.json");
+}
+
+export class FreeModelRegistry {
+  private _ids = new Set<string>();
+  private lastFetchedAt: string | null = null;
+  private lastError: string | null = null;
+  private cachePath: string;
+
+  constructor(opts?: { defaultIds?: string[]; cachePath?: string }) {
+    this._ids = new Set(opts?.defaultIds ?? KNOWN_FREE_MODELS);
+    this.cachePath = opts?.cachePath ?? defaultCachePath();
+  }
+
+  /** True when the model (bare id, e.g. "big-pickle") is in the free set. */
+  has(id: string | undefined | null): boolean {
+    if (!id) return false;
+    if (this._ids.has(id)) return true;
+    const norm = normalizeModelName(id);
+    return this._ids.has(norm);
+  }
+
+  ids(): string[] {
+    return [...this._ids].sort();
+  }
+
+  count(): number {
+    return this._ids.size;
+  }
+
+  status(): FreeModelStatus {
+    return {
+      count: this._ids.size,
+      ids: this.ids(),
+      lastFetchedAt: this.lastFetchedAt,
+      lastError: this.lastError,
+      usingBaseline: this.lastFetchedAt === null,
+    };
+  }
+
+  /** Restore the last successful scrape from disk (so a restart keeps it). */
+  async loadCache(): Promise<void> {
+    try {
+      const text = await readFile(this.cachePath, "utf8");
+      const parsed = JSON.parse(text) as { fetchedAt?: string; ids?: unknown };
+      const ids = Array.isArray(parsed.ids)
+        ? parsed.ids.filter((x): x is string => typeof x === "string")
+        : [];
+      if (ids.length) {
+        this._ids = new Set(ids);
+        this.lastFetchedAt = typeof parsed.fetchedAt === "string" ? parsed.fetchedAt : null;
+        this.lastError = null;
+      }
+    } catch {
+      /* no cache yet — keep baseline */
+    }
+  }
+
+  private async persist(): Promise<void> {
+    await mkdir(dirname(this.cachePath), { recursive: true });
+    await writeFile(
+      this.cachePath,
+      JSON.stringify(
+        { fetchedAt: this.lastFetchedAt, ids: this.ids() },
+        null,
+        2
+      ),
+      "utf8"
+    );
+  }
+
+  /**
+   * Scrape the pricing page and update the free set. On failure the previous
+   * set is kept (disk / memory / baseline) and the error is recorded.
+   */
+  async refresh(fetchImpl?: typeof fetch): Promise<FreeModelStatus> {
+    const fetcher = fetchImpl ?? globalThis.fetch;
+    try {
+      const res = await fetcher(ZEN_PRICING_URL, {
+        headers: { "User-Agent": "opencode-manager/1.0 (+https://github.com)" },
+      });
+      if (!res.ok) throw new Error(`pricing page HTTP ${res.status}`);
+      const parsed = parseFreeModelIds(await res.text());
+      if (parsed.length === 0) {
+        throw new Error("pricing page parsed 0 free models");
+      }
+      this._ids = new Set(parsed);
+      this.lastFetchedAt = new Date().toISOString();
+      this.lastError = null;
+      await this.persist();
+    } catch (err) {
+      this.lastError = err instanceof Error ? err.message : String(err);
+      // keep previous set
+    }
+    return this.status();
+  }
+}
