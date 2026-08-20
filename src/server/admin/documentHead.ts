@@ -131,6 +131,7 @@ export const ADMIN_DOCUMENT_HEAD = `<!DOCTYPE html>
       --accent-glow: rgba(217, 119, 6, 0.1);
     }
     * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
     html, body { height: 100%; }
     body {
       margin: 0;

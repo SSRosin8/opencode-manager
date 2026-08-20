@@ -21,7 +21,16 @@ Open http://127.0.0.1:9876/ or check:
 curl http://127.0.0.1:9876/health
 ```
 
-Use `npm run dev` for development without a prior build. An Admin port change requires a restart. The project does not load `.env` automatically; use shell variables, for example `PORT=9988 npm start`.
+`npm start` is a foreground process: keep the terminal open and press `Ctrl+C` for a graceful shutdown; closing the terminal also stops it. It runs `dist/`, so run `npm run build` after source changes or pulling new code. Use `npm run dev` to run source directly during development.
+
+The project does not install a background service. If another terminal already runs it, stop that process with `Ctrl+C`, or resolve its exact PID and use `kill -TERM <PID>`, before starting a new build. Check the listener with:
+
+```bash
+ss -ltnp | grep ':9876'
+# macOS: lsof -nP -iTCP:9876 -sTCP:LISTEN
+```
+
+An Admin port change requires a restart. The project does not load `.env` automatically; use shell variables, for example `PORT=9988 npm start`.
 
 The default bind address is `127.0.0.1`. Set `OPENCODE_MANAGER_HOST=0.0.0.0` only when Admin is separately protected by a firewall or reverse proxy.
 
@@ -46,7 +55,18 @@ On the Gateway page:
 
 ## 4. Prepare Clash/Mihomo
 
-Subscription pulls try several client User-Agents, including `clash` and `0dcloud`, because some providers only serve or authorize specific clients.
+Choose a path based on the proxy source you already have:
+
+| Available source | Recommended path | Clash bridge required |
+|---|---|---|
+| HTTP/SOCKS5 endpoint | Add it manually | No |
+| Standard subscription URL | Add the subscription and click Fetch | Not for HTTP/SOCKS; required for protocol nodes |
+| Nodes already loaded in Clash/0dcloud | Configure the bridge and Import Controller Nodes | Yes |
+| Controller secret is unavailable | Use an independent Mihomo instance you control, or use HTTP/SOCKS only | Depends on the chosen path |
+
+Subscription pulls try several client User-Agents, including `clash` and `0dcloud`, because some providers only serve or authorize specific clients. A subscription fetch parses only the **current HTTP response's** top-level Clash `proxies` or share-link lines. It does not read a Clash client's cache or expand remote `proxy-providers` in that response.
+
+Import Controller Nodes reads leaf nodes already loaded into Mihomo's runtime Selector. Mihomo may have used cache, expanded providers, or merged other sources. Direct-fetch and Controller-import counts therefore need not match even when the subscription URL appears to be the same.
 
 HTTP and SOCKS5 proxies work directly. VLESS, Hysteria2, TUIC, AnyTLS, and similar nodes require local Mihomo/Clash Meta:
 
@@ -55,6 +75,13 @@ HTTP and SOCKS5 proxies work directly. VLESS, Hysteria2, TUIC, AnyTLS, and simil
 3. Identify the Selector group that owns the leaf nodes, such as `Proxy`.
 4. In Proxy Pool, configure Controller URL, secret, host, port, and Selector group; enable and save the bridge.
 5. Test the bridge, then click Import Controller Nodes.
+
+The bridge has two independent paths:
+
+- **Control plane**: Controller URL and secret, used to enumerate nodes, query delay, and switch the Selector; commonly port `9090`.
+- **Data plane**: local host and mixed-port, used to carry actual HTTP traffic; commonly `7890`, `7892`, or the port reported by the client.
+
+Both must work. A successful Controller test does not prove the mixed-port can relay traffic. `127.0.0.1` in these fields means the machine running opencode-manager. It cannot address Clash on another machine, and an unauthenticated Controller must not be exposed to a LAN.
 
 Do not switch the same Selector from another client while probing or relaying traffic.
 
@@ -130,13 +157,29 @@ curl -sS http://127.0.0.1:9876/v1/chat/completions \
 
 Remove the token header when relay authentication is disabled. Paid or unknown models return `403 model_not_allowed` before upstream access.
 
-## 10. Data, Backup, And Upgrade
+## 10. Shortest Layered Validation
+
+Validate in this order and investigate only the first failing layer:
+
+1. **Process**: `curl http://127.0.0.1:9876/health` returns `ok: true`.
+2. **Proxy source**: the subscription reports a plausible node count, or Controller import succeeds with the intended Selector.
+3. **Clash control plane**: Test Connection succeeds and discovers the target Selector.
+4. **Clash data plane**: test one node and confirm a public egress IP before starting a batch.
+5. **Worker**: at least one Worker is enabled, ready, and bound to the expected proxy.
+6. **Models**: `/v1/models` confirms relay authentication and the free-model list.
+7. **Chat**: send one minimal `/v1/chat/completions` request last.
+
+Skip step 3 when Clash is not used. HTTP/SOCKS proxies still need the real-egress check in step 4.
+
+## 11. Data, Backup, And Upgrade
 
 - `data/settings.json`: Workers, keys, proxies, subscriptions, and Admin settings; sensitive.
 - `data/worker-stats.json`: usage and attempt statistics.
 - `data/free-models.json`: rebuildable free-model cache.
 
 Override paths with `OPENCODE_MANAGER_SETTINGS_PATH` and `OPENCODE_MANAGER_STATS_PATH`. Stop the service before copying `data/` for backup or migration.
+
+Stop the existing foreground process before upgrading so old and new builds do not compete for the same port:
 
 ```bash
 git pull --ff-only
@@ -146,16 +189,36 @@ npm test
 npm start
 ```
 
-## 11. Troubleshooting
+## 12. Troubleshooting
 
 - Long batch: distinguish Screening from Verification. Shared Clash verification is intentionally serial and dead nodes wait for timeouts.
 - `503 no_workers_configured`: run Batch Test or add a signed-in Worker.
 - `503 no_enabled_workers`: enable and save at least one Worker.
 - Worker test failure: distinguish egress failure, 401/403 invalid key, 429 exhausted quota, and temporary 5xx.
-- Controller failure: verify URL, secret, mixed-port, Selector name, and leaf nodes.
 - Port conflict: run `PORT=9988 npm start`; Admin port changes apply after restart.
 
-## 12. Current Limits
+### Controller And Bridge
+
+| Symptom | Meaning and checks |
+|---|---|
+| Connection refused or timeout | Wrong Controller address/port, or Mihomo is not listening |
+| `401 Unauthorized` | Controller is reachable, but the secret is missing or wrong; some clients do not expose their internal secret |
+| `404` | The target is usually not a Clash Controller port or endpoint |
+| `selector group not found` | Selector name is wrong; use a Selector reported by Test Connection |
+| Controller succeeds, node test fails | Check mixed-port, active routing mode, whether the Selector carries traffic, and data-plane egress |
+
+### Subscription Fetch
+
+| Symptom | Meaning and checks |
+|---|---|
+| `403` | Provider rejected the User-Agent, source IP, or subscription authorization |
+| `504` | The subscription gateway could not reach its upstream in time; this is not a parser error in this project |
+| Fetch succeeds with too few nodes | The current response may be a different-UA format, a single-node response, or a provider config; it is not the same as Clash's expanded runtime cache |
+| Controller has more nodes than fetch | Controller exposes Mihomo's final in-memory Selector, possibly including cache, expanded providers, or other sources |
+
+Subscription URLs normally contain access tokens. Do not publish complete URLs, response bodies, or secrets while troubleshooting.
+
+## 13. Current Limits
 
 - Zen only; OpenCode Go is unsupported.
 - One shared Clash Selector cannot safely sustain simultaneous distinct egresses. Use independent Mihomo inbounds or instances for true concurrency.

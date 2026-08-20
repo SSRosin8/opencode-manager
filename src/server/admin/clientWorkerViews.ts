@@ -331,6 +331,7 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
       renderBridge();
       renderMetrics("pp-metrics");
       renderMetrics("ov-metrics");
+      renderReadiness();
       renderIsolation();
       renderSubs();
       renderNodes();
@@ -338,6 +339,7 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
       renderUnassigned();
       renderAccounts();
       renderStatusChrome();
+      showProxyTab(proxyTab);
     }
 
     function openConfirm(title, body, cb) {
@@ -360,8 +362,14 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
 
     function openModal(id) { $(id).classList.add("show"); }
     function closeModal(id) { $(id).classList.remove("show"); }
-    $("btn-add-proxy-open").onclick = () => openModal("modal-proxy");
-    $("btn-add-sub-open").onclick = () => openModal("modal-sub");
+    $("btn-add-source").onclick = (e) => {
+      e.stopPropagation();
+      const menu = $("add-source-menu");
+      const open = menu.classList.toggle("show");
+      $("btn-add-source").setAttribute("aria-expanded", String(open));
+    };
+    $("menu-add-proxy").onclick = () => openModal("modal-proxy");
+    $("menu-add-subscription").onclick = () => openModal("modal-sub");
     $("modal-proxy-cancel").onclick = () => closeModal("modal-proxy");
     $("modal-sub-cancel").onclick = () => closeModal("modal-sub");
     $("modal-proxy").addEventListener("click", (e) => { if (e.target.id === "modal-proxy") closeModal("modal-proxy"); });
@@ -371,9 +379,16 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
       e.stopPropagation();
       $("more-menu").classList.toggle("show");
     };
-    document.addEventListener("click", () => $("more-menu").classList.remove("show"));
+    document.addEventListener("click", () => {
+      $("more-menu").classList.remove("show");
+      $("add-source-menu").classList.remove("show");
+      $("btn-add-source").setAttribute("aria-expanded", "false");
+    });
     $("menu-refresh").onclick = () => refreshAll();
     $("menu-goto-workers").onclick = () => showPage("workers");
+    document.querySelectorAll(".proxy-tab").forEach((button) => {
+      button.onclick = () => showProxyTab(button.dataset.proxyTab);
+    });
 
     $("btn-toggle-secret").onclick = () => {
       const el = $("bridgeSecret");

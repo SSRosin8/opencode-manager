@@ -1,13 +1,27 @@
 /** Proxy, Worker, modal, responsive, and other feature-level styles. */
 export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
+    .readiness-band { display:flex; align-items:center; justify-content:space-between; gap:16px; min-height:58px; padding:10px 14px; margin-bottom:12px; border:1px solid var(--border); border-left:3px solid var(--accent); border-radius:var(--radius-sm); background:var(--panel-solid); }
+    .readiness-band.ok { border-left-color:var(--ok); }
+    .readiness-band.warn { border-left-color:var(--warn); }
+    .readiness-copy { min-width:0; }
+    .readiness-title { font-weight:650; }
+    .readiness-detail, .panel-sub { margin:2px 0 0; color:var(--muted); font-size:11px; font-weight:400; }
+    .proxy-tabs { display:flex; align-items:center; gap:4px; margin-bottom:12px; border-bottom:1px solid var(--border); overflow-x:auto; }
+    .proxy-tab { border:0; border-bottom:2px solid transparent; background:transparent; color:var(--muted); padding:9px 12px; white-space:nowrap; font-weight:600; }
+    .proxy-tab:hover { color:var(--text); }
+    .proxy-tab.active { color:var(--accent-hi); border-bottom-color:var(--accent); }
+    [data-proxy-section] { display:none; }
+    [data-proxy-section].proxy-section-active { display:block; }
     .pp-grid {
       display: grid;
       grid-template-columns: 1fr 340px;
       gap: 14px;
-      align-items: start;
+      align-items: stretch;
     }
-    .pp-main { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
-    .pp-side { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+    .pp-grid.sources-view { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+    .pp-main { display: flex; flex-direction: column; gap: 14px; min-width: 0; height:100%; }
+    .pp-side { display: flex; flex-direction: column; gap: 14px; min-width: 0; height:100%; }
+    .pp-main > .proxy-section-active, .pp-side > .proxy-section-active { flex:1; }
 
     /* Isolation map */
     .iso-body { display: grid; grid-template-columns: 1fr 160px; gap: 0; }
@@ -103,6 +117,8 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
     }
     .sub-card .url span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .sub-card .meta { font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; gap: 8px; }
+    .sub-card .diagnostics { display:grid; grid-template-columns:auto 1fr; gap:3px 8px; font-size:10px; color:var(--muted); }
+    .sub-card .diagnostics b { color:var(--text-2); font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .sub-card .proto { font-size: 11px; color: var(--text-2); }
     .sub-card .err-msg { font-size: 11px; color: var(--err); }
     .sub-card .acts { display: flex; gap: 6px; margin-top: auto; flex-wrap: wrap; }
@@ -359,18 +375,28 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
       width: 100%; text-align: left; background: none; border: none;
       color: var(--text); padding: 8px 10px; border-radius: 6px; font-size: 12px;
     }
+    .source-menu { left:0; right:auto; min-width:240px; }
+    .source-menu button { display:flex; flex-direction:column; gap:2px; }
+    .source-menu strong { font-size:12px; font-weight:650; }
+    .source-menu small { color:var(--muted); font-size:10px; }
     .more-menu button:hover { background: var(--accent-dim); color: var(--accent-hi); }
+    .more-menu button.danger { color:var(--err); }
     .rel { position: relative; }
 
     @media (max-width: 1200px) {
       .metrics { grid-template-columns: repeat(3, 1fr); }
       .pp-grid { grid-template-columns: 1fr; }
+      .pp-grid.sources-view { grid-template-columns: 1fr; }
+      .pp-main, .pp-side { height:auto; }
+      .pp-main > .proxy-section-active, .pp-side > .proxy-section-active { flex:none; }
       .iso-body { grid-template-columns: 1fr; }
       .iso-map { border-right: none; border-bottom: 1px solid var(--border); }
     }
     @media (max-width: 900px) {
+      html, body, .app { max-width:100%; overflow-x:hidden; }
       .topbar { padding: 0 10px; gap: 8px; }
       .addr-box { display: none; }
+      .accent-switcher { display:none; }
       .body { flex-direction: column; }
       .sidebar {
         display: flex; width: 100%; height: 52px; padding: 6px;
@@ -379,6 +405,7 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
       }
       .nav { flex: none; flex-direction: row; gap: 4px; padding: 0; }
       .nav-item { width: auto; flex-shrink: 0; padding: 0 10px; }
+      .nav-item span { font-size:11px; }
       .nav-item.active::before {
         left: 10px; right: 10px; top: auto; bottom: -6px;
         width: auto; height: 2px; border-radius: 2px 2px 0 0;
@@ -389,6 +416,16 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
       body { overflow: auto; }
       .app { height: auto; min-height: 100vh; }
       .content { overflow: visible; padding: 14px 12px 24px; }
+      .page-head { align-items:flex-start; }
+      .page-actions { width:100%; }
+      .readiness-band { align-items:flex-start; flex-direction:column; gap:8px; }
+      .readiness-band .btn { width:100%; }
+      .pp-grid { grid-template-columns:minmax(0, 1fr); }
+      .table-tools .search { max-width:none; width:100%; flex-basis:100%; }
+      .table-tools .select { flex:1 1 100px; min-width:0; }
+      .pager button:not(:first-child):not(:last-child):not(.active) { display:none; }
+      table.nodes th:first-child, table.nodes td:first-child { position:sticky; left:0; z-index:2; background:var(--panel-solid); }
+      table.nodes th:first-child { z-index:3; }
       #accounts.worker-columns { grid-template-columns: 1fr; }
       .worker-column-list.worker-list-scroll { max-height: none; overflow: visible; padding-right: 0; }
       .worker-card .hd { flex-wrap: wrap; gap: 8px; }

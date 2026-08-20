@@ -50,6 +50,7 @@ export type ProxySubscription = {
   lastError: string | null;
   /** Count of proxies last imported (direct + bridgeable). */
   lastImportCount: number;
+  lastRawBytes?: number;
   /** Direct http/socks count last import. */
   lastDirectCount?: number;
   /** Bridgeable protocol count last import. */
@@ -214,6 +215,9 @@ export function normalizeSubscriptions(raw: unknown): ProxySubscription[] {
     }
     if (typeof s.lastFormat === "string") sub.lastFormat = s.lastFormat;
     if (typeof s.lastUserAgent === "string") sub.lastUserAgent = s.lastUserAgent;
+    if (typeof s.lastRawBytes === "number" && Number.isFinite(s.lastRawBytes)) {
+      sub.lastRawBytes = Math.max(0, Math.floor(s.lastRawBytes));
+    }
     out.push(sub);
   }
   return out;

@@ -29,6 +29,8 @@ npm start
 # or: npm run dev
 ```
 
+`npm start` runs in the foreground of the current terminal; closing the terminal stops it, and `Ctrl+C` shuts it down. It runs the built `dist/` output, so rebuild after source changes. `npm run dev` runs the source directly for development.
+
 The service listens on `127.0.0.1:9876` by default. For first-time setup, Clash/Mihomo configuration, OpenCode integration, verification, backups, and troubleshooting, see:
 
 > **[Local usage guide](docs/USAGE.md)**
@@ -99,16 +101,22 @@ ling-3.0-flash-free  longcat-2.0-free  north-mini-code-free  nemotron-3-ultra-fr
 
 OpenCode free accounts are often **IP-limited**. Bind each worker to a different pool proxy:
 
-1. **Manual** — Admin → Proxy pool → add HTTP/SOCKS5 host:port
-2. **Clash subscription** — add subscription URL → **拉取** (fetch)
+Choose one import path based on the source; these are not sequential requirements:
+
+1. **Existing HTTP/SOCKS5 endpoint** — add it manually in Admin; no Clash bridge is required.
+2. **Standard subscription URL** — add the URL and click **Fetch**.
    - Tries multiple User-Agents (`clash` first, including `0dcloud`). Some providers return full YAML only for a specific client UA; other UAs may return base64 `vless://` lists or be rejected.
    - Imports `http`/`socks` (direct) **and** `vless`/`hysteria2`/`tuic`/… (via Clash bridge)
-3. **Clash bridge** — for protocol nodes:
-   - Run Mihomo/Clash Meta locally with the **same** subscription
+3. **Nodes already loaded in Clash/0dcloud** — configure the bridge and click **Import Controller Nodes** to read Mihomo's current runtime Selector; the gateway does not need to download the subscription again.
+4. **VLESS/Hysteria2/TUIC and similar nodes** — require a Clash bridge:
+   - Run Mihomo/Clash Meta on the same machine as opencode-manager
    - Enable bridge in Admin: controller `http://127.0.0.1:9090`, mixed-port (often `7892`), selector group `主代理`
-   - For clients such as 0dcloud that already loaded nodes into Mihomo, click **Import Controller Nodes** instead of downloading the subscription again
    - Gateway switches the select-group per worker, then exits via local HTTP proxy
-4. **Bind** — each Worker selects a pool node via `proxyId`
+5. **Bind** — each Worker selects a pool node via `proxyId`
+
+A subscription fetch and a Controller import are different data views. A fetch parses the current HTTP response's top-level `proxies` or share links. A Controller import reads a runtime Selector after Mihomo has loaded caches and expanded providers. Their node counts may differ even when they appear to originate from the same subscription.
+
+The bridge has two independent paths: Controller URL/secret is the **control plane** used to inspect and switch nodes; local host/mixed-port is the **data plane** carrying relay traffic. `127.0.0.1` always means the machine running opencode-manager, not the machine whose browser opened Admin.
 
 Probe candidate nodes after importing. A probe records the public egress IP and then sends a real anonymous Zen free-model request with `Bearer public`; only successful egress routes are eligible for automatic assignment. Nodes are deduplicated by public IP, and one egress may host at most one anonymous worker plus one signed-in worker. A single mixed-port uses one shared selector; the gateway serializes node selection and connection setup. Do not switch that selector from another client while the gateway is running. Use separate Mihomo inbounds or instances when workers must permanently own concurrent ports.
 

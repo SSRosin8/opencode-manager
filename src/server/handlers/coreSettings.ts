@@ -4,6 +4,12 @@ import { inferAccountKind } from "../../relay/index.js";
 import type { GatewaySettings } from "../../settings/store.js";
 import { credentialLabel, duplicateWorkerEgress } from "../workerEgress.js";
 import { readBody, sendJson } from "../httpIO.js";
+import { setupReadiness } from "../readiness.js";
+
+const GATEWAY_SETTING_KEYS = new Set([
+  "baseUrl", "relayAccessToken", "synthesizeCliHeaders", "cliUserAgent",
+  "cliClient", "cliProject", "routingStrategy", "port",
+]);
 
 export async function handleCoreSettings(
   req: IncomingMessage,
@@ -13,6 +19,28 @@ export async function handleCoreSettings(
   ctx: RequestContext
 ): Promise<boolean> {
   const { store, upstream, probes, workerStats, freeModels, batchProbeProgress } = ctx;
+  if (method === "PATCH" && path === "/admin/api/gateway-settings") {
+    const raw = await readBody(req);
+    let body: Record<string, unknown>;
+    try {
+      body = JSON.parse(raw.toString("utf8") || "{}") as Record<string, unknown>;
+    } catch {
+      sendJson(res, 400, { error: { message: "Invalid JSON" } });
+      return true;
+    }
+    const unexpected = Object.keys(body).filter((key) => !GATEWAY_SETTING_KEYS.has(key));
+    if (unexpected.length) {
+      sendJson(res, 400, {
+        error: { type: "invalid_gateway_settings", message: `Unexpected fields: ${unexpected.join(", ")}` },
+      });
+      return true;
+    }
+    const saved = await store.save(body as Partial<GatewaySettings>);
+    upstream.updateSettings(saved);
+    store.updateReadyCount(upstream.rotator.readyCount(), upstream.rotator.getAccounts().length);
+    sendJson(res, 200, { settings: saved });
+    return true;
+  }
   // Free-model registry status
   if (method === "GET" && path === "/admin/api/free-models") {
     sendJson(res, 200, freeModels.status());
@@ -116,6 +144,7 @@ export async function handleCoreSettings(
       .map((account) => account.id);
     sendJson(res, 200, {
       ...store.getStatus(),
+      readiness: setupReadiness(store.get(), probes, upstream.rotator.readyCount()),
       routingStrategy: store.get().routingStrategy,
       workers,
       usageTotals: workerStats.totals(accountIds),

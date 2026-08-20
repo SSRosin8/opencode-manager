@@ -29,6 +29,8 @@ npm start
 # 或: npm run dev
 ```
 
+`npm start` 在当前终端前台运行，关闭终端会停止服务；停止时按 `Ctrl+C`。它运行的是已经构建的 `dist/`，修改源码后需重新执行 `npm run build`。`npm run dev` 直接运行源码，适合开发调试。
+
 默认仅监听 `127.0.0.1:9876`。完整的首次配置、Clash/Mihomo、OpenCode 接入、验证、备份和故障排查步骤请阅读：
 
 > **[本机使用指南](docs/USAGE.zh-CN.md)**
@@ -99,16 +101,22 @@ ling-3.0-flash-free  longcat-2.0-free  north-mini-code-free  nemotron-3-ultra-fr
 
 OpenCode 免费账号经常受 **IP 限制**。将每个 Worker 绑定到不同的池代理：
 
-1. **手动** — 管理后台 → 代理池 → 添加 HTTP/SOCKS5 host:port
-2. **Clash 订阅** — 添加订阅 URL → **拉取**（fetch）
+先按代理来源选择一条导入路径，而不是依次执行所有方式：
+
+1. **已有 HTTP/SOCKS5 地址** — 管理后台 → 代理池 → 手动添加，不需要 Clash 桥接。
+2. **有标准订阅 URL** — 添加订阅 URL → **拉取**。
    - 会尝试多个 User-Agent（优先 `clash`，也包含 `0dcloud`）。部分机场只对特定客户端 UA 返回完整 YAML，其他 UA 可能返回 base64 的 `vless://` 列表或直接拒绝。
    - 导入 `http`/`socks`（直连）**以及** `vless`/`hysteria2`/`tuic`/…（经 Clash 桥接）
-3. **Clash 桥接** — 用于协议节点：
-   - 本地运行 Mihomo/Clash Meta，使用**同一**订阅
+3. **节点已加载到 Clash/0dcloud** — 配置 Clash 桥接后点击 **导入 Controller 节点**，直接读取 Mihomo 当前运行时的选择组；无需让本项目再次下载订阅。
+4. **VLESS/Hysteria2/TUIC 等协议节点** — 需要 Clash 桥接：
+   - 在运行 opencode-manager 的同一台机器上运行 Mihomo/Clash Meta
    - 在管理后台开启桥接：controller `http://127.0.0.1:9090`、混合端口（通常是 `7892`）、选择组 `主代理`
-   - 对于 0dcloud 等已把节点加载进 Mihomo 的客户端，可点击 **导入 Controller 节点**，无需再次下载订阅
    - 网关按 Worker 切换选择组，然后经本地 HTTP 代理出站
-4. **绑定** — 每个 Worker 通过 `proxyId` 选择池中节点
+5. **绑定** — 每个 Worker 通过 `proxyId` 选择池中节点
+
+订阅拉取和 Controller 导入不是同一份数据视图。前者只解析本次订阅 HTTP 响应中的顶层 `proxies` 或分享链接；后者读取 Mihomo 已经加载、缓存并展开 provider 后的运行时选择组。即使源头看似相同，节点数量也可能不同。
+
+Clash 桥接包含两条独立链路：Controller URL/Secret 是切换节点和查询延迟的**控制面**；本地主机/mixed-port 是实际转发请求的**数据面**。这里的 `127.0.0.1` 始终指运行 opencode-manager 的机器，不是打开后台页面的浏览器所在机器。
 
 导入后先测试候选节点。测试会先记录公网出口 IP，再用 `Bearer public` 发起一次真实匿名 Zen 免费模型请求；只有匿名 Zen 成功的出口才参与自动分配。节点按真实出口 IP 去重，同一出口最多承载一个匿名 Worker和一个登录 Worker。单个 mixed-port 使用共享选择组，网关会串行完成“切换节点 + 建立连接”；运行期间不要在其他客户端中切换同一个选择组。需要多个节点永久并行独占端口时，应为每个 Worker 配置独立的 Mihomo 入站或实例。
 

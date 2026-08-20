@@ -50,6 +50,41 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
       patchWorkerMetric("ov-metrics");
     }
 
+    function readinessFallback() {
+      const pool = settings?.proxyPool || [];
+      const workers = (settings?.accounts || []).filter((account) => account.enabled !== false);
+      const healthy = pool.filter((proxy) => nodeHealth(proxy) === "healthy").length;
+      const healthyIds = new Set(pool.filter((proxy) => nodeHealth(proxy) === "healthy").map((proxy) => proxy.id));
+      const bridgeNeeded = pool.some((proxy) => !proxy.usable && proxy.bridgeable);
+      const bound = workers.filter((worker) => worker.proxyId && healthyIds.has(worker.proxyId)).length;
+      if (!pool.length) return { level: "warn", title: t("readinessAddSource"), detail: t("readinessAddSourceDetail"), action: "sources" };
+      if (!healthy && bridgeNeeded && !bridgeOn()) return { level: "warn", title: t("readinessEnableBridge"), detail: t("readinessEnableBridgeDetail"), action: "sources" };
+      if (!healthy) return { level: "warn", title: t("readinessTestNodes"), detail: t("readinessTestNodesDetail"), action: "nodes" };
+      if (!workers.length || bound < workers.length) return { level: "warn", title: t("readinessBindWorkers"), detail: t("readinessBindWorkersDetail"), action: "bindings" };
+      return { level: "ok", title: t("readinessReady"), detail: t("readinessReadyDetail"), action: "bindings" };
+    }
+
+    function renderReadiness() {
+      const supplied = status?.readiness;
+      const fallback = readinessFallback();
+      const actionMap = { add_proxy_source: "sources", configure_clash_bridge: "sources", run_batch_probe: "nodes", review_workers: "bindings", ready: "bindings" };
+      const value = supplied && typeof supplied === "object" ? {
+        level: supplied.operational ? "ok" : "warn",
+        title: t(({ add_proxy_source: "readinessAddSource", configure_clash_bridge: "readinessEnableBridge", run_batch_probe: "readinessTestNodes", review_workers: "readinessBindWorkers", ready: "readinessReady" })[supplied.nextAction] || "readinessTestNodes"),
+        detail: t(({ add_proxy_source: "readinessAddSourceDetail", configure_clash_bridge: "readinessEnableBridgeDetail", run_batch_probe: "readinessTestNodesDetail", review_workers: "readinessBindWorkersDetail", ready: "readinessReadyDetail" })[supplied.nextAction] || "readinessTestNodesDetail"),
+        action: actionMap[supplied.nextAction] || fallback.action,
+      } : fallback;
+      const action = ["nodes", "sources", "bindings", "workers"].includes(value.action) ? value.action : fallback.action;
+      const label = action === "sources" ? t("goToSources") : action === "nodes" ? t("goToNodes") : t("goToBindings");
+      $("proxy-readiness").className = "readiness-band " + (value.level === "ok" ? "ok" : "warn");
+      $("proxy-readiness").innerHTML = '<div class="readiness-copy"><div class="readiness-title">' + escapeHtml(value.title) + '</div><div class="readiness-detail">' + escapeHtml(value.detail) + '</div></div>' +
+        '<button type="button" class="btn btn-sm" id="btn-readiness-action" data-action="' + escapeAttr(action) + '">' + escapeHtml(label) + '</button>';
+      $("btn-readiness-action").onclick = () => {
+        if (action === "workers") showPage("workers");
+        else showProxyTab(action);
+      };
+    }
+
     function renderIsolation() {
       const rows = isolationRows();
       const root = $("iso-rows");
@@ -104,6 +139,7 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
     function renderSubs() {
       const list = settings.proxySubscriptions || [];
       const root = $("sub-grid");
+      $("btn-fetch-all").hidden = list.length < 2;
       if (!list.length) {
         root.innerHTML = '<p class="hint">' + escapeHtml(t("noSubs")) + '</p>';
         return;
@@ -114,6 +150,11 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
         const protos = [];
         const pool = (settings.proxyPool || []).filter((p) => p.subscriptionId === s.id);
         const types = [...new Set(pool.map((p) => (p.clashType || p.type || "").toUpperCase()).filter(Boolean))];
+        const diagnostics = subscriptionDiagnostics.get(s.id) || {};
+        const format = diagnostics.format || s.lastFormat || t("unavailableShort");
+        const userAgent = diagnostics.usedUserAgent || s.lastUserAgent || t("unavailableShort");
+        const rawBytes = diagnostics.rawBytes ?? s.lastRawBytes ?? t("unavailableShort");
+        const parsed = diagnostics.totalCount ?? s.lastImportCount ?? pool.length;
         return '<div class="sub-card' + (err ? ' err' : '') + '">' +
           '<div class="top"><div class="name">' + escapeHtml(s.name) + '</div>' +
           (err ? '<span class="tag err">Error</span>' : ok ? '<span class="tag ok">OK</span>' : '<span class="tag">—</span>') +
@@ -122,10 +163,14 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
           '<button type="button" class="btn btn-sm btn-icon btn-copy-url" data-url="' + escapeAttr(s.url) + '" title="Copy">⧉</button></div>' +
           '<div class="meta"><span>' + escapeHtml(t("lastPulled") + ": " + relTime(s.lastFetchedAt)) + '</span>' +
           '<span>' + (s.lastImportCount || pool.length || 0) + ' ' + escapeHtml(t("nodes")) + '</span></div>' +
+          '<div class="diagnostics"><span>' + escapeHtml(t("diagFormat")) + '</span><b>' + escapeHtml(format) + '</b>' +
+          '<span>' + escapeHtml(t("diagUserAgent")) + '</span><b title="' + escapeAttr(userAgent) + '">' + escapeHtml(userAgent) + '</b>' +
+          '<span>' + escapeHtml(t("diagRawBytes")) + '</span><b>' + escapeHtml(rawBytes) + '</b>' +
+          '<span>' + escapeHtml(t("diagParsed")) + '</span><b>' + escapeHtml(String(parsed)) + '</b></div>' +
           (types.length ? '<div class="proto">' + escapeHtml(types.slice(0, 5).join(", ")) + '</div>' : '') +
           (err ? '<div class="err-msg">' + escapeHtml(s.lastError) + '</div>' : '') +
           '<div class="acts">' +
-          '<button type="button" class="btn btn-sm btn-fetch-sub" data-id="' + escapeAttr(s.id) + '">' + escapeHtml(t("pull")) + '</button>' +
+          '<button type="button" class="btn btn-sm btn-fetch-sub" data-id="' + escapeAttr(s.id) + '">' + escapeHtml(t("syncSubscription")) + '</button>' +
           '<button type="button" class="btn btn-sm btn-danger btn-del-sub" data-id="' + escapeAttr(s.id) + '" data-name="' + escapeAttr(s.name) + '">' + escapeHtml(t("del")) + '</button>' +
           '</div></div>';
       }).join("");
@@ -143,6 +188,7 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
             const res = await fetch("/admin/api/proxy-subscriptions/" + encodeURIComponent(btn.dataset.id) + "/fetch", { method: "POST" });
             const data = await res.json();
             if (!res.ok) throw new Error(data.error?.message || ("HTTP " + res.status));
+            subscriptionDiagnostics.set(btn.dataset.id, data);
             settings = data.settings;
             renderAll();
             toast(t("toastImported")(data.totalCount ?? data.usableCount ?? 0), (data.totalCount ?? data.usableCount) > 0);
@@ -275,7 +321,9 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
       const pager = $("nodes-pager");
       let ph = '';
       ph += '<button type="button" data-p="' + (nodePage - 1) + '" ' + (nodePage <= 1 ? "disabled" : "") + '>&lt;</button>';
-      for (let i = 1; i <= totalPages && i <= 7; i++) {
+      const pageStart = Math.max(1, Math.min(nodePage - 2, totalPages - 4));
+      const pageEnd = Math.min(totalPages, pageStart + 4);
+      for (let i = pageStart; i <= pageEnd; i++) {
         ph += '<button type="button" data-p="' + i + '" class="' + (i === nodePage ? "active" : "") + '">' + i + '</button>';
       }
       ph += '<button type="button" data-p="' + (nodePage + 1) + '" ' + (nodePage >= totalPages ? "disabled" : "") + '>&gt;</button>';

@@ -21,7 +21,16 @@ npm start
 curl http://127.0.0.1:9876/health
 ```
 
-开发模式使用 `npm run dev`，无需先构建。后台修改监听端口后必须重启。项目不会自动加载 `.env`；临时修改端口可使用：
+`npm start` 是前台进程：保持终端打开，按 `Ctrl+C` 可优雅停止；关闭终端也会终止服务。它运行 `dist/`，修改源码或拉取新代码后应先重新执行 `npm run build`。开发模式使用 `npm run dev`，无需先构建。
+
+项目当前不自带后台守护服务。若服务已经在另一个终端启动，先在那个终端按 `Ctrl+C`，或找到准确 PID 后执行 `kill -TERM <PID>`，再启动新版本。可用以下命令确认端口监听者：
+
+```bash
+ss -ltnp | grep ':9876'
+# macOS 可用：lsof -nP -iTCP:9876 -sTCP:LISTEN
+```
+
+后台修改监听端口后必须重启。项目不会自动加载 `.env`；临时修改端口可使用：
 
 ```bash
 PORT=9988 npm start
@@ -50,7 +59,18 @@ PORT=9988 npm start
 
 ## 4. 准备 Clash/Mihomo
 
-拉取订阅时会尝试多个客户端 User-Agent，包括 `clash` 和 `0dcloud`，因为部分服务商只向特定客户端返回内容或允许访问。
+先根据手头已有的代理来源选择路径：
+
+| 现有资源 | 推荐路径 | 是否需要 Clash 桥接 |
+|---|---|---|
+| HTTP/SOCKS5 地址 | 手动加入代理池 | 否 |
+| 标准订阅 URL | 添加订阅并点击“拉取” | HTTP/SOCKS 节点不需要；协议节点需要 |
+| 节点已加载在 Clash/0dcloud | 配置桥接并“导入 Controller 节点” | 是 |
+| Controller 密钥不可获取 | 使用独立、可控的 Mihomo 实例，或只使用 HTTP/SOCKS 代理 | 取决于所选路径 |
+
+拉取订阅时会尝试多个客户端 User-Agent，包括 `clash` 和 `0dcloud`，因为部分服务商只向特定客户端返回内容或允许访问。订阅拉取只解析**当前 HTTP 响应**里的顶层 Clash `proxies` 或多行分享链接；不会读取 Clash 客户端的本地缓存，也不会展开响应中的远程 `proxy-providers`。
+
+“导入 Controller 节点”读取的是 Mihomo 当前运行时 Selector 中已经加载的叶子节点。Mihomo 可能已经使用缓存、展开 provider 或合并其他来源。因此，即使订阅 URL 看起来相同，直接拉取的节点数和 Controller 导入数也不要求一致。
 
 HTTP/SOCKS5 代理可直接添加，不需要 Clash 桥接。VLESS、Hysteria2、TUIC、AnyTLS 等协议节点需要本机 Mihomo/Clash Meta：
 
@@ -59,6 +79,13 @@ HTTP/SOCKS5 代理可直接添加，不需要 Clash 桥接。VLESS、Hysteria2�
 3. 确认承载节点的 Selector 组名，例如 `Proxy` 或 `主代理`。
 4. 在“代理池 → Clash 桥接”填写 Controller URL、Secret、本地主机、端口和选择组，开启桥接并保存。
 5. 点击测试连接。成功后可点击“导入 Controller 节点”。
+
+桥接有两条独立链路：
+
+- **控制面**：Controller URL 和 Secret，用于读取节点、查询延迟和切换 Selector；常见端口是 `9090`。
+- **数据面**：本地主机和 mixed-port，用于真正转发 HTTP 请求；常见端口是 `7890`、`7892` 或客户端给出的端口。
+
+两条链路都必须可用。Controller 测试成功不代表 mixed-port 一定能转发流量。字段中的 `127.0.0.1` 指运行 opencode-manager 的机器；如果 Clash 在另一台机器上，不能用 `127.0.0.1` 指向它，也不应在未做访问控制时把 Controller 暴露到局域网。
 
 选择组必须能直接选择叶子节点。网关运行批测或转发时，不要在其他客户端同时切换同一个选择组，否则出口可能串线。
 
@@ -143,7 +170,21 @@ curl -sS http://127.0.0.1:9876/v1/chat/completions \
 
 令牌为空时移除对应 header。付费或未知模型会在请求上游前返回 `403 model_not_allowed`。
 
-## 10. 数据、备份与升级
+## 10. 最短分层验收路径
+
+按以下顺序验证；在哪一步失败，就只排查该层：
+
+1. **服务进程**：`curl http://127.0.0.1:9876/health` 应返回 `ok: true`。
+2. **代理来源**：订阅卡显示拉取成功并有合理的节点数，或 Controller 导入成功并显示正确选择组。
+3. **Clash 控制面**：后台“测试连接”成功，且能识别目标 Selector。
+4. **Clash 数据面**：先测试一个节点，确认能得到公网出口 IP；不要一开始就运行整批。
+5. **Worker**：确认至少一个 Worker 为启用、就绪，并绑定预期代理。
+6. **模型接口**：调用 `/v1/models`，确认令牌和免费模型列表正常。
+7. **对话接口**：最后调用一次最小 `/v1/chat/completions` 请求。
+
+若没有使用 Clash，跳过第 3 步；HTTP/SOCKS 代理仍需通过第 4 步验证真实出口。
+
+## 11. 数据、备份与升级
 
 默认数据文件：
 
@@ -151,7 +192,7 @@ curl -sS http://127.0.0.1:9876/v1/chat/completions \
 - `data/worker-stats.json`：用量和请求尝试统计。
 - `data/free-models.json`：免费模型缓存，可重新生成。
 
-可通过 `OPENCODE_MANAGER_SETTINGS_PATH` 和 `OPENCODE_MANAGER_STATS_PATH` 修改前两项路径。备份或迁移前先停止服务，然后复制 `data/`。升级步骤：
+可通过 `OPENCODE_MANAGER_SETTINGS_PATH` 和 `OPENCODE_MANAGER_STATS_PATH` 修改前两项路径。备份或迁移前先停止服务，然后复制 `data/`。升级前先停止现有前台进程，避免新旧进程争用同一端口：
 
 ```bash
 git pull --ff-only
@@ -161,7 +202,7 @@ npm test
 npm start
 ```
 
-## 11. 常见问题
+## 12. 常见问题
 
 ### 批测长时间运行
 
@@ -181,7 +222,26 @@ npm start
 
 ### Controller 连接失败
 
-检查 Controller URL、Secret、mixed-port 和选择组名称；确认 Mihomo 正在运行且选择组中包含可选叶子节点。
+按错误现象定位：
+
+| 现象 | 含义和检查项 |
+|---|---|
+| 连接拒绝或超时 | Controller 地址/端口错误，或 Mihomo 未监听 |
+| `401 Unauthorized` | Controller 可达但 Secret 缺失或不匹配；部分客户端不向用户开放内部 Secret |
+| `404` | 访问的通常不是 Clash Controller 端口或路径 |
+| `selector group not found` | 选择组名称不匹配；使用连接测试返回的 Selector 名称 |
+| Controller 成功但节点测试失败 | 继续检查 mixed-port、运行模式、选择组是否实际承载流量，以及数据面出口 |
+
+### 订阅拉取失败或节点过少
+
+| 现象 | 含义和检查项 |
+|---|---|
+| `403` | 服务商按 User-Agent、来源 IP 或订阅权限拒绝请求 |
+| `504` | 订阅服务器的网关无法及时访问其上游；不是本项目的解析错误 |
+| 拉取成功但节点明显少 | 当前响应可能是不同 UA 格式、单节点响应或 provider 配置；它不等于 Clash 已缓存并展开的运行时节点 |
+| Controller 节点比订阅多 | Controller 展示的是 Mihomo 当前内存中的最终 Selector，可能包含缓存、已展开 provider 或其他来源 |
+
+订阅 URL 通常含访问令牌。排查时不要把完整 URL、响应正文或 Secret 发到公开日志和问题报告中。
 
 ### 端口已占用
 
@@ -191,7 +251,7 @@ PORT=9988 npm start
 
 后台端口设置只在下次启动生效。
 
-## 12. 当前限制
+## 13. 当前限制
 
 - 当前只支持 Zen，不处理 OpenCode Go。
 - 一个共享 Clash Selector 无法同时稳定承载多个不同出口；需要真正并发时，应配置独立 Mihomo 入站或实例。

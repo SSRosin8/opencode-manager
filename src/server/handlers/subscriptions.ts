@@ -106,6 +106,7 @@ export async function handleSubscriptions(
             ? "Parsed 0 nodes — check URL or try again"
             : null,
         lastImportCount: result.proxies.length,
+        lastRawBytes: result.rawBytes,
         lastDirectCount: result.usableCount,
         lastBridgeableCount: result.bridgeableCount,
         lastFormat: result.format,

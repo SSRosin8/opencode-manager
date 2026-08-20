@@ -206,18 +206,16 @@ export const ADMIN_MARKUP = `</head>
             </div>
             <div class="page-actions">
               <button type="button" class="btn btn-sm collapse-toggle" data-collapse-key="proxy-metrics" data-collapse-target="pp-metrics" aria-expanded="true"><span aria-hidden="true">▴</span></button>
-              <button type="button" class="btn btn-primary" id="btn-add-proxy-open">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>
-                <span data-i18n="addProxy">Add Proxy</span>
-              </button>
-              <button type="button" class="btn" id="btn-add-sub-open">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>
-                <span data-i18n="addSubscription">Add Subscription</span>
-              </button>
-              <button type="button" class="btn" id="btn-fetch-all">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"/></svg>
-                <span data-i18n="pullAll">Pull All</span>
-              </button>
+              <div class="rel">
+                <button type="button" class="btn btn-primary" id="btn-add-source" aria-haspopup="menu" aria-expanded="false">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>
+                  <span data-i18n="addSource">Add source</span>
+                </button>
+                <div class="more-menu source-menu" id="add-source-menu" role="menu">
+                  <button type="button" id="menu-add-subscription" role="menuitem"><strong data-i18n="addSubscription">Add Subscription</strong><small data-i18n="addSubscriptionHint">Sync nodes from a remote URL</small></button>
+                  <button type="button" id="menu-add-proxy" role="menuitem"><strong data-i18n="addManualProxy">Manual HTTP/SOCKS proxy</strong><small data-i18n="addManualProxyHint">Add one proxy endpoint directly</small></button>
+                </div>
+              </div>
               <div class="rel">
                 <button type="button" class="btn" id="btn-more">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/></svg>
@@ -226,6 +224,7 @@ export const ADMIN_MARKUP = `</head>
                 <div class="more-menu" id="more-menu">
                   <button type="button" id="menu-refresh" data-i18n="refreshAll">Refresh all</button>
                   <button type="button" id="menu-goto-workers" data-i18n="reviewBindings">Review Bindings</button>
+                  <button type="button" class="danger" id="btn-remove-all-proxies" data-i18n="removeAllProxies">Remove all proxies</button>
                 </div>
               </div>
             </div>
@@ -233,10 +232,18 @@ export const ADMIN_MARKUP = `</head>
 
           <div class="metrics" id="pp-metrics"></div>
 
-          <div class="pp-grid">
+          <div class="readiness-band" id="proxy-readiness" aria-live="polite"></div>
+
+          <div class="proxy-tabs" role="tablist" aria-label="Proxy pool views">
+            <button type="button" class="proxy-tab active" role="tab" aria-selected="true" data-proxy-tab="nodes" data-i18n="proxyTabNodes">Nodes</button>
+            <button type="button" class="proxy-tab" role="tab" aria-selected="false" data-proxy-tab="sources" data-i18n="proxyTabSources">Sources &amp; bridge</button>
+            <button type="button" class="proxy-tab" role="tab" aria-selected="false" data-proxy-tab="bindings" data-i18n="proxyTabBindings">Isolation &amp; bindings</button>
+          </div>
+
+          <div class="pp-grid" id="proxy-workspace">
             <div class="pp-main">
               <!-- Isolation -->
-              <div class="panel">
+              <div class="panel" data-proxy-section="bindings">
                 <div class="panel-hd">
                   <h2>
                     <span data-i18n="isoTitle">IP Isolation Overview</span>
@@ -266,13 +273,13 @@ export const ADMIN_MARKUP = `</head>
               </div>
 
               <!-- Subscriptions -->
-              <div class="panel">
-                <div class="panel-hd"><h2 data-i18n="subscriptions">Subscriptions</h2></div>
+              <div class="panel" data-proxy-section="sources">
+                <div class="panel-hd"><div><h2 data-i18n="subscriptionSync">Subscription sync</h2><p class="panel-sub" data-i18n="subscriptionSyncHint">Fetch remote subscription content and parse nodes into the pool.</p></div><button type="button" class="btn btn-sm" id="btn-fetch-all" data-i18n="syncAllSubscriptions" hidden>Sync all</button></div>
                 <div class="panel-bd"><div class="sub-grid" id="sub-grid"></div></div>
               </div>
 
               <!-- Nodes table -->
-              <div class="panel">
+              <div class="panel" data-proxy-section="nodes">
                 <div class="panel-hd">
                   <h2 data-i18n="proxyNodes">Proxy Nodes</h2>
                   <button type="button" class="btn btn-sm collapse-toggle" data-collapse-key="proxy-nodes" data-collapse-target="proxy-nodes-body" aria-expanded="true"><span aria-hidden="true">▴</span></button>
@@ -301,8 +308,7 @@ export const ADMIN_MARKUP = `</head>
                   <button type="button" class="btn btn-sm" id="btn-batch-test" data-i18n="batchTest">Batch Test</button>
                   <button type="button" class="btn btn-sm" id="btn-batch-pause" data-i18n="pauseBatch" hidden>Pause</button>
                   <button type="button" class="btn btn-sm btn-danger" id="btn-batch-cancel" data-i18n="cancelBatch" hidden>Cancel</button>
-                  <button type="button" class="btn btn-sm" id="btn-nodes-refresh" data-i18n="refresh">Refresh</button>
-                  <button type="button" class="btn btn-sm btn-danger" id="btn-remove-all-proxies" data-i18n="removeAllProxies">Remove all</button>
+                  <button type="button" class="btn btn-sm" id="btn-nodes-refresh" data-i18n="refreshNodeStatus">Refresh node status</button>
                 </div>
                   <div class="table-wrap">
                     <table class="nodes">
@@ -332,7 +338,7 @@ export const ADMIN_MARKUP = `</head>
 
             <div class="pp-side">
               <!-- Clash Bridge -->
-              <div class="panel">
+              <div class="panel" data-proxy-section="sources">
                 <div class="panel-hd">
                   <h2 data-i18n="clashBridge">Clash Bridge</h2>
                   <div style="display:flex;align-items:center;gap:8px">
@@ -379,13 +385,14 @@ export const ADMIN_MARKUP = `</head>
                     <button type="button" class="btn" id="btn-probe-bridge" data-i18n="testConnection">Test Connection</button>
                     <button type="button" class="btn btn-primary" id="btn-save-bridge" data-i18n="saveChanges">Save Changes</button>
                   </div>
-                  <button type="button" class="btn" id="btn-import-clash" style="width:100%;margin-top:8px" data-i18n="importController">Import Controller Nodes</button>
+                  <button type="button" class="btn" id="btn-import-clash" style="width:100%;margin-top:8px" data-i18n="importController">Import from Controller</button>
+                  <p class="panel-sub controller-hint" data-i18n="controllerImportHint">Import nodes already loaded by the running Clash/Mihomo Controller. This does not sync a subscription URL.</p>
                   <div class="probe-ok" id="bridge-probe-msg"></div>
                 </div>
               </div>
 
               <!-- Recent activity -->
-              <div class="panel">
+              <div class="panel" data-proxy-section="nodes">
                 <div class="panel-hd">
                   <h2 data-i18n="recentActivity">Recent Activity</h2>
                 </div>
@@ -395,7 +402,7 @@ export const ADMIN_MARKUP = `</head>
               </div>
 
               <!-- Unassigned -->
-              <div class="panel">
+              <div class="panel" data-proxy-section="bindings">
                 <div class="panel-hd">
                   <h2 data-i18n="unassignedWorkers">Unassigned Workers</h2>
                 </div>

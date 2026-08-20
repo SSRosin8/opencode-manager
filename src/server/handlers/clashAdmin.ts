@@ -10,6 +10,10 @@ import { inferAccountKind, type AccountConfig } from "../../relay/index.js";
 import type { GatewaySettings } from "../../settings/store.js";
 import { readBody, sendJson } from "../httpIO.js";
 
+const CLASH_BRIDGE_KEYS = new Set([
+  "enabled", "apiBase", "apiSecret", "localProxyHost", "localProxyPort", "selectorGroup",
+]);
+
 type CacheMove = { oldId: string; newId: string | null };
 type BindingConflict = {
   kind: string;
@@ -102,6 +106,36 @@ export async function handleClashAdmin(
   ctx: RequestContext
 ): Promise<boolean> {
   const { store, upstream, subscriptionFetch } = ctx;
+  if (method === "PATCH" && path === "/admin/api/clash-bridge") {
+    if (ctx.batchProbeProgress.running) {
+      sendJson(res, 409, {
+        error: { message: "Clash bridge cannot be changed during a batch test", type: "batch_probe_running" },
+      });
+      return true;
+    }
+    const raw = await readBody(req);
+    let body: Record<string, unknown>;
+    try {
+      body = JSON.parse(raw.toString("utf8") || "{}") as Record<string, unknown>;
+    } catch {
+      sendJson(res, 400, { error: { message: "Invalid JSON" } });
+      return true;
+    }
+    const unexpected = Object.keys(body).filter((key) => !CLASH_BRIDGE_KEYS.has(key));
+    if (unexpected.length) {
+      sendJson(res, 400, {
+        error: { type: "invalid_clash_bridge", message: `Unexpected fields: ${unexpected.join(", ")}` },
+      });
+      return true;
+    }
+    const saved = await store.save({
+      clashBridge: { ...store.get().clashBridge, ...body },
+    });
+    upstream.updateSettings(saved);
+    store.updateReadyCount(upstream.rotator.readyCount(), upstream.rotator.getAccounts().length);
+    sendJson(res, 200, { clashBridge: saved.clashBridge, settings: saved });
+    return true;
+  }
   // POST /admin/api/clash-bridge/probe
   if (method === "POST" && path === "/admin/api/clash-bridge/probe") {
     const s = store.get();

@@ -15,6 +15,8 @@ export const ADMIN_CLIENT_CORE = `    function storageGet(key) {
     const workerTestResults = new Map();
     let collapsedWorkerIds = readCollapsedWorkerIds();
     let page = storageGet("opencode-manager-page") || "proxy";
+    let proxyTab = storageGet("opencode-manager-proxy-tab") || "nodes";
+    if (!["nodes", "sources", "bindings"].includes(proxyTab)) proxyTab = "nodes";
     let nodePage = 1;
     const PAGE_SIZE = 8;
     let confirmCb = null;
@@ -35,6 +37,7 @@ export const ADMIN_CLIENT_CORE = `    function storageGet(key) {
     let serverAccountIds = new Set();
     let batchBaselineAccountIds = new Set();
     let recentProbeEvents = [];
+    const subscriptionDiagnostics = new Map();
 
     function t(key) {
       const pack = I18N[lang] || I18N.en;
@@ -315,6 +318,21 @@ export const ADMIN_CLIENT_CORE = `    function storageGet(key) {
       document.querySelectorAll(".page").forEach((el) => {
         el.classList.toggle("active", el.dataset.page === page);
       });
+    }
+
+    function showProxyTab(name) {
+      if (!["nodes", "sources", "bindings"].includes(name)) name = "nodes";
+      proxyTab = name;
+      storageSet("opencode-manager-proxy-tab", proxyTab);
+      document.querySelectorAll(".proxy-tab").forEach((button) => {
+        const active = button.dataset.proxyTab === proxyTab;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-selected", String(active));
+      });
+      document.querySelectorAll("[data-proxy-section]").forEach((section) => {
+        section.classList.toggle("proxy-section-active", section.dataset.proxySection === proxyTab);
+      });
+      $("proxy-workspace").classList.toggle("sources-view", proxyTab === "sources");
     }
 
 `;

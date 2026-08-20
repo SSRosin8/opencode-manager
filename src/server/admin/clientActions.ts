@@ -14,12 +14,11 @@ export const ADMIN_CLIENT_ACTIONS = `    $("btn-top-refresh").onclick = () => re
     };
 
     $("btn-save-bridge").onclick = async () => {
-      const body = { ...settings, clashBridge: collectBridge(), accounts: collectAccounts() };
-      const res = await fetch("/admin/api/settings", {
-        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      const res = await fetch("/admin/api/clash-bridge", {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(collectBridge()),
       });
       if (!res.ok) { toast(t("toastSaveFail"), false); return; }
-      settings = await res.json();
+      settings = (await res.json()).settings;
       renderAll();
       toast(t("toastBridgeSaved"));
     };
@@ -69,7 +68,6 @@ export const ADMIN_CLIENT_ACTIONS = `    $("btn-top-refresh").onclick = () => re
 
     $("btn-save-gateway").onclick = async () => {
       const body = {
-        ...settings,
         routingStrategy: $("routing-strategy")?.value || settings.routingStrategy || "anonymous_first",
         baseUrl: $("baseUrl").value.trim(),
         relayAccessToken: $("relayAccessToken").value.trim(),
@@ -78,14 +76,12 @@ export const ADMIN_CLIENT_ACTIONS = `    $("btn-top-refresh").onclick = () => re
         cliUserAgent: $("cliUserAgent").value.trim(),
         cliClient: $("cliClient").value.trim(),
         cliProject: $("cliProject").value.trim(),
-        clashBridge: collectBridge(),
-        accounts: collectAccounts(),
       };
-      const res = await fetch("/admin/api/settings", {
-        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      const res = await fetch("/admin/api/gateway-settings", {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
       });
       if (!res.ok) { toast(t("toastSaveFail"), false); return; }
-      settings = await res.json();
+      settings = (await res.json()).settings;
       await loadStatus();
       renderAll();
       toast(t("toastGatewaySaved"));
@@ -198,6 +194,18 @@ export const ADMIN_CLIENT_ACTIONS = `    $("btn-top-refresh").onclick = () => re
       $("subUrl").value = "";
       $("subName").value = "";
       closeModal("modal-sub");
+      renderAll();
+      showProxyTab("sources");
+      const syncRes = await fetch("/admin/api/proxy-subscriptions/" + encodeURIComponent(data.subscription.id) + "/fetch", { method: "POST" });
+      const syncData = await syncRes.json();
+      if (!syncRes.ok) {
+        await loadSettings();
+        renderAll();
+        toast(syncData.error?.message || ("HTTP " + syncRes.status), false);
+        return;
+      }
+      subscriptionDiagnostics.set(data.subscription.id, syncData);
+      settings = syncData.settings;
       renderAll();
       toast(t("toastSubAdded"));
     };
