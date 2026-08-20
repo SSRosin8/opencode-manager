@@ -7,10 +7,10 @@ export const ADMIN_MARKUP = `</head>
         <div class="brand">
           <div class="brand-logo" aria-hidden="true">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-              <circle cx="3" cy="8" r="2" fill="#3b82f6"/>
-              <circle cx="13" cy="3.5" r="2" fill="#3b82f6"/>
-              <circle cx="13" cy="12.5" r="2" fill="#3b82f6"/>
-              <path d="M5 8h4M11 4.5L9 7M11 11.5L9 9" stroke="#3b82f6" stroke-width="1.4" stroke-linecap="round"/>
+              <circle cx="3" cy="8" r="2" fill="currentColor"/>
+              <circle cx="13" cy="3.5" r="2" fill="currentColor"/>
+              <circle cx="13" cy="12.5" r="2" fill="currentColor"/>
+              <path d="M5 8h4M11 4.5L9 7M11 11.5L9 9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
             </svg>
           </div>
           <span class="brand-name">OCFreeRelay</span>
@@ -24,6 +24,12 @@ export const ADMIN_MARKUP = `</head>
         </div>
       </div>
       <div class="topbar-right">
+        <div class="accent-switcher" role="group" aria-label="Accent color">
+          <span class="accent-dot active" data-accent="blue" title="Blue"></span>
+          <span class="accent-dot" data-accent="violet" title="Violet"></span>
+          <span class="accent-dot" data-accent="green" title="Green"></span>
+          <span class="accent-dot" data-accent="amber" title="Amber"></span>
+        </div>
         <button type="button" class="icon-btn" id="btn-theme" title="Use light theme" aria-label="Use light theme">
           <span id="theme-icon" aria-hidden="true">☀</span>
         </button>

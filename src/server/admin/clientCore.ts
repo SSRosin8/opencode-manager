@@ -132,6 +132,27 @@ export const ADMIN_CLIENT_CORE = `    function storageGet(key) {
       syncThemeControl();
     }
 
+    function setAccent(accent) {
+      if (accent === "blue") {
+        delete document.documentElement.dataset.accent;
+        storageSet("ocfr-accent", "");
+      } else {
+        document.documentElement.dataset.accent = accent;
+        storageSet("ocfr-accent", accent);
+      }
+      document.querySelectorAll(".accent-dot").forEach((d) => {
+        d.classList.toggle("active", d.dataset.accent === accent);
+      });
+    }
+
+    function initAccentSwitcher() {
+      const current = storageGet("ocfr-accent") || "blue";
+      document.querySelectorAll(".accent-dot").forEach((d) => {
+        d.classList.toggle("active", d.dataset.accent === current);
+        d.onclick = () => setAccent(d.dataset.accent);
+      });
+    }
+
     function setLang(next) {
       lang = next;
       storageSet("ocfr-lang", lang);

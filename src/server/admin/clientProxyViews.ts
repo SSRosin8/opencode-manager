@@ -16,9 +16,9 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
       const html = [
         { k: t("metricGateway"), v: running ? t("running") : t("stopped"), vcls: running ? "ok" : "", foot: running ? '<span class="tag ok">' + escapeHtml(t("healthy")) + '</span>' + sparkSvg(1, "#22c55e") : '<span class="tag err">' + escapeHtml(t("stopped")) + '</span>' },
         { k: t("metricWorkers"), v: workers + " " + t("total") + ", " + enabledWorkers + " " + t("enabled"), vcls: "", foot: '<div class="donut-wrap"><div class="donut" style="--p:' + pct + '%" data-pct="' + pct + '%"></div><div class="legend-dots"><span class="r">' + ready + " " + t("ready") + '</span><span class="b">' + busy + " " + t("busy") + '</span></div></div>' },
-        { k: t("metricProxyNodes"), v: total + " " + t("total"), vcls: "blue", foot: sparkSvg(2, "#3b82f6") },
-        { k: t("metricDirect"), v: String(direct), vcls: "blue", foot: sparkSvg(3, "#60a5fa") },
-        { k: t("metricBridged"), v: String(bridged), vcls: "blue", foot: sparkSvg(4, "#3b82f6") },
+        { k: t("metricProxyNodes"), v: total + " " + t("total"), vcls: "blue", foot: sparkSvg(2, "var(--accent)") },
+        { k: t("metricDirect"), v: String(direct), vcls: "blue", foot: sparkSvg(3, "var(--accent-hi)") },
+        { k: t("metricBridged"), v: String(bridged), vcls: "blue", foot: sparkSvg(4, "var(--accent)") },
         { k: t("metricClash"), v: clashOn ? t("enabled") : t("disabled"), vcls: clashOn ? "ok" : "", foot: clashOn ? '<span class="tag ok">' + escapeHtml(bridgeProbeOk === false ? t("disconnected") : t("connected")) + '</span>' : '<span class="tag">' + escapeHtml(t("disabled")) + '</span>' },
       ].map((m) => '<div class="metric"><div class="k">' + escapeHtml(m.k) + '</div><div class="v ' + m.vcls + '">' + escapeHtml(m.v) + '</div><div class="foot">' + m.foot + '</div></div>').join("");
       $(targetId).innerHTML = html;
@@ -69,7 +69,7 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
         '<div class="desc">' + escapeHtml(t("ofWorkers")) + '</div>' +
         '<div class="shield ' + shieldCls + '">' + (level === "ok" ? "✓" : level === "warn" ? "!" : "×") + '</div>' +
         '<div class="status-txt ' + (level === "ok" ? "" : level) + '">' + escapeHtml(statusTxt) + '</div>' +
-        '<button type="button" class="btn btn-sm" id="btn-review-bind" style="border-color:var(--blue-border);color:var(--blue-hi)">' + escapeHtml(t("reviewBindings")) + '</button>';
+        '<button type="button" class="btn btn-sm" id="btn-review-bind" style="border-color:var(--accent-border);color:var(--accent-hi)">' + escapeHtml(t("reviewBindings")) + '</button>';
       const btn = $("btn-review-bind");
       if (btn) btn.onclick = () => showPage("workers");
       $("iso-updated").textContent = t("lastUpdated");

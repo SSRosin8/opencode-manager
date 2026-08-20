@@ -201,6 +201,7 @@ export const ADMIN_CLIENT_ACTIONS = `    $("btn-top-refresh").onclick = () => re
     };
 
     initSectionCollapsibles();
+    initAccentSwitcher();
     applyStaticI18n();
     showPage(page);
     $("run-label").textContent = t("loading");
