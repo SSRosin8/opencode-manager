@@ -37,6 +37,7 @@ The default bind address is `127.0.0.1`. Set `OPENCODE_MANAGER_HOST=0.0.0.0` onl
 ## 2. Security Boundary
 
 - `X-OC-Relay-Key` protects `/v1/*` and the compatibility aliases `/models`, `/chat/completions`, and `/responses` only.
+- `/health` is intentionally unauthenticated and returns only process health, not settings or credentials.
 - `/` and `/admin/api/*` are not protected by that token.
 - Admin APIs contain Zen keys, proxy passwords, Clash secrets, and tokenized subscription URLs.
 - Never expose port 9876 directly to the public Internet or an untrusted LAN.
@@ -233,3 +234,4 @@ Subscription URLs normally contain access tokens. Do not publish complete URLs, 
 - One shared Clash Selector cannot safely sustain simultaneous distinct egresses. Use independent Mihomo inbounds or instances for true concurrency.
 - Normal upstream relay requests do not yet have a unified request timeout; a severely stalled upstream can wait for an extended period.
 - Admin has no separate authentication and must be protected by local binding, network isolation, or a reverse proxy.
+- The official free-model catalog refreshes on startup and every 15 minutes; Admin can request an immediate refresh. A validated last-success cache is used when the catalog is temporarily unavailable.

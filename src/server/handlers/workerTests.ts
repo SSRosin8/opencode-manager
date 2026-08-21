@@ -4,7 +4,9 @@ import { probeAnonymousZenProxy, probePoolProxy } from "../../proxy/probe.js";
 import { applyProbeEgressIps } from "../../proxy/pool.js";
 import { inferAccountKind } from "../../relay/index.js";
 import { attachAnonymousZenResult } from "../workerEgress.js";
-import { readStreamFully, sendJson } from "../httpIO.js";
+import { UpstreamResponseTooLargeError, readStreamFully, sendJson } from "../httpIO.js";
+
+const MAX_WORKER_TEST_RESPONSE_BYTES = 1024 * 1024;
 
 export async function handleWorkerTests(
   _req: IncomingMessage,
@@ -109,7 +111,7 @@ export async function handleWorkerTests(
       let reply: string | null = null;
       let upstreamError: string | null = null;
       if (result.body) {
-        const text = Buffer.from(await readStreamFully(result.body)).toString("utf8");
+        const text = (await readStreamFully(result.body, MAX_WORKER_TEST_RESPONSE_BYTES)).toString("utf8");
         try {
           const parsed = JSON.parse(text) as {
             choices?: Array<{ message?: { content?: unknown } }>;
@@ -143,14 +145,20 @@ export async function handleWorkerTests(
         error: ok ? null : { message: upstreamError || `upstream HTTP ${result.status}` },
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const tooLarge = err instanceof UpstreamResponseTooLargeError;
+      const message = tooLarge
+        ? err.message
+        : err instanceof Error ? err.message : String(err);
       sendJson(res, 502, {
         ok: false,
         workerId: id,
         proxyId: proxy.id,
         proxyName: proxy.name,
         latencyMs: Math.round(performance.now() - started),
-        error: { message },
+        error: {
+          message,
+          ...(tooLarge ? { type: "upstream_response_too_large" } : {}),
+        },
       });
     }
     return true;

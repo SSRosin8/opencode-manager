@@ -95,6 +95,26 @@ describe("admin proxy-pool UX contracts", () => {
     expect(ADMIN_DOCUMENT_HEAD).toContain(".run-pill {");
     expect(ADMIN_DOCUMENT_HEAD).toContain("background: var(--ok-dim); border: 1px solid var(--ok-border)");
     expect(ADMIN_DOCUMENT_HEAD).toContain("background: var(--err-dim); border-color: var(--err-border); color: var(--err)");
+    expect(ADMIN_DOCUMENT_HEAD).toContain('--accent-solid: #047857;');
+    expect(ADMIN_DOCUMENT_HEAD).toContain('--accent-solid: #b45309;');
+    expect(ADMIN_DOCUMENT_HEAD).not.toMatch(/data-theme="light"[\s\S]{0,1200}--accent-chrome:\s*rgba\(255/);
+  });
+
+  it("keeps the admin surface compact, keyboard-visible, and free of layout-wide animation", () => {
+    expect(ADMIN_DOCUMENT_HEAD).toContain("--radius: 8px");
+    expect(ADMIN_DOCUMENT_HEAD).toContain("--radius-sm: 6px");
+    expect(ADMIN_DOCUMENT_HEAD).toContain(":where(button, [tabindex], input, select, textarea):focus-visible");
+    expect(ADMIN_DOCUMENT_HEAD).not.toContain("transition: all");
+    expect(ADMIN_DOCUMENT_HEAD + ADMIN_FEATURE_STYLES).not.toMatch(/letter-spacing:\s*-/);
+    expect(ADMIN_FEATURE_STYLES).toContain(".toggle input:focus-visible + span");
+    expect(ADMIN_FEATURE_STYLES).toContain("pointer-events:none");
+  });
+
+  it("provides mobile touch targets without changing the desktop information density", () => {
+    expect(ADMIN_FEATURE_STYLES).toMatch(/@media \(max-width: 600px\)[\s\S]*\.nav-item \{ min-height:44px; \}/);
+    expect(ADMIN_FEATURE_STYLES).toMatch(/@media \(max-width: 600px\)[\s\S]*\.pager button \{ min-width:44px; height:44px; \}/);
+    expect(ADMIN_FEATURE_STYLES).toContain("font:600 11px/1.2 var(--font)");
+    expect(ADMIN_FEATURE_STYLES).not.toContain("var(--font-sans)");
   });
 
   it("validates persisted accent choices and exposes the selected swatch state", () => {

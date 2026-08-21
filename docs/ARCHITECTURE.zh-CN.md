@@ -32,7 +32,7 @@ OpenCode / OpenAI-compatible client
 | --- | --- | --- |
 | `src/index.ts` | 进程启动和退出 | 路由、配置归一化、代理逻辑 |
 | `src/server/` | HTTP 装配、公共响应工具、路由分发 | 协议解析、Worker 选择算法 |
-| `src/server/routes/` | 按领域组织 Admin 与 Relay 路由 | 全部 API 的单一巨型 handler |
+| `src/server/handlers/` | 按领域组织 Admin 与 Relay 请求处理器 | 全部 API 的单一巨型 handler |
 | `src/server/admin/` | 管理后台 HTML/CSS/JS 资源 | 服务端配置读写和转发逻辑 |
 | `src/relay/` | 请求体、请求头、URL 和账号调度 | Node HTTP 对象、管理 UI |
 | `src/proxy/` | 代理协议、订阅、Clash、探测和上游连接 | 页面渲染、配置文件持久化 |
@@ -70,7 +70,7 @@ HTTP 层应由一个小型装配模块和多个领域路由组成：
 - Proxy Pool/Probe：节点增删、单测、批测状态与批测任务。
 - Subscriptions/Clash：订阅拉取、Controller 探测和导入。
 
-路由 handler 只做四件事：解析和校验请求、调用服务、映射 HTTP 响应、记录必要状态。批量测试等长流程应由独立服务维护状态机，使浏览器断开不会取消服务端任务。
+请求 handler 只做四件事：解析和校验请求、调用服务、映射 HTTP 响应、记录必要状态。批量测试等长流程应由独立服务维护状态机，使浏览器断开不会取消服务端任务。
 
 ## 管理后台拆分
 
@@ -102,3 +102,5 @@ npm ci
 npm run validate
 git diff --check
 ```
+
+当前结构检查会提示 `src/proxy/probe.ts` 以及部分大型集成测试超过 600 行建议值，但均低于 1000 行硬上限。后续应按探测阶段和 API 领域逐步拆分，不应为了消除提示压缩代码或混入无关行为。

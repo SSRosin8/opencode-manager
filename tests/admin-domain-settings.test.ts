@@ -121,4 +121,68 @@ describe("admin domain settings and readiness", () => {
       id: "sub", name: "sub", url: "https://example.invalid/sub", lastRawBytes: -1,
     }])[0].lastRawBytes).toBe(0);
   });
+
+  it("merges a slow subscription fetch into the latest settings without losing concurrent changes", async () => {
+    let releaseFetch: (() => void) | undefined;
+    let fetchStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => { fetchStarted = resolve; });
+    const release = new Promise<void>((resolve) => { releaseFetch = resolve; });
+    const body = "http://user:pass@192.0.2.30:8080#subscription\n";
+    const base = await boot(async () => {
+      fetchStarted?.();
+      await release;
+      return new Response(body, { status: 200 });
+    });
+    const added = await fetch(`${base}/admin/api/proxy-subscriptions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "slow", url: "https://example.invalid/slow" }),
+    });
+    const subscription = (await added.json()).subscription as { id: string };
+    const fetching = fetch(
+      `${base}/admin/api/proxy-subscriptions/${encodeURIComponent(subscription.id)}/fetch`,
+      { method: "POST" }
+    );
+    await started;
+    await app?.store.addManualProxy({
+      id: "concurrent", name: "Concurrent", type: "http",
+      host: "192.0.2.40", port: 8080,
+    });
+    releaseFetch?.();
+    expect((await fetching).status).toBe(200);
+    expect(app?.store.get().proxyPool.map((proxy) => proxy.host)).toEqual(
+      expect.arrayContaining(["192.0.2.30", "192.0.2.40"])
+    );
+  });
+
+  it("does not recreate a subscription deleted while its fetch is in flight", async () => {
+    let releaseFetch: (() => void) | undefined;
+    let fetchStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => { fetchStarted = resolve; });
+    const release = new Promise<void>((resolve) => { releaseFetch = resolve; });
+    const base = await boot(async () => {
+      fetchStarted?.();
+      await release;
+      return new Response("http://user:pass@192.0.2.50:8080#late\n", { status: 200 });
+    });
+    const added = await fetch(`${base}/admin/api/proxy-subscriptions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "deleted", url: "https://example.invalid/deleted" }),
+    });
+    const subscription = (await added.json()).subscription as { id: string };
+    const fetching = fetch(
+      `${base}/admin/api/proxy-subscriptions/${encodeURIComponent(subscription.id)}/fetch`,
+      { method: "POST" }
+    );
+    await started;
+    expect((await fetch(
+      `${base}/admin/api/proxy-subscriptions/${encodeURIComponent(subscription.id)}`,
+      { method: "DELETE" }
+    )).status).toBe(200);
+    releaseFetch?.();
+    expect((await fetching).status).toBe(404);
+    expect(app?.store.get().proxySubscriptions).toHaveLength(0);
+    expect(app?.store.get().proxyPool.some((proxy) => proxy.subscriptionId === subscription.id)).toBe(false);
+  });
 });

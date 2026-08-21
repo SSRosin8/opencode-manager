@@ -67,6 +67,44 @@ export const SUBSCRIPTION_USER_AGENTS = [
   "opencode-manager/1.0",
 ] as const;
 
+const MAX_SUBSCRIPTION_BYTES = 8 * 1024 * 1024;
+
+async function readSubscriptionBody(res: Response): Promise<Buffer> {
+  const contentLength = Number(res.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > MAX_SUBSCRIPTION_BYTES) {
+    await res.body?.cancel("subscription response is too large").catch(() => {});
+    throw new Error("Subscription response is too large");
+  }
+
+  const reader = res.body?.getReader?.();
+  if (!reader) {
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length > MAX_SUBSCRIPTION_BYTES) {
+      throw new Error("Subscription response is too large");
+    }
+    return buf;
+  }
+
+  const chunks: Buffer[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      size += value.byteLength;
+      if (size > MAX_SUBSCRIPTION_BYTES) {
+        await reader.cancel("subscription response is too large").catch(() => {});
+        throw new Error("Subscription response is too large");
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks, size);
+}
+
 function tryParseClashYamlProxies(text: string): Array<Record<string, unknown>> | null {
   try {
     const doc = parseYaml(text) as Record<string, unknown> | null;
@@ -525,7 +563,7 @@ async function fetchBody(
     if (!res.ok) {
       throw new Error(`Subscription HTTP ${res.status} ${res.statusText}`);
     }
-    const buf = Buffer.from(await res.arrayBuffer());
+    const buf = await readSubscriptionBody(res);
     let text = buf.toString("utf8");
     if (text.includes("\uFFFD") && !text.includes("proxies:") && !text.includes("://")) {
       // treat as pure base64 binary-ish

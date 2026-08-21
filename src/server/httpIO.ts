@@ -3,6 +3,7 @@ import type { UpstreamClient } from "../proxy/upstream.js";
 import type { SettingsStore } from "../settings/store.js";
 
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
+export const DEFAULT_MAX_UPSTREAM_RESPONSE_BYTES = 8 * 1024 * 1024;
 
 export class RequestBodyTooLargeError extends Error {
   readonly status = 413;
@@ -10,6 +11,13 @@ export class RequestBodyTooLargeError extends Error {
   constructor(readonly limit: number) {
     super(`Request body exceeds ${limit} bytes`);
     this.name = "RequestBodyTooLargeError";
+  }
+}
+
+export class UpstreamResponseTooLargeError extends Error {
+  constructor(readonly limit: number) {
+    super("Upstream response exceeded the configured size limit");
+    this.name = "UpstreamResponseTooLargeError";
   }
 }
 
@@ -93,17 +101,32 @@ export function rejectUnavailableWorkerPool(
 }
 
 export async function readStreamFully(
-  body: ReadableStream<Uint8Array> | null
+  body: ReadableStream<Uint8Array> | null,
+  maxBytes = DEFAULT_MAX_UPSTREAM_RESPONSE_BYTES
 ): Promise<Buffer> {
   if (!body) return Buffer.alloc(0);
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+    throw new RangeError("maxBytes must be a non-negative safe integer");
+  }
   const reader = body.getReader();
   const chunks: Buffer[] = [];
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (value) chunks.push(Buffer.from(value));
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      size += value.byteLength;
+      if (size > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new UpstreamResponseTooLargeError(maxBytes);
+      }
+      chunks.push(Buffer.from(value));
+    }
+    return Buffer.concat(chunks, size);
+  } finally {
+    reader.releaseLock();
   }
-  return Buffer.concat(chunks);
 }
 
 export async function pipeUpstream(

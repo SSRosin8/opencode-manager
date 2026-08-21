@@ -22,18 +22,18 @@ export const ADMIN_DOCUMENT_HEAD = `<!DOCTYPE html>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <style>
     :root {
-      --bg: #06090f;
-      --bg-elevated: #0a0f18;
-      --sidebar: #070b12;
-      --panel: rgba(17, 24, 39, 0.72);
-      --panel-solid: #111827;
-      --panel-2: rgba(20, 28, 42, 0.65);
+      --bg: #0b0d10;
+      --bg-elevated: #111419;
+      --sidebar: #0e1115;
+      --panel: rgba(22, 25, 30, 0.88);
+      --panel-solid: #171a1f;
+      --panel-2: rgba(29, 33, 40, 0.82);
       --border: rgba(255, 255, 255, 0.06);
       --border-hi: rgba(255, 255, 255, 0.12);
-      --text: #f0f4fc;
-      --text-2: #94a3b8;
-      --muted: #64748b;
-      --faint: #334155;
+      --text: #f4f4f5;
+      --text-2: #a1a1aa;
+      --muted: #71717a;
+      --faint: #3f3f46;
       --accent: #3b82f6;
       --accent-hi: #60a5fa;
       --accent-dim: rgba(59, 130, 246, 0.12);
@@ -51,21 +51,26 @@ export const ADMIN_DOCUMENT_HEAD = `<!DOCTYPE html>
       --err: #ef4444;
       --err-dim: rgba(239, 68, 68, 0.1);
       --err-border: rgba(239, 68, 68, 0.35);
-      --radius: 12px;
-      --radius-sm: 8px;
+      --radius: 8px;
+      --radius-sm: 6px;
+      --radius-xs: 4px;
       --topbar-h: 54px;
       --sidebar-w: 200px;
       --font: "Inter", system-ui, -apple-system, sans-serif;
       --mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
-      --shadow: 0 8px 32px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.2);
-      --glass-blur: 16px;
-      --glass-bg: rgba(15, 23, 42, 0.65);
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.22);
+      --shadow: 0 8px 28px rgba(0, 0, 0, 0.34), 0 2px 6px rgba(0, 0, 0, 0.18);
+      --shadow-lg: 0 16px 44px rgba(0, 0, 0, 0.42), 0 4px 12px rgba(0, 0, 0, 0.24);
+      --glass-blur: 12px;
+      --glass-bg: rgba(23, 26, 31, 0.82);
       --glass-border: rgba(255, 255, 255, 0.08);
       --accent-surface: color-mix(in srgb, var(--accent) 15%, transparent);
       --accent-surface-hover: color-mix(in srgb, var(--accent) 21%, transparent);
       --accent-chrome: color-mix(in srgb, var(--accent) 5%, var(--glass-bg));
       --accent-panel: color-mix(in srgb, var(--accent) 2.5%, var(--glass-bg));
       --accent-panel-border: color-mix(in srgb, var(--accent) 16%, var(--glass-border));
+      --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+      --ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
       color-scheme: dark;
     }
     /* Accent: purple-blue */
@@ -99,18 +104,18 @@ export const ADMIN_DOCUMENT_HEAD = `<!DOCTYPE html>
       --accent-solid-hover: #92400e;
     }
     :root[data-theme="light"] {
-      --bg: #f8fafc;
+      --bg: #f4f5f7;
       --bg-elevated: #ffffff;
-      --sidebar: #ffffff;
-      --panel: rgba(255, 255, 255, 0.78);
+      --sidebar: #f9fafb;
+      --panel: rgba(255, 255, 255, 0.9);
       --panel-solid: #ffffff;
-      --panel-2: rgba(241, 245, 249, 0.7);
-      --border: rgba(15, 23, 42, 0.08);
-      --border-hi: rgba(15, 23, 42, 0.15);
-      --text: #0f172a;
-      --text-2: #475569;
-      --muted: #64748b;
-      --faint: #cbd5e1;
+      --panel-2: rgba(244, 245, 247, 0.88);
+      --border: rgba(24, 24, 27, 0.09);
+      --border-hi: rgba(24, 24, 27, 0.16);
+      --text: #18181b;
+      --text-2: #52525b;
+      --muted: #71717a;
+      --faint: #d4d4d8;
       --accent: #2563eb;
       --accent-hi: #1d4ed8;
       --accent-dim: rgba(37, 99, 235, 0.08);
@@ -127,10 +132,12 @@ export const ADMIN_DOCUMENT_HEAD = `<!DOCTYPE html>
       --err: #dc2626;
       --err-dim: rgba(220, 38, 38, 0.06);
       --err-border: rgba(220, 38, 38, 0.25);
-      --shadow: 0 8px 32px rgba(15, 23, 42, 0.08), 0 2px 8px rgba(15, 23, 42, 0.04);
-      --glass-blur: 12px;
-      --glass-bg: rgba(255, 255, 255, 0.7);
-      --glass-border: rgba(15, 23, 42, 0.06);
+      --shadow-sm: 0 1px 2px rgba(24, 24, 27, 0.05);
+      --shadow: 0 8px 24px rgba(24, 24, 27, 0.08), 0 2px 6px rgba(24, 24, 27, 0.04);
+      --shadow-lg: 0 16px 40px rgba(24, 24, 27, 0.1), 0 4px 10px rgba(24, 24, 27, 0.05);
+      --glass-blur: 10px;
+      --glass-bg: rgba(255, 255, 255, 0.86);
+      --glass-border: rgba(24, 24, 27, 0.07);
       color-scheme: light;
     }
     :root[data-theme="light"][data-accent="violet"] {
@@ -167,13 +174,21 @@ export const ADMIN_DOCUMENT_HEAD = `<!DOCTYPE html>
     }
     button, input, select, textarea { font: inherit; color: inherit; }
     button { cursor: pointer; }
-    a { color: var(--accent-hi); }
+    a { color: var(--accent-hi); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    ::selection { background: var(--accent-surface-hover); color: var(--text); }
+    :where(button, [tabindex], input, select, textarea):focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
     }
-    /* Micro-interaction: smooth all transitions */
+    /* Animate visual feedback without animating layout dimensions. */
     button, .btn, .nav-item, .panel, .metric, .icon-btn, .tag, input, select, textarea {
-      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      transition: color 0.18s var(--ease-standard), background-color 0.18s var(--ease-standard),
+        border-color 0.18s var(--ease-standard), box-shadow 0.18s var(--ease-standard),
+        opacity 0.18s var(--ease-standard), transform 0.18s var(--ease-standard);
     }
 
     /* ── Shell ── */
@@ -205,7 +220,7 @@ export const ADMIN_DOCUMENT_HEAD = `<!DOCTYPE html>
     }
     .brand-logo svg { display: block; }
     .brand-name {
-      font-weight: 700; font-size: 15px; letter-spacing: -0.02em;
+      font-weight: 700; font-size: 15px; letter-spacing: 0;
     }
     .run-pill {
       display: inline-flex; align-items: center; gap: 6px;
@@ -266,7 +281,7 @@ export const ADMIN_DOCUMENT_HEAD = `<!DOCTYPE html>
       border-right: 1px solid var(--border);
       display: flex; flex-direction: column;
       padding: 14px 0 10px;
-      transition: width 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      transition: width 0.22s var(--ease-standard);
     }
     .nav { display: flex; flex-direction: column; gap: 2px; padding: 0 10px; flex: 1; }
     .nav-item {
@@ -329,7 +344,7 @@ export const ADMIN_DOCUMENT_HEAD = `<!DOCTYPE html>
       gap: 12px; margin-bottom: 18px; flex-wrap: wrap;
     }
     .page-head h1 {
-      margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -0.025em;
+      margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0;
     }
     .page-head .sub {
       margin: 4px 0 0; color: var(--muted); font-size: 13px;
@@ -349,7 +364,7 @@ export const ADMIN_DOCUMENT_HEAD = `<!DOCTYPE html>
       transform: translateY(-1px); box-shadow: 0 4px 12px var(--accent-glow);
     }
     .btn:active { transform: translateY(0) scale(0.97); }
-    .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; box-shadow: none; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; pointer-events: none; transform: none; box-shadow: none; }
     .btn-primary {
       background: var(--accent-solid); border-color: var(--accent-solid); color: var(--accent-on-solid);
       box-shadow: 0 2px 8px var(--accent-glow);
@@ -374,7 +389,7 @@ export const ADMIN_DOCUMENT_HEAD = `<!DOCTYPE html>
       -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.3);
       border: 1px solid var(--accent-panel-border);
       border-radius: var(--radius);
-      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+      box-shadow: var(--shadow-sm);
     }
     .panel-hd {
       display: flex; align-items: center; justify-content: space-between;
@@ -400,7 +415,7 @@ export const ADMIN_DOCUMENT_HEAD = `<!DOCTYPE html>
     .input, .select, .textarea {
       width: 100%; height: 34px; padding: 0 12px;
       border-radius: var(--radius-sm); border: 1px solid var(--border);
-      background: var(--bg); color: var(--text);
+      background: var(--bg-elevated); color: var(--text);
     }
     .textarea { height: auto; min-height: 72px; padding: 8px 12px; resize: vertical; }
     .input:focus, .select:focus, .textarea:focus {
@@ -467,7 +482,7 @@ export const ADMIN_DOCUMENT_HEAD = `<!DOCTYPE html>
       font-size: 11px; color: var(--muted); font-weight: 500; text-transform: none;
     }
     .metric .k svg { opacity: 0.7; }
-    .metric .v { font-size: 18px; font-weight: 700; line-height: 1.2; letter-spacing: -0.02em; }
+    .metric .v { font-size: 20px; font-weight: 700; line-height: 1.2; letter-spacing: 0; }
     .metric .v.ok { color: var(--ok); }
     .metric .v.accent { color: var(--accent-hi); }
     .metric .foot {

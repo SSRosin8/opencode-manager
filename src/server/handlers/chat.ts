@@ -1,7 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { RequestContext } from "../context.js";
 import { parseUsageFromObject, parseUsageFromSseBuffer } from "../../settings/workerStats.js";
-import { HOP_BY_HOP, clientHeadersFrom, pipeUpstream, readBody, readStreamFully, rejectUnavailableWorkerPool, sendJson } from "../httpIO.js";
+import { HOP_BY_HOP, UpstreamResponseTooLargeError, clientHeadersFrom, pipeUpstream, readBody, readStreamFully, rejectUnavailableWorkerPool, sendJson } from "../httpIO.js";
+
+const MAX_CHAT_RESPONSE_BYTES = 16 * 1024 * 1024;
 
 export async function handleChat(
   req: IncomingMessage,
@@ -84,7 +86,7 @@ export async function handleChat(
 
       if (!stream && result.body && result.status >= 200 && result.status < 300) {
         // Buffer non-stream body to extract usage, then forward intact.
-        const buf = await readStreamFully(result.body);
+        const buf = await readStreamFully(result.body, MAX_CHAT_RESPONSE_BYTES);
         try {
           const parsed = JSON.parse(buf.toString("utf8")) as unknown;
           const usage = parseUsageFromObject(parsed);
@@ -124,6 +126,13 @@ export async function handleChat(
         await pipeUpstream(res, result);
       }
     } catch (err) {
+      if (err instanceof UpstreamResponseTooLargeError) {
+        store.recordRequest(path, 502, err.message);
+        sendJson(res, 502, {
+          error: { message: err.message, type: "upstream_response_too_large" },
+        });
+        return true;
+      }
       const message = err instanceof Error ? err.message : String(err);
       store.recordRequest(path, 502, message);
       sendJson(res, 502, {

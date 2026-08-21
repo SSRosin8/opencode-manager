@@ -86,7 +86,7 @@ An empty relay token preserves the existing open-access behavior. OpenCode Go is
 
 This gateway serves **only free models** — paid models are never exposed to clients.
 
-- On boot it reads the official OpenCode Zen model catalog (`https://opencode.ai/zen/v1/models`) and keeps `*-free` model ids plus the explicit official special-free allowlist.
+- On boot and every 15 minutes it reads the official OpenCode Zen model catalog (`https://opencode.ai/zen/v1/models`) and keeps `*-free` model ids plus the explicit official special-free allowlist. Admin can also trigger an immediate refresh.
 - `GET /v1/models` returns only those free models (upstream's paid entries are dropped).
 - `POST /v1/chat/completions` and `POST /v1/responses` reject any request for a non-free model with `403 model_not_allowed` **before** any upstream call.
 - The refreshed set is cached to `data/free-models.json`. If a refresh fails, the last successful set is kept; before the first successful refresh a static baseline of the currently-known free ids is used.
@@ -121,7 +121,7 @@ The bridge has two independent paths: Controller URL/secret is the **control pla
 
 Probe candidate nodes after importing. A probe records and persists the public egress IP, then sends a real anonymous Zen free-model request with `Bearer public`; after a restart the UI keeps showing the last successful egress, and a failed probe does not erase it. Only successful egress routes are eligible for automatic assignment. Nodes are deduplicated by public IP, and one egress may host at most one anonymous worker plus one signed-in worker. A single mixed-port uses one shared selector; the gateway serializes node selection and connection setup. Do not switch that selector from another client while the gateway is running. Use separate Mihomo inbounds or instances when workers must permanently own concurrent ports.
 
-Testing an individual node verifies its public IP and anonymous Zen access, then immediately adds a missing anonymous Worker. **Batch Test** first screens nodes through Mihomo's delay API, then verifies every distinct public IP against anonymous Zen. Each verified unique egress is automatically added as an anonymous Worker; you only need to add signed-in Zen accounts manually. Re-running individual or batch tests only adds missing Workers and never duplicates or removes existing ones. Direct checks run with up to eight-way concurrency; Clash checks reuse one selector switch for the public-IP and Zen requests. A single shared Clash selector still processes different nodes serially to prevent route mix-ups.
+Testing an individual node verifies its public IP and anonymous Zen access, then immediately adds a missing anonymous Worker. **Batch Test** first screens nodes through Mihomo's delay API, then verifies every distinct public IP against anonymous Zen. Each verified unique egress is automatically added as an anonymous Worker; you only need to add signed-in Zen accounts manually. Re-running individual or batch tests only adds missing Workers and never duplicates or removes existing ones. Direct screening runs with up to twelve-way concurrency; Clash checks reuse one selector switch for the public-IP and Zen requests. A single shared Clash selector still processes different nodes serially to prevent route mix-ups.
 
 The Worker page controls routing strategy and whether each Worker receives traffic. The default `Anonymous first` strategy exhausts all usable anonymous Workers before signed-in keys. `Signed-in first` reverses that preference, while `Mixed` follows the configured Worker order. Connection probes use a one-token input and `max_tokens: 1` to minimize free-quota consumption. After saving a signed-in Worker, click **Test connection** on its card to verify the exact key and route. Results include HTTP status, total latency, node, and public egress IP.
 
@@ -130,6 +130,8 @@ The Overview separates client generation requests, per-Worker upstream attempts,
 Workers may be saved as an empty list. In that state relay requests return a clear `503` until Workers are added manually or recreated by Batch Test. Dense Worker, IP-isolation, proxy-node, upstream-attempt, and gateway-rejection lists use eight-item pages. The desktop sidebar and long status sections can be collapsed, and the browser remembers those display preferences; mobile keeps the compact horizontal navigation.
 
 Admin detail hints use one keyboard-accessible tooltip style. Hovering or focusing the relevant card, statistic, or truncated value opens its hint; the layer automatically flips, stays within the viewport, and closes on Escape, scrolling, or resize.
+
+The admin theme uses compact neutral surfaces with a consistent accent hierarchy across navigation, panels, forms, tables, and primary actions. Operational success, warning, and failure colors remain independent from the selected accent, while keyboard focus and mobile touch targets stay visible.
 
 ## Tests
 

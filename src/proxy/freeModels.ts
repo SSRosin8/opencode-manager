@@ -13,14 +13,40 @@
  *    free model ids so a fresh boot is not empty and no paid model leaks.
  */
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, open, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 export const ZEN_MODELS_URL =
   process.env.OPENCODE_MANAGER_MODELS_URL || "https://opencode.ai/zen/v1/models";
 
 const MAX_CATALOG_BYTES = 2 * 1024 * 1024;
+const MAX_CACHE_BYTES = 256 * 1024;
+const MAX_CACHED_MODEL_IDS = 1_000;
 const SPECIAL_FREE_MODEL_IDS = new Set(["big-pickle"]);
+
+function normalizeFreeModelIds(values: unknown[]): string[] {
+  const found = new Set<string>();
+  for (const value of values) {
+    if (typeof value !== "string") continue;
+    const id = normalizeModelName(value);
+    if (!id || (!id.endsWith("-free") && !SPECIAL_FREE_MODEL_IDS.has(id))) continue;
+    found.add(id);
+    if (found.size >= MAX_CACHED_MODEL_IDS) break;
+  }
+  return [...found];
+}
+
+async function readCacheText(path: string): Promise<string> {
+  const file = await open(path, "r");
+  try {
+    const buffer = Buffer.alloc(MAX_CACHE_BYTES + 1);
+    const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+    if (bytesRead > MAX_CACHE_BYTES) throw new Error("model cache is too large");
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } finally {
+    await file.close();
+  }
+}
 
 async function readCatalogText(res: Response): Promise<string> {
   const reader = res.body?.getReader?.();
@@ -82,18 +108,15 @@ export function normalizeModelName(name: string): string {
  * the strict naming rule prevents paid or malformed entries from leaking.
  */
 export function parseFreeModelIds(payload: unknown): string[] {
-  const found = new Set<string>();
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return [];
   const data = (payload as { data?: unknown }).data;
   if (!Array.isArray(data)) return [];
+  const ids: unknown[] = [];
   for (const entry of data) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
-    const rawId = (entry as { id?: unknown }).id;
-    if (typeof rawId !== "string") continue;
-    const id = normalizeModelName(rawId);
-    if (id.endsWith("-free") || SPECIAL_FREE_MODEL_IDS.has(id)) found.add(id);
+    ids.push((entry as { id?: unknown }).id);
   }
-  return [...found];
+  return normalizeFreeModelIds(ids);
 }
 
 export type FreeModelStatus = {
@@ -150,10 +173,10 @@ export class FreeModelRegistry {
   /** Restore the last successful catalog refresh from disk. */
   async loadCache(): Promise<void> {
     try {
-      const text = await readFile(this.cachePath, "utf8");
+      const text = await readCacheText(this.cachePath);
       const parsed = JSON.parse(text) as { fetchedAt?: string; ids?: unknown };
       const ids = Array.isArray(parsed.ids)
-        ? parsed.ids.filter((x): x is string => typeof x === "string")
+        ? normalizeFreeModelIds(parsed.ids)
         : [];
       if (ids.length) {
         this._ids = new Set(ids);

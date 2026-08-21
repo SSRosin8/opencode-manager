@@ -276,6 +276,34 @@ describe("UpstreamClient chatCompletions", () => {
     expect(events[1].accountId).not.toBe(events[0].accountId);
   });
 
+  it("cancels a retryable response body before trying the next worker", async () => {
+    const cancel = vi.fn();
+    let calls = 0;
+    const fetchImpl = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) {
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array([1]));
+          },
+          cancel,
+        });
+        return new Response(body, { status: 429 });
+      }
+      return jsonResponse(200, { choices: [] });
+    });
+    const client = new UpstreamClient(baseSettings(), fetchImpl);
+
+    const result = await client.chatCompletions({
+      body: { model: "big-pickle" },
+      stream: false,
+    });
+
+    expect(result.status).toBe(200);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
   it.each([401, 403, 429, 500])(
     "returns the final HTTP %i response body after all workers are exhausted",
     async (status) => {

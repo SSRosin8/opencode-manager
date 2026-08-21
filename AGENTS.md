@@ -22,7 +22,7 @@
 
 - `src/index.ts`：进程入口、启动日志和优雅退出，不承载业务逻辑。
 - `src/server/`：HTTP 装配、路由和协议适配。路由只负责解析输入、调用领域服务和映射响应。
-- `src/server/routes/`：按 `relay`、`workers`、`proxyPool`、`subscriptions` 等领域拆分路由，禁止形成新的单文件路由总表。
+- `src/server/handlers/`：按 `relay`、`workers`、`proxyPool`、`subscriptions` 等领域拆分请求处理器，禁止形成新的单文件路由总表。
 - `src/server/admin/`：管理页面模板、样式、脚本和静态资源。视图渲染、状态管理和 API 调用应分离。
 - `src/relay/`：OpenAI/OpenCode 请求转换、请求头、URL 与账号调度，不依赖管理 UI。
 - `src/proxy/`：代理解析、出口解析、Clash/Mihomo 桥接、探测和上游发送；协议解析不得进入 HTTP 路由。

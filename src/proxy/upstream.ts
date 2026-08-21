@@ -418,7 +418,7 @@ export class UpstreamClient {
           }
           if (attempt + 1 < maxAttempts) {
             try {
-              await response.arrayBuffer();
+              await response.body?.cancel();
             } catch {
               /* ignore */
             }
@@ -524,7 +524,7 @@ export class UpstreamClient {
           }
           if (attempt + 1 < maxAttempts) {
             try {
-              await response.arrayBuffer();
+              await response.body?.cancel();
             } catch {
               /* ignore */
             }

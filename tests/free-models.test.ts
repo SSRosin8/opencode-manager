@@ -2,7 +2,7 @@
  * Unit tests for the free-model catalog + registry.
  */
 import { describe, expect, it } from "vitest";
-import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -104,6 +104,57 @@ describe("FreeModelRegistry", () => {
       expect(status.lastError).toBeTruthy();
       expect(status.usingBaseline).toBe(true);
       expect(reg.has("big-pickle")).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("normalizes cached ids and discards paid, malformed, and duplicate entries", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "opencode-manager-fm-cache-"));
+    try {
+      const cachePath = join(dir, "free-models.json");
+      await writeFile(cachePath, JSON.stringify({
+        fetchedAt: "2026-08-21T00:00:00.000Z",
+        ids: [" DeepSeek V4 Flash Free ", "deepseek-v4-flash-free", "claude-opus-5", 1],
+      }));
+      const reg = new FreeModelRegistry({ cachePath });
+      await reg.loadCache();
+
+      expect(reg.ids()).toEqual(["deepseek-v4-flash-free"]);
+      expect(reg.status().lastFetchedAt).toBe("2026-08-21T00:00:00.000Z");
+      expect(reg.has("claude-opus-5")).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores an oversized cache file and keeps the baseline", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "opencode-manager-fm-cache-large-"));
+    try {
+      const cachePath = join(dir, "free-models.json");
+      await writeFile(cachePath, " ".repeat(256 * 1024 + 1));
+      const reg = new FreeModelRegistry({ cachePath });
+      await reg.loadCache();
+
+      expect(reg.ids()).toEqual([...KNOWN_FREE_MODELS].sort());
+      expect(reg.status().usingBaseline).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("caps the number of valid model ids restored from cache", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "opencode-manager-fm-cache-count-"));
+    try {
+      const cachePath = join(dir, "free-models.json");
+      const ids = Array.from({ length: 1_005 }, (_, index) => `model-${index}-free`);
+      await writeFile(cachePath, JSON.stringify({ fetchedAt: "2026-08-21", ids }));
+      const reg = new FreeModelRegistry({ cachePath });
+      await reg.loadCache();
+
+      expect(reg.count()).toBe(1_000);
+      expect(reg.has("model-999-free")).toBe(true);
+      expect(reg.has("model-1000-free")).toBe(false);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

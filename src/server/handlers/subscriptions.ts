@@ -41,9 +41,9 @@ export async function handleSubscriptions(
       lastError: null,
       lastImportCount: 0,
     };
-    const saved = await store.save({
-      proxySubscriptions: [...s.proxySubscriptions, sub],
-    });
+    const saved = await store.update((current) => ({
+      proxySubscriptions: [...current.proxySubscriptions, sub],
+    }));
     sendJson(res, 200, { subscription: sub, settings: saved });
     return true;
   }
@@ -55,21 +55,22 @@ export async function handleSubscriptions(
       sendJson(res, 400, { error: { message: "Missing subscription id" } });
       return true;
     }
-    const s = store.get();
-    const proxyPool = s.proxyPool.filter(
-      (p) => !(p.source === "subscription" && p.subscriptionId === id)
-    );
-    const proxySubscriptions = s.proxySubscriptions.filter((x) => x.id !== id);
-    // clear account bindings that pointed at removed proxies
-    const removedIds = new Set(
-      s.proxyPool
-        .filter((p) => p.source === "subscription" && p.subscriptionId === id)
-        .map((p) => p.id)
-    );
-    const accounts = s.accounts.map((a) =>
-      a.proxyId && removedIds.has(a.proxyId) ? { ...a, proxyId: null } : a
-    );
-    const saved = await store.save({ proxyPool, proxySubscriptions, accounts });
+    const saved = await store.update((current) => {
+      const removedIds = new Set(
+        current.proxyPool
+          .filter((p) => p.source === "subscription" && p.subscriptionId === id)
+          .map((p) => p.id)
+      );
+      return {
+        proxyPool: current.proxyPool.filter(
+          (p) => !(p.source === "subscription" && p.subscriptionId === id)
+        ),
+        proxySubscriptions: current.proxySubscriptions.filter((x) => x.id !== id),
+        accounts: current.accounts.map((a) =>
+          a.proxyId && removedIds.has(a.proxyId) ? { ...a, proxyId: null } : a
+        ),
+      };
+    });
     upstream.updateSettings(saved);
     store.updateReadyCount(
       upstream.rotator.readyCount(),
@@ -97,30 +98,32 @@ export async function handleSubscriptions(
         subscriptionId: sub.id,
         fetchImpl: subscriptionFetch,
       });
-      const mergedPool = mergeSubscriptionProxies(s.proxyPool, sub.id, result.proxies);
-      const updatedSub: ProxySubscription = {
-        ...sub,
-        lastFetchedAt: new Date().toISOString(),
-        lastError:
-          result.proxies.length === 0
-            ? "Parsed 0 nodes — check URL or try again"
-            : null,
-        lastImportCount: result.proxies.length,
-        lastRawBytes: result.rawBytes,
-        lastDirectCount: result.usableCount,
-        lastBridgeableCount: result.bridgeableCount,
-        lastFormat: result.format,
-        lastUserAgent: result.usedUserAgent,
-      };
-      const proxySubscriptions = s.proxySubscriptions.map((x) =>
-        x.id === id ? updatedSub : x
-      );
-      // Auto-fill Clash bridge endpoints from subscription YAML (mitce: 7892 / 主代理)
-      const clashBridge = applyClashHintsToBridge(s.clashBridge, result.clashHints);
-      const saved = await store.save({
-        proxyPool: mergedPool,
-        proxySubscriptions,
-        clashBridge,
+      let updatedSub: ProxySubscription | null = null;
+      const saved = await store.update((current) => {
+        const latestSub = current.proxySubscriptions.find((x) => x.id === id);
+        if (!latestSub) throw new Error("subscription_removed_during_fetch");
+        updatedSub = {
+          ...latestSub,
+          lastFetchedAt: new Date().toISOString(),
+          lastError:
+            result.proxies.length === 0
+              ? "Parsed 0 nodes — check URL or try again"
+              : null,
+          lastImportCount: result.proxies.length,
+          lastRawBytes: result.rawBytes,
+          lastDirectCount: result.usableCount,
+          lastBridgeableCount: result.bridgeableCount,
+          lastFormat: result.format,
+          lastUserAgent: result.usedUserAgent,
+        };
+        return {
+          proxyPool: mergeSubscriptionProxies(current.proxyPool, id, result.proxies),
+          proxySubscriptions: current.proxySubscriptions.map((x) =>
+            x.id === id ? updatedSub! : x
+          ),
+          // Auto-fill bridge endpoints from hints without overwriting concurrent edits.
+          clashBridge: applyClashHintsToBridge(current.clashBridge, result.clashHints),
+        };
       });
       upstream.updateSettings(saved);
       store.updateReadyCount(
@@ -148,15 +151,29 @@ export async function handleSubscriptions(
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      const updatedSub: ProxySubscription = {
-        ...sub,
-        lastFetchedAt: new Date().toISOString(),
-        lastError: message,
-      };
-      const proxySubscriptions = s.proxySubscriptions.map((x) =>
-        x.id === id ? updatedSub : x
-      );
-      await store.save({ proxySubscriptions });
+      if (message === "subscription_removed_during_fetch") {
+        sendJson(res, 404, { error: { message: `Subscription not found: ${id}` } });
+        return true;
+      }
+      let updatedSub: ProxySubscription | null = null;
+      await store.update((current) => {
+        const latestSub = current.proxySubscriptions.find((x) => x.id === id);
+        if (!latestSub) return {};
+        updatedSub = {
+          ...latestSub,
+          lastFetchedAt: new Date().toISOString(),
+          lastError: message,
+        };
+        return {
+          proxySubscriptions: current.proxySubscriptions.map((x) =>
+            x.id === id ? updatedSub! : x
+          ),
+        };
+      });
+      if (!updatedSub) {
+        sendJson(res, 404, { error: { message: `Subscription not found: ${id}` } });
+        return true;
+      }
       sendJson(res, 502, {
         error: { message: `Subscription fetch failed: ${message}` },
         subscription: updatedSub,

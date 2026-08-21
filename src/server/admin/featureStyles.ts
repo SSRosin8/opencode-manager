@@ -6,10 +6,10 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
     .readiness-copy { min-width:0; }
     .readiness-title { font-weight:650; }
     .readiness-detail, .panel-sub { margin:2px 0 0; color:var(--muted); font-size:11px; font-weight:400; }
-    .proxy-tabs { display:flex; align-items:center; gap:4px; margin-bottom:12px; border-bottom:1px solid var(--border); overflow-x:auto; }
-    .proxy-tab { border:0; border-bottom:2px solid transparent; border-radius:6px 6px 0 0; background:transparent; color:var(--muted); padding:9px 12px; white-space:nowrap; font-weight:600; }
+    .proxy-tabs { display:flex; align-items:center; gap:4px; width:max-content; max-width:100%; margin-bottom:14px; padding:3px; border:1px solid var(--border); border-radius:var(--radius); background:var(--panel-2); overflow-x:auto; }
+    .proxy-tab { min-height:32px; border:1px solid transparent; border-radius:var(--radius-sm); background:transparent; color:var(--muted); padding:6px 12px; white-space:nowrap; font-weight:600; }
     .proxy-tab:hover { color:var(--text); background:var(--accent-surface); }
-    .proxy-tab.active { color:var(--accent-hi); background:var(--accent-surface); border-bottom-color:var(--accent); }
+    .proxy-tab.active { color:var(--accent-hi); background:var(--panel-solid); border-color:var(--accent-border); box-shadow:var(--shadow-sm); }
     [data-proxy-section] { display:none; }
     [data-proxy-section].proxy-section-active { display:block; }
     .pp-grid {
@@ -29,7 +29,7 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
     .iso-cols {
       display: grid; grid-template-columns: 1fr 1.1fr 1fr; gap: 4px;
       font-size: 10px; color: var(--muted); text-transform: uppercase;
-      letter-spacing: 0.05em; margin-bottom: 10px; font-weight: 600;
+      letter-spacing: 0; margin-bottom: 10px; font-weight: 600;
     }
     .iso-row {
       display: grid; grid-template-columns: 1fr auto 1.1fr auto 1fr;
@@ -46,7 +46,7 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
       to { opacity: 1; transform: translateY(0); }
     }
     .iso-node {
-      background: var(--bg); border: 1px solid var(--border);
+      background: var(--bg-elevated); border: 1px solid var(--border);
       border-radius: var(--radius-sm); padding: 8px 10px; min-width: 0;
       transition: border-color 0.2s, box-shadow 0.2s;
     }
@@ -101,8 +101,8 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
     .ui-tooltip {
       position:fixed; z-index:1000; width:max-content; max-width:min(320px, calc(100vw - 24px));
       max-height:calc(100vh - 24px); padding:8px 10px; border:1px solid var(--border-hi);
-      border-radius:8px; background:var(--panel-solid); color:var(--text-2);
-      box-shadow:0 10px 28px rgba(0,0,0,.28), 0 2px 8px rgba(0,0,0,.18);
+      border-radius:var(--radius); background:var(--panel-solid); color:var(--text-2);
+      box-shadow:var(--shadow-lg);
       font-size:12px; font-weight:400; line-height:1.45; text-align:left; white-space:pre-line;
       overflow:hidden; pointer-events:none; opacity:0; transform:translateY(2px);
       transition:opacity .12s ease, transform .12s ease;
@@ -124,9 +124,9 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
       background: var(--accent-panel); backdrop-filter: blur(10px);
       border: 1px solid var(--accent-panel-border);
       border-radius: var(--radius); padding: 14px; display: flex; flex-direction: column; gap: 8px;
-      transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
+      transition: border-color 0.18s var(--ease-standard), box-shadow 0.18s var(--ease-standard);
     }
-    .sub-card:hover { border-color: var(--accent-border); transform: translateY(-2px); box-shadow: 0 8px 24px var(--accent-glow); }
+    .sub-card:hover { border-color: var(--accent-border); box-shadow: 0 4px 16px var(--accent-glow); }
     .sub-card.err { border-color: var(--err-border); }
     .sub-card .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
     .sub-card .name { font-weight: 600; font-size: 13px; }
@@ -188,7 +188,7 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
       text-align: left; padding: 8px 12px; color: var(--muted);
       font-weight: 600; font-size: 11px; border-bottom: 1px solid var(--border);
       position: sticky; top: 0; background: var(--panel-solid); z-index: 1;
-      white-space: nowrap; text-transform: uppercase; letter-spacing: 0.03em;
+      white-space: nowrap; text-transform: uppercase; letter-spacing: 0;
     }
     table.nodes td {
       padding: 8px 12px; border-bottom: 1px solid var(--border);
@@ -197,7 +197,7 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
     table.nodes tr { transition: background 0.15s; }
     table.nodes tr:hover td { background: var(--accent-surface); }
     table.nodes tr.row-warn td { background: var(--warn-dim); }
-    table.nodes tr.row-err td { background: rgba(239,68,68,0.06); }
+    table.nodes tr.row-err td { background: var(--err-dim); }
     table.nodes .name-cell { display: flex; align-items: center; gap: 6px; font-weight: 500; }
     .table-foot {
       display: flex; justify-content: space-between; align-items: center;
@@ -215,7 +215,7 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
     }
     .pager button:hover { border-color: var(--accent-border); background: var(--accent-surface); }
     .pager button.active { background: var(--accent-solid); border-color: var(--accent-solid); color: var(--accent-on-solid); box-shadow: 0 2px 8px var(--accent-glow); }
-    .pager button:disabled { opacity: 0.4; }
+    .pager button:disabled { opacity: 0.4; cursor:not-allowed; pointer-events:none; }
     .list-pagination[hidden] { display:none; }
     .worker-pagination { margin-top:2px; border:1px solid var(--border); border-radius:var(--radius-sm); }
     .lat { font-family: var(--mono); font-size: 12px; }
@@ -266,7 +266,7 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
       border: 1px solid var(--accent-panel-border); border-radius: var(--radius);
       background: var(--accent-panel); backdrop-filter: blur(10px);
       padding: 14px 16px; margin-bottom: 10px;
-      transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
+      transition: border-color 0.18s var(--ease-standard), box-shadow 0.18s var(--ease-standard), opacity 0.18s var(--ease-standard);
     }
     .worker-card:hover { border-color: var(--accent-border); box-shadow: 0 4px 16px var(--accent-glow); }
     .worker-card.disabled-worker { opacity: 0.6; }
@@ -330,9 +330,9 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
       position: fixed; left: 20px; bottom: 20px; z-index: 100;
       display: none; align-items: center; gap: 10px;
       padding: 12px 14px; min-width: 240px; max-width: 380px;
-      background: var(--glass-bg); backdrop-filter: blur(16px) saturate(1.4);
+      background: var(--glass-bg); backdrop-filter: blur(var(--glass-blur)) saturate(1.2);
       border: 1px solid var(--glass-border);
-      border-radius: var(--radius); box-shadow: var(--shadow); font-size: 13px;
+      border-radius: var(--radius); box-shadow: var(--shadow-lg); font-size: 13px;
     }
     .toast.show { display: flex; animation: toast-in 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
     @keyframes toast-in {
@@ -345,16 +345,16 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
     .modal-root {
       position: fixed; inset: 0; z-index: 90; display: none;
       align-items: center; justify-content: center;
-      background: rgba(0,0,0,0.5); backdrop-filter: blur(4px);
+      background: rgba(0,0,0,0.48); backdrop-filter: blur(4px);
     }
     .modal-root.show { display: flex; animation: modal-backdrop-in 0.2s ease-out; }
     @keyframes modal-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
     .modal {
       width: min(440px, calc(100vw - 32px));
-      background: var(--glass-bg); backdrop-filter: blur(20px) saturate(1.5);
+      background: var(--glass-bg); backdrop-filter: blur(var(--glass-blur)) saturate(1.2);
       border: 1px solid var(--glass-border);
-      border-radius: 14px; box-shadow: var(--shadow); padding: 18px;
-      animation: modal-enter 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      border-radius: var(--radius); box-shadow: var(--shadow-lg); padding: 18px;
+      animation: modal-enter 0.3s var(--ease-enter);
     }
     @keyframes modal-enter {
       from { opacity: 0; transform: translateY(12px) scale(0.96); }
@@ -370,9 +370,9 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
     .confirm-float {
       position: fixed; right: 24px; bottom: 24px; z-index: 95;
       width: 300px; display: none;
-      background: var(--glass-bg); backdrop-filter: blur(16px) saturate(1.4);
+      background: var(--glass-bg); backdrop-filter: blur(var(--glass-blur)) saturate(1.2);
       border: 1px solid var(--glass-border);
-      border-radius: 12px; box-shadow: var(--shadow); padding: 16px;
+      border-radius: var(--radius); box-shadow: var(--shadow-lg); padding: 16px;
     }
     .confirm-float.show { display: block; animation: toast-in 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
     .confirm-float h3 {
@@ -387,7 +387,7 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
     }
 
     .toggle {
-      position: relative; width: 38px; height: 22px; flex-shrink: 0;
+      position: relative; width: 42px; height: 24px; flex-shrink: 0;
     }
     .toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
     .toggle span {
@@ -396,23 +396,24 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
       transition: background 0.2s, border-color 0.2s;
     }
     .toggle span::after {
-      content: ""; position: absolute; width: 14px; height: 14px; border-radius: 50%;
-      background: #fff; top: 3px; left: 3px;
-      transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+      content: ""; position: absolute; width: 16px; height: 16px; border-radius: 50%;
+      background: #fff; top: 3px; left: 3px; box-shadow:0 1px 3px rgba(0,0,0,.24);
+      transition: transform 0.2s var(--ease-standard);
     }
+    .toggle input:focus-visible + span { outline:2px solid var(--accent); outline-offset:2px; }
     .toggle input:checked + span { background: var(--accent-solid); border-color: var(--accent-solid); box-shadow: 0 0 8px var(--accent-glow); }
-    .toggle input:checked + span::after { transform: translateX(16px); }
+    .toggle input:checked + span::after { transform: translateX(18px); }
 
     .more-menu {
       position: absolute; right: 0; top: calc(100% + 4px); z-index: 30;
-      min-width: 170px; background: var(--glass-bg); backdrop-filter: blur(16px);
+      min-width: 180px; background: var(--glass-bg); backdrop-filter: blur(var(--glass-blur));
       border: 1px solid var(--glass-border);
-      border-radius: var(--radius); box-shadow: var(--shadow); display: none; padding: 4px;
+      border-radius: var(--radius); box-shadow: var(--shadow-lg); display: none; padding: 5px;
     }
     .more-menu.show { display: block; animation: fade-up 0.2s ease-out; }
     .more-menu button {
       width: 100%; text-align: left; background: none; border: none;
-      color: var(--text); padding: 8px 10px; border-radius: 6px; font-size: 12px;
+      color: var(--text); padding: 9px 10px; border-radius: var(--radius-sm); font-size: 12px;
     }
     .source-menu { left:0; right:auto; min-width:240px; }
     .source-menu button { display:flex; flex-direction:column; gap:2px; }
@@ -463,7 +464,7 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
       .overview-workers-table tr:last-child, .attempts-table tr:last-child { margin-bottom:0; }
       .overview-workers-table td, .attempts-table td { min-width:0; padding:0; border:0; position:static !important; background:transparent !important; }
       .overview-workers-table td:first-child, .attempts-table td:first-child { grid-column:1 / -1; }
-      .overview-workers-table .mobile-cell-label { display:block; margin-bottom:3px; color:var(--muted); font:600 11px/1.2 var(--font-sans); }
+      .overview-workers-table .mobile-cell-label { display:block; margin-bottom:3px; color:var(--muted); font:600 11px/1.2 var(--font); }
       .attempts-table td:nth-child(3), .attempts-table td:nth-child(4) { grid-column:1 / -1; }
       .worker-route-primary { max-width:none; }
       .row.two, .row.three { grid-template-columns: 1fr; }
@@ -499,6 +500,9 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
       .topbar-right, .lang-switch { flex-shrink:0; }
       .lang-switch { gap:3px; font-size:11px; }
       .lang-switch button { padding-inline:2px; }
+      .nav-item { min-height:44px; }
+      .page-actions .btn:not(.btn-icon), .table-tools .btn:not(.btn-icon) { min-height:44px; }
+      .pager button { min-width:44px; height:44px; }
     }
   </style>
 `;
