@@ -229,6 +229,7 @@ export const ADMIN_CLIENT_ACTIONS = `    $("btn-top-refresh").onclick = () => re
     };
 
     initSectionCollapsibles();
+    initGuide();
     initSidebar();
     initAccentSwitcher();
     initTooltips();

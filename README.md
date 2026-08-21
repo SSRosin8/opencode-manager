@@ -46,7 +46,7 @@ Development boundaries and module ownership are defined in [AGENTS.md](AGENTS.md
 
 | Source | Purpose |
 |--------|---------|
-| Admin UI | Base URL, workers (API keys), proxy pool bindings, CLI header synthesis |
+| Admin UI | Basic Gateway settings, proxy sources and tests, Worker routing, client access, and optional CLI compatibility headers |
 | `data/settings.json` | Persisted settings (auto-created) |
 | `PORT` | Listen port |
 | `OPENCODE_MANAGER_HOST` | Bind address, defaults to `127.0.0.1`; use `0.0.0.0` only behind protected admin access |
@@ -127,9 +127,11 @@ The Worker page controls routing strategy and whether each Worker receives traff
 
 The Overview separates client generation requests, per-Worker upstream attempts, and `/v1/models` attempts; a retry chain counts as one client generation request while Worker rows retain the actual routing attempts. The global model distribution is deduplicated by client request chain, while each Worker shows the models it actually attempted. Tokens include only `usage` reported by successful upstream responses, with usage coverage shown in the details. Cache hit rate is cache-read input tokens divided by total input tokens; cache misses and explicit cache writes remain separate. Token and cache totals are also grouped by model so model changes can be inspected independently. Failures before upstream routing appear in a separate Gateway rejections list. The global **Reset stats** action clears Worker counters, upstream attempts, recent errors, and gateway rejections together.
 
-Workers may be saved as an empty list. In that state relay requests return a clear `503` until Workers are added manually or recreated by Batch Test. Dense Worker, IP-isolation, proxy-node, upstream-attempt, and gateway-rejection lists use eight-item pages. The desktop sidebar and long status sections can be collapsed, and the browser remembers those display preferences; mobile keeps the compact horizontal navigation.
+Workers may be saved as an empty list. In that state relay requests return a clear `503` until Workers are added manually or recreated by Batch Test. Dense Worker, IP-isolation, proxy-node, upstream-attempt, and gateway-rejection lists use eight-item pages. Desktop navigation keeps Overview separate, groups Gateway/Proxy Pool/Workers under Resources, and places Client Usage under Client access. Each group and the whole sidebar can be collapsed independently, and the browser remembers those display preferences; mobile keeps all destinations visible in compact horizontal navigation.
 
 Admin detail hints use one keyboard-accessible tooltip style. Hovering or focusing the relevant card, statistic, or truncated value opens its hint; the layer automatically flips, stays within the viewport, and closes on Escape, scrolling, or resize.
+
+The Overview shows a five-step first-run guide: configure the gateway, add a node source, test nodes, bind Workers, and connect OpenCode. Each step links to its page, the guide can be dismissed, and the question-mark button in the top bar reopens the full guide.
 
 The admin theme uses compact neutral surfaces with a consistent accent hierarchy across navigation, panels, forms, tables, and primary actions. Operational success, warning, and failure colors remain independent from the selected accent, while keyboard focus and mobile touch targets stay visible.
 

@@ -14,7 +14,8 @@ export const ADMIN_CLIENT_CORE = `    function storageGet(key) {
     const workerTestingIds = new Set();
     const workerTestResults = new Map();
     let collapsedWorkerIds = readCollapsedWorkerIds();
-    let page = storageGet("opencode-manager-page") || "proxy";
+    let page = storageGet("opencode-manager-page") || "overview";
+    if (!["overview", "gateway", "proxy", "workers", "usage"].includes(page)) page = "overview";
     let proxyTab = storageGet("opencode-manager-proxy-tab") || "nodes";
     if (!["nodes", "sources", "bindings"].includes(proxyTab)) proxyTab = "nodes";
     let showIdleWorkers = false;
@@ -80,12 +81,49 @@ export const ADMIN_CLIENT_CORE = `    function storageGet(key) {
     function initSectionCollapsibles() {
       document.querySelectorAll(".collapse-toggle[data-collapse-key]").forEach((btn) => {
         const storageKey = "opencode-manager-collapse-" + btn.dataset.collapseKey;
-        syncCollapseToggle(btn, storageGet(storageKey) === "1");
+        const stored = storageGet(storageKey);
+        syncCollapseToggle(btn, stored === "1" || (stored == null && btn.dataset.collapseDefault === "1"));
         btn.onclick = () => {
           const collapsed = btn.getAttribute("aria-expanded") === "true";
           storageSet(storageKey, collapsed ? "1" : "0");
           syncCollapseToggle(btn, collapsed);
         };
+      });
+    }
+
+    function initGuide() {
+      const guide = $("modal-guide");
+      const gettingStarted = $("getting-started");
+      const dialog = guide?.querySelector(".guide-modal");
+      let guideOpener = null;
+      const closeGuide = () => {
+        if (!guide?.classList.contains("show")) return;
+        guide.classList.remove("show");
+        guideOpener?.focus?.();
+      };
+      $("btn-guide")?.addEventListener("click", (event) => {
+        guideOpener = event.currentTarget;
+        guide?.classList.add("show");
+        dialog?.focus?.();
+      });
+      $("guide-close")?.addEventListener("click", closeGuide);
+      $("guide-go-overview")?.addEventListener("click", () => { closeGuide(); showPage("overview"); });
+      guide?.addEventListener("click", (event) => { if (event.target === guide) closeGuide(); });
+      guide?.addEventListener("keydown", (event) => { if (event.key === "Escape") closeGuide(); });
+      $("btn-dismiss-getting-started")?.addEventListener("click", () => {
+        storageSet("opencode-manager-getting-started-dismissed", "1");
+        gettingStarted?.setAttribute("hidden", "");
+      });
+      if (storageGet("opencode-manager-getting-started-dismissed") === "1") gettingStarted?.setAttribute("hidden", "");
+      document.querySelectorAll(".getting-step[data-guide-page]").forEach((step) => {
+        step.addEventListener("click", () => {
+          const targetPage = step.dataset.guidePage;
+          if (!targetPage) return;
+          closeGuide();
+          showPage(targetPage);
+          const tab = step.dataset.guideTab;
+          if (tab) showProxyTab(tab);
+        });
       });
     }
 
@@ -107,6 +145,24 @@ export const ADMIN_CLIENT_CORE = `    function storageGet(key) {
 
     function initSidebar() {
       syncSidebar();
+      document.querySelectorAll(".nav-group-toggle[data-nav-group]").forEach((toggle) => {
+        const group = toggle.dataset.navGroup;
+        if (!group) return;
+        const content = document.querySelector('[data-nav-group-content="' + group + '"]');
+        const key = "opencode-manager-nav-group-" + group;
+        const sync = (expanded) => {
+          toggle.setAttribute("aria-expanded", String(expanded));
+          content?.classList.toggle("is-collapsed", !expanded);
+          const chevron = toggle.querySelector(".nav-group-chevron");
+          if (chevron) chevron.textContent = expanded ? "⌃" : "⌄";
+        };
+        sync(storageGet(key) !== "0");
+        toggle.onclick = () => {
+          const expanded = toggle.getAttribute("aria-expanded") !== "true";
+          storageSet(key, expanded ? "1" : "0");
+          sync(expanded);
+        };
+      });
       $("btn-sidebar-toggle").onclick = () => {
         sidebarCollapsed = !sidebarCollapsed;
         storageSet("opencode-manager-sidebar-collapsed", sidebarCollapsed ? "1" : "0");
@@ -377,6 +433,17 @@ export const ADMIN_CLIENT_CORE = `    function storageGet(key) {
     function showPage(name) {
       page = name;
       storageSet("opencode-manager-page", page);
+      const activeItem = document.querySelector('.nav-item[data-page="' + page + '"]');
+      const groupContent = activeItem?.closest("[data-nav-group-content]");
+      if (groupContent?.classList.contains("is-collapsed")) {
+        const group = groupContent.dataset.navGroupContent;
+        const toggle = document.querySelector('.nav-group-toggle[data-nav-group="' + group + '"]');
+        groupContent.classList.remove("is-collapsed");
+        toggle?.setAttribute("aria-expanded", "true");
+        const chevron = toggle?.querySelector(".nav-group-chevron");
+        if (chevron) chevron.textContent = "⌃";
+        if (group) storageSet("opencode-manager-nav-group-" + group, "1");
+      }
       document.querySelectorAll(".nav-item").forEach((el) => {
         el.classList.toggle("active", el.dataset.page === page);
       });

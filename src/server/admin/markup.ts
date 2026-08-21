@@ -1,3 +1,5 @@
+import { ADMIN_GETTING_STARTED, ADMIN_GUIDE_MODAL } from "./guideMarkup.js";
+
 /** Source fragment for the self-contained admin console. */
 export const ADMIN_MARKUP = `</head>
 <body>
@@ -21,6 +23,7 @@ export const ADMIN_MARKUP = `</head>
           <button type="button" class="icon-btn" id="btn-top-refresh" data-i18n-tooltip="refresh" aria-label="Refresh">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg>
           </button>
+          <button type="button" class="icon-btn" id="btn-guide" data-i18n-tooltip="openGuide" aria-label="Open guide">?</button>
         </div>
       </div>
       <div class="topbar-right">
@@ -48,6 +51,8 @@ export const ADMIN_MARKUP = `</head>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 10.5 12 3l9 7.5V21a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1v-10.5z"/></svg>
             <span data-i18n="navOverview">Overview</span>
           </button>
+          <button type="button" class="nav-group-toggle" data-nav-group="setup" aria-expanded="true"><span class="nav-group-icon" aria-hidden="true">●</span><span data-i18n="navSetupGroup">Resources</span><span class="nav-group-chevron" aria-hidden="true">⌃</span></button>
+          <div class="nav-group" data-nav-group-content="setup">
           <button type="button" class="nav-item" data-page="gateway">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M3 10h18M8 21h8"/></svg>
             <span data-i18n="navGateway">Gateway</span>
@@ -60,10 +65,14 @@ export const ADMIN_MARKUP = `</head>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="3"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a3 3 0 0 1 0 5.74"/></svg>
             <span data-i18n="navWorkers">Workers</span>
           </button>
+          </div>
+          <button type="button" class="nav-group-toggle" data-nav-group="monitor" aria-expanded="true"><span class="nav-group-icon" aria-hidden="true">◒</span><span data-i18n="navMonitorGroup">Client access</span><span class="nav-group-chevron" aria-hidden="true">⌃</span></button>
+          <div class="nav-group" data-nav-group-content="monitor">
           <button type="button" class="nav-item" data-page="usage">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19V5M4 19h16M8 16l3-4 3 2 4-6"/></svg>
             <span data-i18n="navUsage">Client Usage</span>
           </button>
+          </div>
         </nav>
         <div class="sidebar-actions">
           <button type="button" class="sidebar-toggle" id="btn-sidebar-toggle" aria-controls="main-nav" aria-expanded="true">
@@ -84,6 +93,7 @@ export const ADMIN_MARKUP = `</head>
               <button type="button" class="btn" id="btn-reset-stats" data-i18n="resetStats">Reset stats</button>
             </div>
           </div>
+${ADMIN_GETTING_STARTED}
           <div class="metrics" id="ov-metrics"></div>
           <div class="panel" style="margin-top:12px">
             <div class="panel-hd">
@@ -161,14 +171,33 @@ export const ADMIN_MARKUP = `</head>
           <div class="page-head">
             <div>
               <h1 data-i18n="navGateway">Gateway</h1>
-              <p class="sub" data-i18n="gatewaySub">Upstream target, listen port, and CLI identity headers.</p>
+              <p class="sub" data-i18n="gatewaySub">Connect OpenCode to this local relay and route requests through your Worker pool.</p>
             </div>
             <div class="page-actions">
               <button type="button" class="btn btn-primary" id="btn-save-gateway" data-i18n="saveChanges">Save Changes</button>
             </div>
           </div>
-          <div class="stack">
-            <div class="panel">
+          <div class="stack gateway-stack">
+            <div class="gateway-flow" aria-label="Request routing flow">
+              <div class="gateway-flow-title" data-i18n="gatewayFlowTitle">Request path</div>
+              <div class="gateway-flow-path">
+                <span class="gateway-flow-node" data-i18n="gatewayFlowClient">OpenCode</span>
+                <span class="gateway-flow-arrow" aria-hidden="true">→</span>
+                <span class="gateway-flow-node active" data-i18n="gatewayFlowRelay">Local gateway</span>
+                <span class="gateway-flow-arrow" aria-hidden="true">→</span>
+                <span class="gateway-flow-node" data-i18n="gatewayFlowWorkers">Worker + proxy IP</span>
+                <span class="gateway-flow-arrow" aria-hidden="true">→</span>
+                <span class="gateway-flow-node" data-i18n="gatewayFlowUpstream">Upstream</span>
+              </div>
+              <p class="gateway-flow-note" data-i18n="gatewayFlowNote">Proxy exits and IP isolation are managed in Proxy Pool and Workers, not here.</p>
+            </div>
+            <div class="panel gateway-panel">
+              <div class="panel-hd">
+                <div>
+                  <h2 data-i18n="gatewayBasicTitle">Basic gateway settings</h2>
+                  <p class="panel-sub" data-i18n="gatewayBasicSub">These are the only settings most local Linux setups need.</p>
+                </div>
+              </div>
               <div class="panel-bd">
                 <div class="row">
                   <div>
@@ -176,17 +205,28 @@ export const ADMIN_MARKUP = `</head>
                     <input class="input" id="baseUrl" type="text" placeholder="https://opencode.ai/zen/v1" />
                   </div>
                 </div>
-                <div class="row">
+                <div class="row two">
                   <div>
                     <label class="field" for="relayAccessToken" data-i18n="relayAccessToken">Relay access token (X-OC-Relay-Key)</label>
                     <input class="input" id="relayAccessToken" type="password" autocomplete="new-password" />
                   </div>
-                </div>
-                <div class="row two">
                   <div>
                     <label class="field" for="port" data-i18n="listenPort">Listen port (restart to apply)</label>
                     <input class="input" id="port" type="number" min="1" max="65535" />
                   </div>
+                </div>
+              </div>
+            </div>
+            <div class="panel gateway-panel gateway-advanced">
+              <div class="panel-hd">
+                <div>
+                  <h2 data-i18n="gatewayAdvancedTitle">Advanced compatibility</h2>
+                  <p class="panel-sub" data-i18n="gatewayAdvancedSub">Optional headers for VPS, Cloudflare, or non-standard clients.</p>
+                </div>
+                <button type="button" class="btn btn-sm collapse-toggle" data-collapse-key="gateway-advanced" data-collapse-target="gateway-advanced-body" data-collapse-default="1" aria-expanded="false" aria-label="Expand"><span aria-hidden="true">▾</span></button>
+              </div>
+              <div class="panel-bd collapsible-body is-collapsed" id="gateway-advanced-body">
+                <div class="row">
                   <div>
                     <label class="field" for="cliUserAgent" data-i18n="cliUserAgent">CLI User-Agent</label>
                     <input class="input" id="cliUserAgent" type="text" />
@@ -465,12 +505,7 @@ export const ADMIN_MARKUP = `</head>
           </div>
           <div class="usage-box">
             <div><span data-i18n="openaiBase">OpenAI-compatible base</span>: <code id="usage-base">http://127.0.0.1:9876/v1</code></div>
-            <div><code>POST /v1/chat/completions</code> · <code>GET /v1/models</code></div>
-            <div style="margin-top:8px"><span data-i18n="adminApis">Admin APIs</span>:
-              <code>/admin/api/settings</code> ·
-              <code>/admin/api/proxy-pool</code> ·
-              <code>/admin/api/proxy-subscriptions/:id/fetch</code>
-            </div>
+            <div><code>POST /v1/chat/completions</code> · <code>POST /v1/responses</code> · <code>GET /v1/models</code></div>
           </div>
         </div>
       </main>
@@ -482,6 +517,8 @@ export const ADMIN_MARKUP = `</head>
     <span id="toast-msg"></span>
     <button type="button" class="x" id="toast-close">×</button>
   </div>
+
+${ADMIN_GUIDE_MODAL}
 
   <div class="confirm-float" id="confirm-float">
     <button type="button" class="close" id="confirm-x">×</button>

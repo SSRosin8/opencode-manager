@@ -63,6 +63,29 @@ describe("admin proxy-pool UX contracts", () => {
     expect(ADMIN_CLIENT_ACTIONS).toMatch(/clash-bridge"[\s\S]*method: "PATCH"/);
   });
 
+  it("frames gateway around the local request path and keeps CLI compatibility secondary", () => {
+    expect(ADMIN_MARKUP).toContain('class="gateway-flow"');
+    expect(ADMIN_MARKUP).toContain('data-i18n="gatewayFlowNote"');
+    expect(ADMIN_MARKUP).toContain('data-collapse-key="gateway-advanced"');
+    expect(ADMIN_MARKUP).toContain('data-collapse-default="1"');
+    expect(ADMIN_MARKUP).toContain('id="gateway-advanced-body"');
+    expect(ADMIN_CLIENT_CORE).toContain('btn.dataset.collapseDefault === "1"');
+    expect(ADMIN_CLIENT_I18N).toContain('gatewayBasicTitle: "基础网关设置"');
+    expect(ADMIN_FEATURE_STYLES).toContain(".gateway-flow-path");
+  });
+
+  it("provides a dismissible first-run guide with a reusable help entry", () => {
+    expect(ADMIN_MARKUP).toContain('id="getting-started"');
+    expect(ADMIN_MARKUP).toContain('id="btn-dismiss-getting-started"');
+    expect(ADMIN_MARKUP).toContain('id="modal-guide"');
+    expect(ADMIN_MARKUP).toContain('id="btn-guide"');
+    expect(ADMIN_MARKUP.match(/data-guide-page=/g)).toHaveLength(5);
+    expect(ADMIN_CLIENT_CORE).toContain('opencode-manager-getting-started-dismissed');
+    expect(ADMIN_CLIENT_CORE).toContain('function initGuide()');
+    expect(ADMIN_FEATURE_STYLES).toContain('.getting-started-steps');
+    expect(ADMIN_FEATURE_STYLES).toContain('.guide-modal');
+  });
+
   it("keeps secondary accent controls from crowding mobile language controls", () => {
     expect(ADMIN_FEATURE_STYLES).toMatch(/@media \(max-width: 900px\)[\s\S]*\.accent-switcher \{ display:none; \}/);
     expect(ADMIN_FEATURE_STYLES).toMatch(/@media \(max-width: 600px\)[\s\S]*#btn-top-refresh \{ display:none; \}/);
@@ -204,6 +227,24 @@ describe("admin proxy-pool UX contracts", () => {
     expect(ADMIN_CLIENT_I18N).toContain('sidebarCollapse: "收起侧边栏"');
     expect(ADMIN_DOCUMENT_HEAD).toContain(".sidebar.is-collapsed { width: 60px; }");
     expect(ADMIN_FEATURE_STYLES).toContain(".sidebar-actions { display: none; }");
+  });
+
+  it("uses actionable navigation groups and keeps overview independent", () => {
+    expect(ADMIN_MARKUP.match(/class="nav-group-toggle"/g)).toHaveLength(2);
+    expect(ADMIN_MARKUP).toContain('data-nav-group="setup"');
+    expect(ADMIN_MARKUP).toContain('data-nav-group="monitor"');
+    expect(ADMIN_CLIENT_CORE).toContain('opencode-manager-nav-group-');
+    expect(ADMIN_CLIENT_I18N).toContain('navSetupGroup: "资源配置"');
+    expect(ADMIN_CLIENT_I18N).toContain('navMonitorGroup: "客户端接入"');
+    expect(ADMIN_FEATURE_STYLES).toContain('.sidebar.is-collapsed .nav-group-toggle');
+    expect(ADMIN_FEATURE_STYLES).toContain('.nav-group, .nav-group.is-collapsed { display:contents; }');
+    expect(ADMIN_CLIENT_CORE).toContain('if (!["overview", "gateway", "proxy", "workers", "usage"].includes(page))');
+    expect(ADMIN_CLIENT_CORE).toContain('groupContent.classList.remove("is-collapsed")');
+  });
+
+  it("shows the supported Responses endpoint in client usage without exposing admin routes", () => {
+    expect(ADMIN_MARKUP).toContain("POST /v1/responses");
+    expect(ADMIN_MARKUP).not.toContain('data-i18n="adminApis"');
   });
 
   it("paginates dense admin lists with one shared eight-item control", () => {

@@ -45,14 +45,27 @@ The default bind address is `127.0.0.1`. Set `OPENCODE_MANAGER_HOST=0.0.0.0` onl
 
 For remote clients, publish `/v1/*` only and block `/`, `/admin`, and `/admin/api/*` at the reverse proxy.
 
-## 3. Initial Gateway Settings
+## 3. First-Run Workflow And Navigation
 
-On the Gateway page:
+The Overview presents the recommended five-step path: configure the gateway, add a node source, test nodes, bind Workers, and connect OpenCode. Each step opens the relevant page. Dismiss the card after setup; the question-mark button in the top bar reopens the guide at any time.
+
+The desktop navigation reflects how the service is operated:
+
+- **Overview**: service health, request results, usage, routing attempts, and gateway rejections.
+- **Resources**: Gateway, Proxy Pool, and Workers. These pages define the relay, available egresses, and routing identities.
+- **Client access**: Client Usage, including the OpenAI-compatible base URL and supported endpoints.
+
+The two group headings collapse their own entries and remember that choice in the browser. The button at the bottom collapses the whole sidebar. On mobile, navigation is kept flat so that a collapsed group cannot hide a destination.
+
+### Initial Gateway Settings
+
+Open **Resources → Gateway**. The request-path summary shows that proxy exits are configured later in Proxy Pool and Workers; the Gateway page itself does not select an IP.
 
 1. Keep Base URL at `https://opencode.ai/zen/v1`.
 2. Set a relay access token and send it as `X-OC-Relay-Key` from clients.
-3. Leave CLI identity synthesis off unless required by a VPS or Cloudflare deployment.
-4. Save changes.
+3. Keep the listen port at `9876` unless it conflicts with another service. A port change takes effect after restart.
+4. Leave **Advanced compatibility** collapsed and CLI identity synthesis off unless required by a VPS, Cloudflare, or non-standard client deployment.
+5. Save changes.
 
 ## 4. Prepare Clash/Mihomo
 
