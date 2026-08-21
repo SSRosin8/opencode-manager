@@ -3,6 +3,7 @@ import { ADMIN_CLIENT_BATCH } from "./admin/clientBatch.js";
 import { ADMIN_CLIENT_CORE } from "./admin/clientCore.js";
 import { ADMIN_CLIENT_I18N } from "./admin/clientI18n.js";
 import { ADMIN_CLIENT_PROXY_VIEWS } from "./admin/clientProxyViews.js";
+import { ADMIN_CLIENT_TOOLTIPS } from "./admin/clientTooltips.js";
 import { ADMIN_CLIENT_WORKER_VIEWS } from "./admin/clientWorkerViews.js";
 import { ADMIN_DOCUMENT_HEAD } from "./admin/documentHead.js";
 import { ADMIN_FEATURE_STYLES } from "./admin/featureStyles.js";
@@ -15,6 +16,7 @@ export const ADMIN_HTML = [
   ADMIN_MARKUP,
   ADMIN_CLIENT_I18N,
   ADMIN_CLIENT_CORE,
+  ADMIN_CLIENT_TOOLTIPS,
   ADMIN_CLIENT_PROXY_VIEWS,
   ADMIN_CLIENT_WORKER_VIEWS,
   ADMIN_CLIENT_BATCH,

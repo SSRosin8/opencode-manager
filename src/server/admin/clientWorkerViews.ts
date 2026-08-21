@@ -26,11 +26,11 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
           ? t("anonymousWorkerName")(idx + 1)
           : "Worker " + (idx + 1) + " · " + (a.id || t("unassigned"));
         return '<div class="worker-card' + (enabled ? '' : ' disabled-worker') + '" data-idx="' + idx + '" data-worker-key="' + escapeAttr(collapseKey) + '"' + (hidden ? ' hidden' : '') + '>' +
-          '<div class="hd"><span class="worker-title" title="' + escapeAttr(a.id || displayName) + '">' + escapeHtml(displayName) + (enabled ? '' : ' · ' + escapeHtml(t("disabledState"))) + '</span>' +
+          '<div class="hd"><span class="worker-title" data-tooltip="' + escapeAttr(a.id || displayName) + '">' + escapeHtml(displayName) + (enabled ? '' : ' · ' + escapeHtml(t("disabledState"))) + '</span>' +
           '<div class="worker-actions"><label class="field" style="margin:0;display:flex;align-items:center;gap:6px"><span>' + escapeHtml(t("workerEnabled")) + '</span><span class="toggle"><input class="acc-enabled" type="checkbox"' + (enabled ? ' checked' : '') + ' /><span></span></span></label>' +
           '<button type="button" class="btn btn-sm btn-test-worker" data-idx="' + idx + '"' + (testing ? ' disabled' : '') + '>' + escapeHtml(testing ? t("testingWorker") : t("testWorker")) + '</button>' +
           '<button type="button" class="btn btn-sm btn-danger btn-remove-acc" data-idx="' + idx + '">' + escapeHtml(t("remove")) + '</button>' +
-          '<button type="button" class="btn btn-sm collapse-toggle btn-toggle-worker" data-worker-key="' + escapeAttr(collapseKey) + '" aria-expanded="' + String(!collapsed) + '" title="' + escapeAttr(t(collapsed ? "expand" : "collapse")) + '"><span aria-hidden="true">' + (collapsed ? "▾" : "▴") + '</span></button></div></div>' +
+          '<button type="button" class="btn btn-sm collapse-toggle btn-toggle-worker" data-worker-key="' + escapeAttr(collapseKey) + '" aria-expanded="' + String(!collapsed) + '" data-tooltip="' + escapeAttr(t(collapsed ? "expand" : "collapse")) + '" aria-label="' + escapeAttr(t(collapsed ? "expand" : "collapse")) + '"><span aria-hidden="true">' + (collapsed ? "▾" : "▴") + '</span></button></div></div>' +
           '<div class="worker-body' + (collapsed ? ' is-collapsed' : '') + '">' +
           '<div class="row two"><div><label class="field">' + escapeHtml(t("idLabel")) + '</label>' +
           '<input class="input acc-id" type="text" value="' + escapeAttr(a.id || "") + '" /></div>' +
@@ -175,7 +175,8 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
         const btn = card.querySelector(".btn-toggle-worker");
         if (btn) {
           btn.setAttribute("aria-expanded", String(!collapsed));
-          btn.title = t(collapsed ? "expand" : "collapse");
+          btn.dataset.tooltip = t(collapsed ? "expand" : "collapse");
+          btn.setAttribute("aria-label", t(collapsed ? "expand" : "collapse"));
           const icon = btn.querySelector("span");
           if (icon) icon.textContent = collapsed ? "▾" : "▴";
         }
@@ -280,7 +281,7 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
           [t("summarySuccessRate"), finishedCount ? fmtRate(generationSuccess / finishedCount) : "—", t("successDetail")(fmtNum(generationSuccess), fmtNum(generationErrors))],
           [t("summaryTokens"), fmtNum(totals.totalTokens), usageDetailText(totals)],
           [t("summaryCacheRate"), fmtRate(totals.cacheRate), t("cacheFormula")(fmtNum(totals.cacheReadTokens), fmtNum(otherInput), fmtNum(totals.cacheWriteTokens), coverageText)],
-        ].map((item) => '<div class="usage-summary-item" tabindex="0"><div class="label">' + escapeHtml(item[0]) + '</div><div class="value">' + escapeHtml(item[1]) + '</div><div class="detail">' + escapeHtml(item[2]) + '</div><div class="usage-summary-popover" role="tooltip">' + escapeHtml(item[2]) + '</div></div>').join("");
+        ].map((item) => '<div class="usage-summary-item hover-detail" tabindex="0" data-tooltip="' + escapeAttr(item[2]) + '"><div class="label">' + escapeHtml(item[0]) + '</div><div class="value">' + escapeHtml(item[1]) + '</div><div class="detail">' + escapeHtml(item[2]) + '</div></div>').join("");
       }
       const idleWorkers = workers.filter((worker) => !worker.requestCount && worker.ready && worker.enabled);
       const visibleWorkers = showIdleWorkers ? workers : workers.filter((worker) => worker.requestCount || !worker.ready || !worker.enabled);
@@ -302,12 +303,12 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
           const attemptModelUsage = w.modelAttemptUsage || w.modelUsage || {};
           const attemptModelText = Object.entries(attemptModelUsage).map(([model, count]) => model + " × " + fmtNum(count)).join(", ") || "—";
           return '<tr>' +
-            '<td title="' + escapeAttr(w.accountId) + '"><div class="worker-route-primary"><strong>' + escapeHtml(routeName) + '</strong></div><div class="muted mono">' + escapeHtml(egress) + '</div><div class="worker-meta"><span class="tag ' + (w.kind === "anonymous_zen" ? "blue" : "info") + '">' + escapeHtml(kindLabel) + '</span></div></td>' +
-            '<td class="mono" title="' + escapeAttr(t("workerModelDetail")(fmtNum(w.generationAttemptCount), fmtNum(w.modelsCount), fmtNum(Object.keys(attemptModelUsage).length), attemptModelText) + "\\n" + modelStatsText(w)) + '"><span class="mobile-cell-label">' + escapeHtml(t("colRequests")) + '</span><strong>' + fmtNum(w.generationAttemptCount ?? w.chatCount ?? 0) + '</strong></td>' +
+            '<td data-tooltip="' + escapeAttr(w.accountId) + '"><div class="worker-route-primary"><strong>' + escapeHtml(routeName) + '</strong></div><div class="muted mono">' + escapeHtml(egress) + '</div><div class="worker-meta"><span class="tag ' + (w.kind === "anonymous_zen" ? "accent" : "info") + '">' + escapeHtml(kindLabel) + '</span></div></td>' +
+            '<td class="mono hover-detail" tabindex="0" data-tooltip="' + escapeAttr(t("workerModelDetail")(fmtNum(w.generationAttemptCount), fmtNum(w.modelsCount), fmtNum(Object.keys(attemptModelUsage).length), attemptModelText) + "\\n" + modelStatsText(w)) + '"><span class="mobile-cell-label">' + escapeHtml(t("colRequests")) + '</span><strong>' + fmtNum(w.generationAttemptCount ?? w.chatCount ?? 0) + '</strong></td>' +
             '<td class="mono"><span class="mobile-cell-label">' + escapeHtml(t("colSuccess")) + '</span><strong class="ok">' + fmtNum(w.generationSuccessCount ?? 0) + '</strong></td>' +
             '<td class="mono"><span class="mobile-cell-label">' + escapeHtml(t("colFailures")) + '</span><strong class="err">' + fmtNum(w.generationErrorCount ?? 0) + '</strong></td>' +
-            '<td class="mono" title="' + escapeAttr(usageDetailText(w)) + '"><span class="mobile-cell-label">' + escapeHtml(t("colTokens")) + '</span><strong>' + fmtNum(w.totalTokens) + '</strong></td>' +
-            '<td class="mono" title="' + escapeAttr(t("cacheBreakdown")(fmtNum(w.cacheReadTokens), fmtNum(w.cacheMissTokens), fmtNum(w.cacheWriteTokens))) + '"><span class="mobile-cell-label">' + escapeHtml(t("colCache")) + '</span>' + escapeHtml(fmtRate(w.cacheRate)) + '</td>' +
+            '<td class="mono hover-detail" tabindex="0" data-tooltip="' + escapeAttr(usageDetailText(w)) + '"><span class="mobile-cell-label">' + escapeHtml(t("colTokens")) + '</span><strong>' + fmtNum(w.totalTokens) + '</strong></td>' +
+            '<td class="mono hover-detail" tabindex="0" data-tooltip="' + escapeAttr(t("cacheBreakdown")(fmtNum(w.cacheReadTokens), fmtNum(w.cacheMissTokens), fmtNum(w.cacheWriteTokens))) + '"><span class="mobile-cell-label">' + escapeHtml(t("colCache")) + '</span>' + escapeHtml(fmtRate(w.cacheRate)) + '</td>' +
             '<td><span class="mobile-cell-label">' + escapeHtml(t("colState")) + '</span><span class="tag ' + (!w.enabled ? "" : w.ready ? "ok" : "warn") + '">' + escapeHtml(stateLabel) + '</span>' + (w.enabled && !w.ready && w.cooldownUntil ? '<div class="muted">' + escapeHtml(relTime(new Date(w.cooldownUntil).toISOString())) + '</div>' : '') + '</td>' +
             '<td class="muted"><span class="mobile-cell-label">' + escapeHtml(t("colLastReq")) + '</span>' + escapeHtml(w.lastRequestAt ? relTime(w.lastRequestAt) : "—") + '</td>' +
             '</tr>';
@@ -347,10 +348,10 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
         const egress = a.egressIp || t("unknownEgress");
         const statusLabel = a.status == null ? resultLabel : "HTTP " + a.status + " · " + resultLabel;
         return '<tr class="' + (ok ? "" : warn ? "row-warn" : "row-err") + '">' +
-          '<td><span class="mono">' + escapeHtml(String(a.requestId || "").slice(0, 8)) + '</span><div class="muted attempt-position" title="' + escapeAttr(t("attemptPositionHint")) + '">' + escapeHtml(t("attemptPosition")(a.attempt, a.maxAttempts)) + '</div><div class="muted">' + escapeHtml(relTime(a.at)) + '</div></td>' +
+          '<td><span class="mono">' + escapeHtml(String(a.requestId || "").slice(0, 8)) + '</span><div class="muted attempt-position" data-tooltip="' + escapeAttr(t("attemptPositionHint")) + '">' + escapeHtml(t("attemptPosition")(a.attempt, a.maxAttempts)) + '</div><div class="muted">' + escapeHtml(relTime(a.at)) + '</div></td>' +
           '<td><strong>' + escapeHtml(a.operation) + '</strong><div class="muted mono">' + escapeHtml(a.model || "—") + '</div></td>' +
-          '<td title="' + escapeAttr(a.accountId) + '"><div class="worker-route-primary"><strong>' + escapeHtml(route) + '</strong></div><div class="muted mono">' + escapeHtml(egress) + '</div><div class="worker-meta"><span class="tag ' + (a.accountKind === "anonymous_zen" ? "blue" : "info") + '">' + escapeHtml(kindLabel) + '</span></div></td>' +
-          '<td><span class="tag ' + resultClass + '">' + escapeHtml(statusLabel) + '</span>' + (a.error ? '<div class="attempt-error" title="' + escapeAttr(a.error) + '">' + escapeHtml(a.error) + '</div>' : '') + '</td>' +
+          '<td data-tooltip="' + escapeAttr(a.accountId) + '"><div class="worker-route-primary"><strong>' + escapeHtml(route) + '</strong></div><div class="muted mono">' + escapeHtml(egress) + '</div><div class="worker-meta"><span class="tag ' + (a.accountKind === "anonymous_zen" ? "accent" : "info") + '">' + escapeHtml(kindLabel) + '</span></div></td>' +
+          '<td><span class="tag ' + resultClass + '">' + escapeHtml(statusLabel) + '</span>' + (a.error ? '<div class="attempt-error" data-tooltip="' + escapeAttr(a.error) + '">' + escapeHtml(a.error) + '</div>' : '') + '</td>' +
           '<td class="mono">' + fmtNum(a.latencyMs) + ' ms</td>' +
           '<td><span class="tag ' + (a.willRetry ? "warn" : ok ? "ok" : "err") + '">' + escapeHtml(a.willRetry ? t("retrying") : ok ? t("returned") : t("noRetry")) + '</span></td>' +
           '</tr>';

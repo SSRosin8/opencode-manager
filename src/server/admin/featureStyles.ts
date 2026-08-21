@@ -7,9 +7,9 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
     .readiness-title { font-weight:650; }
     .readiness-detail, .panel-sub { margin:2px 0 0; color:var(--muted); font-size:11px; font-weight:400; }
     .proxy-tabs { display:flex; align-items:center; gap:4px; margin-bottom:12px; border-bottom:1px solid var(--border); overflow-x:auto; }
-    .proxy-tab { border:0; border-bottom:2px solid transparent; background:transparent; color:var(--muted); padding:9px 12px; white-space:nowrap; font-weight:600; }
-    .proxy-tab:hover { color:var(--text); }
-    .proxy-tab.active { color:var(--accent-hi); border-bottom-color:var(--accent); }
+    .proxy-tab { border:0; border-bottom:2px solid transparent; border-radius:6px 6px 0 0; background:transparent; color:var(--muted); padding:9px 12px; white-space:nowrap; font-weight:600; }
+    .proxy-tab:hover { color:var(--text); background:var(--accent-surface); }
+    .proxy-tab.active { color:var(--accent-hi); background:var(--accent-surface); border-bottom-color:var(--accent); }
     [data-proxy-section] { display:none; }
     [data-proxy-section].proxy-section-active { display:block; }
     .pp-grid {
@@ -58,7 +58,7 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
     .bridge-chip {
       font-size: 10px; font-weight: 600; color: var(--accent-hi);
       border: 1px dashed var(--accent-border); border-radius: 999px;
-      padding: 2px 7px; white-space: nowrap; background: var(--accent-dim);
+      padding: 2px 7px; white-space: nowrap; background: var(--accent-surface);
     }
     .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
     .dot.ok { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
@@ -96,29 +96,33 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
     .iso-health .status-txt { font-weight: 600; font-size: 12px; color: var(--ok); }
     .iso-health .status-txt.warn { color: var(--warn); }
     .iso-health .status-txt.err { color: var(--err); }
-    .info-tooltip {
-      position: relative; display: inline-grid; place-items: center; width: 18px; height: 18px;
-      color: var(--muted); font-size: 12px; cursor: help; outline: none;
+    .hover-detail { cursor:help; outline:none; }
+    .hover-detail:focus-visible { box-shadow:0 0 0 2px var(--accent-border); }
+    .ui-tooltip {
+      position:fixed; z-index:1000; width:max-content; max-width:min(320px, calc(100vw - 24px));
+      max-height:calc(100vh - 24px); padding:8px 10px; border:1px solid var(--border-hi);
+      border-radius:8px; background:var(--panel-solid); color:var(--text-2);
+      box-shadow:0 10px 28px rgba(0,0,0,.28), 0 2px 8px rgba(0,0,0,.18);
+      font-size:12px; font-weight:400; line-height:1.45; text-align:left; white-space:pre-line;
+      overflow:hidden; pointer-events:none; opacity:0; transform:translateY(2px);
+      transition:opacity .12s ease, transform .12s ease;
     }
-    .info-tooltip [role="tooltip"] {
-      position: absolute; z-index: 20; top: calc(100% + 8px); left: 50%; width: min(300px, 75vw);
-      padding: 9px 11px; border: 1px solid var(--border-hi); border-radius: var(--radius-sm);
-      background: var(--surface); box-shadow: 0 8px 24px rgba(0,0,0,.18); color: var(--text-2);
-      font-size: 12px; font-weight: 400; line-height: 1.5; text-align: left;
-      opacity: 0; visibility: hidden; pointer-events: none; transform: translate(-50%, -3px);
-      transition: opacity .15s ease, transform .15s ease, visibility .15s;
+    .ui-tooltip[hidden] { display:none; }
+    .ui-tooltip.is-visible { opacity:1; transform:translateY(0); }
+    .ui-tooltip-arrow {
+      position:absolute; left:var(--tooltip-arrow-x); width:8px; height:8px;
+      background:var(--panel-solid); border:solid var(--border-hi); transform:translateX(-50%) rotate(45deg);
     }
-    .info-tooltip:hover [role="tooltip"], .info-tooltip:focus [role="tooltip"], .info-tooltip:focus-within [role="tooltip"] {
-      opacity: 1; visibility: visible; transform: translate(-50%, 0);
-    }
+    .ui-tooltip[data-placement="top"] .ui-tooltip-arrow { bottom:-5px; border-width:0 1px 1px 0; }
+    .ui-tooltip[data-placement="bottom"] .ui-tooltip-arrow { top:-5px; border-width:1px 0 0 1px; }
 
     /* Subscriptions */
     .sub-grid {
       display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px;
     }
     .sub-card {
-      background: var(--glass-bg); backdrop-filter: blur(10px);
-      border: 1px solid var(--glass-border);
+      background: var(--accent-panel); backdrop-filter: blur(10px);
+      border: 1px solid var(--accent-panel-border);
       border-radius: var(--radius); padding: 14px; display: flex; flex-direction: column; gap: 8px;
       transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
     }
@@ -164,20 +168,6 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
     .usage-summary-item .label { color:var(--muted); font-size:10px; text-transform:uppercase; }
     .usage-summary-item .value { margin-top:3px; color:var(--text); font-size:18px; font-weight:700; }
     .usage-summary-item .detail { display:none; }
-    .metric-detail, .usage-summary-item { position:relative; outline:none; cursor:help; }
-    .metric-popover, .usage-summary-popover {
-      position:absolute; z-index:30; left:12px; top:calc(100% + 7px); width:min(320px, 78vw);
-      padding:9px 11px; border:1px solid var(--border-hi); border-radius:var(--radius-sm);
-      background:var(--surface); box-shadow:0 8px 24px rgba(0,0,0,.18); color:var(--text-2);
-      font-size:11px; font-weight:400; line-height:1.5; text-align:left; white-space:pre-line;
-      opacity:0; visibility:hidden; pointer-events:none; transform:translateY(-3px);
-      transition:opacity .15s ease, transform .15s ease, visibility .15s;
-    }
-    .metric-detail:hover .metric-popover, .metric-detail:focus .metric-popover,
-    .usage-summary-item:hover .usage-summary-popover, .usage-summary-item:focus .usage-summary-popover {
-      opacity:1; visibility:visible; transform:translateY(0);
-    }
-    .metrics .metric-detail:last-child .metric-popover, .usage-summary-item:last-child .usage-summary-popover { left:auto; right:12px; }
     .metric-footline { color:var(--muted); font-size:11px; }
     .overview-workers-table { min-width:900px; table-layout:fixed; }
     .overview-workers-table th:nth-child(1) { width:23%; }
@@ -205,7 +195,7 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
       vertical-align: middle; white-space: nowrap;
     }
     table.nodes tr { transition: background 0.15s; }
-    table.nodes tr:hover td { background: var(--accent-dim); }
+    table.nodes tr:hover td { background: var(--accent-surface); }
     table.nodes tr.row-warn td { background: var(--warn-dim); }
     table.nodes tr.row-err td { background: rgba(239,68,68,0.06); }
     table.nodes .name-cell { display: flex; align-items: center; gap: 6px; font-weight: 500; }
@@ -223,8 +213,8 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
       border: 1px solid var(--border); background: var(--glass-bg);
       border-radius: var(--radius-sm); color: var(--text-2);
     }
-    .pager button:hover { border-color: var(--accent-border); background: var(--accent-dim); }
-    .pager button.active { background: var(--accent); border-color: var(--accent); color: #fff; box-shadow: 0 2px 8px var(--accent-glow); }
+    .pager button:hover { border-color: var(--accent-border); background: var(--accent-surface); }
+    .pager button.active { background: var(--accent-solid); border-color: var(--accent-solid); color: var(--accent-on-solid); box-shadow: 0 2px 8px var(--accent-glow); }
     .pager button:disabled { opacity: 0.4; }
     .list-pagination[hidden] { display:none; }
     .worker-pagination { margin-top:2px; border:1px solid var(--border); border-radius:var(--radius-sm); }
@@ -273,8 +263,8 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
     /* Other pages */
     .stack { display: flex; flex-direction: column; gap: 14px; max-width: 880px; }
     .worker-card {
-      border: 1px solid var(--glass-border); border-radius: var(--radius);
-      background: var(--glass-bg); backdrop-filter: blur(10px);
+      border: 1px solid var(--accent-panel-border); border-radius: var(--radius);
+      background: var(--accent-panel); backdrop-filter: blur(10px);
       padding: 14px 16px; margin-bottom: 10px;
       transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
     }
@@ -295,7 +285,7 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
     }
     .worker-column-count {
       min-width: 24px; padding: 2px 8px; border-radius: 999px;
-      background: var(--accent-dim); color: var(--accent-hi); text-align: center;
+      background: var(--accent-surface); color: var(--accent-hi); text-align: center;
       font-family: var(--mono); font-size: 11px; font-weight: 600;
     }
     .worker-column-list { padding-top: 10px; }
@@ -332,7 +322,7 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
     }
     .usage-box code {
       font-family: var(--mono); font-size: 12px; color: var(--accent-hi);
-      background: var(--accent-dim); padding: 2px 6px; border-radius: 4px;
+      background: var(--accent-surface); padding: 2px 6px; border-radius: 4px;
     }
 
     /* Toast / Modal */
@@ -410,7 +400,7 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
       background: #fff; top: 3px; left: 3px;
       transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
     }
-    .toggle input:checked + span { background: var(--accent); border-color: var(--accent); box-shadow: 0 0 8px var(--accent-glow); }
+    .toggle input:checked + span { background: var(--accent-solid); border-color: var(--accent-solid); box-shadow: 0 0 8px var(--accent-glow); }
     .toggle input:checked + span::after { transform: translateX(16px); }
 
     .more-menu {
@@ -428,7 +418,7 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
     .source-menu button { display:flex; flex-direction:column; gap:2px; }
     .source-menu strong { font-size:12px; font-weight:650; }
     .source-menu small { color:var(--muted); font-size:10px; }
-    .more-menu button:hover { background: var(--accent-dim); color: var(--accent-hi); }
+    .more-menu button:hover { background: var(--accent-surface); color: var(--accent-hi); }
     .more-menu button.danger { color:var(--err); }
     .rel { position: relative; }
 
@@ -498,6 +488,17 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
       .worker-card .worker-actions { flex-wrap: wrap; }
       .worker-card .btn-toggle-worker { position: absolute; top: 0; right: 0; }
       .confirm-float { left: 12px; right: 12px; bottom: 12px; width: auto; }
+    }
+    @media (max-width: 600px) {
+      .topbar { gap:6px; }
+      .topbar-left, .topbar-mid, .topbar-right { gap:6px; }
+      .brand { gap:7px; }
+      .brand-name { font-size:13px; white-space:nowrap; }
+      .run-pill { flex-shrink:0; padding:4px 8px; font-size:11px; white-space:nowrap; }
+      #btn-top-refresh { display:none; }
+      .topbar-right, .lang-switch { flex-shrink:0; }
+      .lang-switch { gap:3px; font-size:11px; }
+      .lang-switch button { padding-inline:2px; }
     }
   </style>
 `;

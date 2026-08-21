@@ -71,7 +71,8 @@ export const ADMIN_CLIENT_CORE = `    function storageGet(key) {
       if (!target) return;
       target.classList.toggle("is-collapsed", collapsed);
       btn.setAttribute("aria-expanded", String(!collapsed));
-      btn.title = t(collapsed ? "expand" : "collapse");
+      btn.dataset.tooltip = t(collapsed ? "expand" : "collapse");
+      btn.setAttribute("aria-label", t(collapsed ? "expand" : "collapse"));
       const icon = btn.querySelector("span");
       if (icon) icon.textContent = collapsed ? "▾" : "▴";
     }
@@ -95,12 +96,12 @@ export const ADMIN_CLIENT_CORE = `    function storageGet(key) {
       sidebar.classList.toggle("is-collapsed", sidebarCollapsed);
       btn.setAttribute("aria-expanded", String(!sidebarCollapsed));
       const label = t(sidebarCollapsed ? "sidebarExpand" : "sidebarCollapse");
-      btn.title = label;
+      btn.dataset.tooltip = label;
       btn.setAttribute("aria-label", label);
       document.querySelectorAll(".nav-item").forEach((item) => {
         const text = item.querySelector("[data-i18n]");
-        if (sidebarCollapsed && text) item.title = text.textContent || "";
-        else item.removeAttribute("title");
+        if (sidebarCollapsed && text) item.dataset.tooltip = text.textContent || "";
+        else delete item.dataset.tooltip;
       });
     }
 
@@ -122,6 +123,13 @@ export const ADMIN_CLIENT_CORE = `    function storageGet(key) {
       document.querySelectorAll("[data-i18n-placeholder]").forEach((el) => {
         const val = t(el.getAttribute("data-i18n-placeholder"));
         if (typeof val === "string") el.placeholder = val;
+      });
+      document.querySelectorAll("[data-i18n-tooltip]").forEach((el) => {
+        const val = t(el.getAttribute("data-i18n-tooltip"));
+        if (typeof val === "string") {
+          el.dataset.tooltip = val;
+          if (el.matches("button, [role='button']")) el.setAttribute("aria-label", val);
+        }
       });
       // refresh filter option labels
       const fp = $("flt-proto");
@@ -157,7 +165,7 @@ export const ADMIN_CLIENT_CORE = `    function storageGet(key) {
       const light = currentTheme() === "light";
       const btn = $("btn-theme");
       const label = t(light ? "useDarkTheme" : "useLightTheme");
-      btn.title = label;
+      btn.dataset.tooltip = label;
       btn.setAttribute("aria-label", label);
       $("theme-icon").textContent = light ? "☾" : "☀";
     }
@@ -170,6 +178,7 @@ export const ADMIN_CLIENT_CORE = `    function storageGet(key) {
     }
 
     function setAccent(accent) {
+      if (!["blue", "violet", "green", "amber"].includes(accent)) return;
       if (accent === "blue") {
         delete document.documentElement.dataset.accent;
         storageSet("opencode-manager-accent", "");
@@ -179,6 +188,7 @@ export const ADMIN_CLIENT_CORE = `    function storageGet(key) {
       }
       document.querySelectorAll(".accent-dot").forEach((d) => {
         d.classList.toggle("active", d.dataset.accent === accent);
+        d.setAttribute("aria-pressed", String(d.dataset.accent === accent));
       });
     }
 
@@ -186,6 +196,7 @@ export const ADMIN_CLIENT_CORE = `    function storageGet(key) {
       const current = storageGet("opencode-manager-accent") || "blue";
       document.querySelectorAll(".accent-dot").forEach((d) => {
         d.classList.toggle("active", d.dataset.accent === current);
+        d.setAttribute("aria-pressed", String(d.dataset.accent === current));
         d.onclick = () => setAccent(d.dataset.accent);
       });
     }
@@ -311,7 +322,7 @@ export const ADMIN_CLIENT_CORE = `    function storageGet(key) {
         return '<span class="lat muted">—</span>';
       }
       const err = pr.error === "Timeout" ? t("timeout") : (pr.error || t("unreachable"));
-      return '<span class="lat err" title="' + escapeAttr(pr.error || "") + '">' + escapeHtml(err) + '</span>';
+      return '<span class="lat err" data-tooltip="' + escapeAttr(pr.error || "") + '">' + escapeHtml(err) + '</span>';
     }
 
     function pushProbeEvent(result, name) {
@@ -330,7 +341,7 @@ export const ADMIN_CLIENT_CORE = `    function storageGet(key) {
       if (!p) return { key: "direct", label: t("routeDirect"), cls: "info" };
       if (p.usable) return { key: "direct", label: t("routeDirect"), cls: "ok" };
       if (p.bridgeable) {
-        if (bridgeOn()) return { key: "bridge", label: t("routeBridge"), cls: "blue" };
+        if (bridgeOn()) return { key: "bridge", label: t("routeBridge"), cls: "accent" };
         return { key: "need", label: t("routeNeedBridge"), cls: "warn" };
       }
       return { key: "bad", label: t("unreachable"), cls: "err" };

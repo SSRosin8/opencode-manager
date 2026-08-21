@@ -17,20 +17,20 @@ export const ADMIN_MARKUP = `</head>
         </div>
         <div class="topbar-mid">
           <div id="run-pill" class="run-pill down"><span class="dot"></span><span id="run-label">—</span></div>
-          <div class="addr-box" id="addr-box" title="Gateway address">http://127.0.0.1:9876</div>
-          <button type="button" class="icon-btn" id="btn-top-refresh" title="Refresh">
+          <div class="addr-box" id="addr-box" data-i18n-tooltip="gatewayAddress">http://127.0.0.1:9876</div>
+          <button type="button" class="icon-btn" id="btn-top-refresh" data-i18n-tooltip="refresh" aria-label="Refresh">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg>
           </button>
         </div>
       </div>
       <div class="topbar-right">
         <div class="accent-switcher" role="group" aria-label="Accent color">
-          <span class="accent-dot active" data-accent="blue" title="Blue"></span>
-          <span class="accent-dot" data-accent="violet" title="Violet"></span>
-          <span class="accent-dot" data-accent="green" title="Green"></span>
-          <span class="accent-dot" data-accent="amber" title="Amber"></span>
+          <button type="button" class="accent-dot active" data-accent="blue" data-i18n-tooltip="accentBlue" aria-label="Blue accent" aria-pressed="true"></button>
+          <button type="button" class="accent-dot" data-accent="violet" data-i18n-tooltip="accentViolet" aria-label="Violet accent" aria-pressed="false"></button>
+          <button type="button" class="accent-dot" data-accent="green" data-i18n-tooltip="accentGreen" aria-label="Green accent" aria-pressed="false"></button>
+          <button type="button" class="accent-dot" data-accent="amber" data-i18n-tooltip="accentAmber" aria-label="Amber accent" aria-pressed="false"></button>
         </div>
-        <button type="button" class="icon-btn" id="btn-theme" title="Use light theme" aria-label="Use light theme">
+        <button type="button" class="icon-btn" id="btn-theme" data-i18n-tooltip="useLightTheme" aria-label="Use light theme">
           <span id="theme-icon" aria-hidden="true">☀</span>
         </button>
         <div class="lang-switch" role="group" aria-label="Language">
@@ -260,8 +260,7 @@ export const ADMIN_MARKUP = `</head>
               <div class="panel" data-proxy-section="bindings">
                 <div class="panel-hd">
                   <h2>
-                    <span data-i18n="isoTitle">IP Isolation Overview</span>
-                    <span class="info-tooltip" tabindex="0" aria-describedby="iso-tooltip">ⓘ<span id="iso-tooltip" role="tooltip" data-i18n="isoTooltip">Shows each Worker route from its proxy binding to the detected egress IP. Green means unique, yellow means shared or unverified, and red means unavailable.</span></span>
+                    <span class="hover-detail" tabindex="0" data-i18n="isoTitle" data-i18n-tooltip="isoTooltip">IP Isolation Overview</span>
                   </h2>
                   <button type="button" class="btn btn-sm collapse-toggle" data-collapse-key="proxy-isolation" data-collapse-target="proxy-isolation-body" aria-expanded="true"><span aria-hidden="true">▴</span></button>
                 </div>
@@ -360,7 +359,7 @@ export const ADMIN_MARKUP = `</head>
                 <div class="panel-hd">
                   <h2 data-i18n="clashBridge">Clash Bridge</h2>
                   <div style="display:flex;align-items:center;gap:8px">
-                    <label class="toggle" title="Enable">
+                    <label class="toggle" data-i18n-tooltip="enabled">
                       <input type="checkbox" id="bridgeEnabled" />
                       <span></span>
                     </label>

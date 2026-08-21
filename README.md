@@ -129,6 +129,8 @@ The Overview separates client generation requests, per-Worker upstream attempts,
 
 Workers may be saved as an empty list. In that state relay requests return a clear `503` until Workers are added manually or recreated by Batch Test. Dense Worker, IP-isolation, proxy-node, upstream-attempt, and gateway-rejection lists use eight-item pages. The desktop sidebar and long status sections can be collapsed, and the browser remembers those display preferences; mobile keeps the compact horizontal navigation.
 
+Admin detail hints use one keyboard-accessible tooltip style. Hovering or focusing the relevant card, statistic, or truncated value opens its hint; the layer automatically flips, stays within the viewport, and closes on Escape, scrolling, or resize.
+
 ## Tests
 
 ```bash

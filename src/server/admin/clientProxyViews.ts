@@ -16,10 +16,10 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
 
       const html = [
         { k: t("metricGateway"), v: running ? t("running") : t("stopped"), vcls: running ? "ok" : "", foot: '<span class="tag ' + (running ? 'ok' : 'err') + '">' + escapeHtml(running ? t("healthy") : t("stopped")) + '</span>', detail: t("metricGatewayDetail") },
-        { k: t("metricWorkers"), v: ready + " / " + enabledWorkers, vcls: ready === enabledWorkers ? "ok" : "", foot: '<span class="metric-footline">' + escapeHtml(t("readyWorkers")) + '</span>', detail: t("metricWorkersDetail")(workers, enabledWorkers, ready, busy, pct) },
-        { k: t("metricProxyNodes"), v: String(total), vcls: "blue", foot: '<span class="metric-footline">' + escapeHtml(t("availableRoutes")) + '</span>', detail: t("metricProxyDetail")(direct, bridged, unavailable) },
+        { k: t("metricWorkers"), v: ready + " / " + enabledWorkers, vcls: enabledWorkers > 0 && ready === enabledWorkers ? "ok" : "", foot: '<span class="metric-footline">' + escapeHtml(t("readyWorkers")) + '</span>', detail: t("metricWorkersDetail")(workers, enabledWorkers, ready, busy, pct) },
+        { k: t("metricProxyNodes"), v: String(total), vcls: "accent", foot: '<span class="metric-footline">' + escapeHtml(t("availableRoutes")) + '</span>', detail: t("metricProxyDetail")(direct, bridged, unavailable) },
         { k: t("metricClash"), v: clashOn ? t("enabled") : t("disabled"), vcls: clashOn ? "ok" : "", foot: clashOn ? '<span class="tag ok">' + escapeHtml(bridgeProbeOk === false ? t("disconnected") : t("connected")) + '</span>' : '<span class="tag">' + escapeHtml(t("disabled")) + '</span>', detail: t("metricClashDetail") },
-      ].map((m, index) => '<div class="metric metric-detail" tabindex="0" data-metric-index="' + index + '"><div class="k">' + escapeHtml(m.k) + '</div><div class="v ' + m.vcls + '">' + escapeHtml(m.v) + '</div><div class="foot">' + m.foot + '</div><div class="metric-popover" role="tooltip">' + escapeHtml(m.detail) + '</div></div>').join("");
+      ].map((m, index) => '<div class="metric hover-detail" tabindex="0" data-tooltip="' + escapeAttr(m.detail) + '" data-metric-index="' + index + '"><div class="k">' + escapeHtml(m.k) + '</div><div class="v ' + m.vcls + '">' + escapeHtml(m.v) + '</div><div class="foot">' + m.foot + '</div></div>').join("");
       $(targetId).innerHTML = html;
     }
 
@@ -39,8 +39,7 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
       if (donut) donut.remove();
       if (readyLabel) readyLabel.textContent = t("readyWorkers");
       if (busyLabel) busyLabel.remove();
-      const detail = metric.querySelector(".metric-popover");
-      if (detail) detail.textContent = t("metricWorkersDetail")(workers, enabled, ready, busy, pct);
+      metric.dataset.tooltip = t("metricWorkersDetail")(workers, enabled, ready, busy, pct);
     }
 
     function patchBatchWorkerMetrics() {
@@ -165,12 +164,12 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
           '<div class="top"><div class="name">' + escapeHtml(s.name) + '</div>' +
           (err ? '<span class="tag err">Error</span>' : ok ? '<span class="tag ok">OK</span>' : '<span class="tag">—</span>') +
           '</div>' +
-          '<div class="url"><span title="' + escapeAttr(s.url) + '">' + escapeHtml(s.url) + '</span>' +
-          '<button type="button" class="btn btn-sm btn-icon btn-copy-url" data-url="' + escapeAttr(s.url) + '" title="Copy">⧉</button></div>' +
+          '<div class="url"><span data-tooltip="' + escapeAttr(s.url) + '">' + escapeHtml(s.url) + '</span>' +
+          '<button type="button" class="btn btn-sm btn-icon btn-copy-url" data-url="' + escapeAttr(s.url) + '" data-tooltip="' + escapeAttr(t("copy")) + '" aria-label="' + escapeAttr(t("copy")) + '">⧉</button></div>' +
           '<div class="meta"><span>' + escapeHtml(t("lastPulled") + ": " + relTime(s.lastFetchedAt)) + '</span>' +
           '<span>' + (s.lastImportCount || pool.length || 0) + ' ' + escapeHtml(t("nodes")) + '</span></div>' +
           '<div class="diagnostics"><span>' + escapeHtml(t("diagFormat")) + '</span><b>' + escapeHtml(format) + '</b>' +
-          '<span>' + escapeHtml(t("diagUserAgent")) + '</span><b title="' + escapeAttr(userAgent) + '">' + escapeHtml(userAgent) + '</b>' +
+          '<span>' + escapeHtml(t("diagUserAgent")) + '</span><b data-tooltip="' + escapeAttr(userAgent) + '">' + escapeHtml(userAgent) + '</b>' +
           '<span>' + escapeHtml(t("diagRawBytes")) + '</span><b>' + escapeHtml(rawBytes) + '</b>' +
           '<span>' + escapeHtml(t("diagParsed")) + '</span><b>' + escapeHtml(String(parsed)) + '</b></div>' +
           (types.length ? '<div class="proto">' + escapeHtml(types.slice(0, 5).join(", ")) + '</div>' : '') +
@@ -258,7 +257,7 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
           const rowCls = h === "warn" ? "row-warn" : h === "bad" ? "row-err" : "";
           const zenResult = probeResults[p.id]?.anonymousZen;
           const healthTag = h === "testing"
-            ? '<span class="tag blue"><span class="spin"></span>' + escapeHtml(t("testing")) + '</span>'
+            ? '<span class="tag accent"><span class="spin"></span>' + escapeHtml(t("testing")) + '</span>'
             : zenResult ? anonymousZenTag(p)
             : h === "healthy" ? anonymousZenTag(p)
             : h === "warn" ? '<span class="tag warn">' + escapeHtml(t("warning")) + '</span>'

@@ -3,6 +3,7 @@ import { ADMIN_CLIENT_ACTIONS } from "../src/server/admin/clientActions.js";
 import { ADMIN_CLIENT_CORE } from "../src/server/admin/clientCore.js";
 import { ADMIN_CLIENT_I18N } from "../src/server/admin/clientI18n.js";
 import { ADMIN_CLIENT_PROXY_VIEWS } from "../src/server/admin/clientProxyViews.js";
+import { ADMIN_CLIENT_TOOLTIPS } from "../src/server/admin/clientTooltips.js";
 import { ADMIN_CLIENT_WORKER_VIEWS } from "../src/server/admin/clientWorkerViews.js";
 import { ADMIN_DOCUMENT_HEAD } from "../src/server/admin/documentHead.js";
 import { ADMIN_MARKUP } from "../src/server/admin/markup.js";
@@ -64,6 +65,47 @@ describe("admin proxy-pool UX contracts", () => {
 
   it("keeps secondary accent controls from crowding mobile language controls", () => {
     expect(ADMIN_FEATURE_STYLES).toMatch(/@media \(max-width: 900px\)[\s\S]*\.accent-switcher \{ display:none; \}/);
+    expect(ADMIN_FEATURE_STYLES).toMatch(/@media \(max-width: 600px\)[\s\S]*#btn-top-refresh \{ display:none; \}/);
+    expect(ADMIN_FEATURE_STYLES).toMatch(/@media \(max-width: 600px\)[\s\S]*\.run-pill \{[^}]*white-space:nowrap;/);
+  });
+
+  it("applies each accent through a complete theme hierarchy without replacing status colors", () => {
+    for (const token of [
+      "--accent-solid",
+      "--accent-solid-hover",
+      "--accent-on-solid",
+      "--accent-surface",
+      "--accent-surface-hover",
+      "--accent-chrome",
+      "--accent-panel",
+      "--accent-panel-border",
+    ]) {
+      expect(ADMIN_DOCUMENT_HEAD).toContain(token);
+    }
+    for (const accent of ["violet", "green", "amber"]) {
+      expect(ADMIN_DOCUMENT_HEAD).toContain(`data-accent="${accent}"`);
+    }
+    expect(ADMIN_DOCUMENT_HEAD).toContain("background: var(--accent-chrome)");
+    expect(ADMIN_DOCUMENT_HEAD).toContain("background: var(--accent-solid); border-color: var(--accent-solid)");
+    expect(ADMIN_DOCUMENT_HEAD).toContain("background: var(--accent-panel)");
+    expect(ADMIN_DOCUMENT_HEAD).toContain("border: 1px solid var(--accent-panel-border)");
+    expect(ADMIN_DOCUMENT_HEAD).toContain(".tag.accent");
+    expect(ADMIN_DOCUMENT_HEAD).not.toContain(".tag.blue");
+    expect(ADMIN_DOCUMENT_HEAD).not.toContain(".metric .v.blue");
+    expect(ADMIN_DOCUMENT_HEAD).toContain(".run-pill {");
+    expect(ADMIN_DOCUMENT_HEAD).toContain("background: var(--ok-dim); border: 1px solid var(--ok-border)");
+    expect(ADMIN_DOCUMENT_HEAD).toContain("background: var(--err-dim); border-color: var(--err-border); color: var(--err)");
+  });
+
+  it("validates persisted accent choices and exposes the selected swatch state", () => {
+    expect(ADMIN_DOCUMENT_HEAD).toContain('["violet", "green", "amber"].includes(storedAccent)');
+    expect(ADMIN_CLIENT_CORE).toContain('["blue", "violet", "green", "amber"].includes(accent)');
+    expect(ADMIN_CLIENT_CORE).toContain('d.setAttribute("aria-pressed", String(d.dataset.accent === accent))');
+    expect(ADMIN_MARKUP.match(/aria-pressed="(?:true|false)"/g)).toHaveLength(4);
+  });
+
+  it("does not present an empty Worker pool as fully ready", () => {
+    expect(ADMIN_CLIENT_PROXY_VIEWS).toContain('enabledWorkers > 0 && ready === enabledWorkers ? "ok" : ""');
   });
 
   it("stretches paired desktop panels to a shared bottom edge", () => {
@@ -101,25 +143,34 @@ describe("admin proxy-pool UX contracts", () => {
     expect(ADMIN_CLIENT_I18N).toContain('含 usage 的响应');
   });
 
-  it("keeps overview details in focusable hover disclosures and removes fake trends", () => {
-    expect(ADMIN_CLIENT_PROXY_VIEWS).toContain('class="metric metric-detail" tabindex="0"');
-    expect(ADMIN_CLIENT_PROXY_VIEWS).toContain('class="metric-popover" role="tooltip"');
+  it("uses one viewport-aware tooltip layer instead of card popovers", () => {
+    expect(ADMIN_CLIENT_PROXY_VIEWS).toContain('class="metric hover-detail" tabindex="0" data-tooltip="');
+    expect(ADMIN_CLIENT_WORKER_VIEWS).toContain('class="usage-summary-item hover-detail" tabindex="0" data-tooltip="');
     expect(ADMIN_CLIENT_CORE).not.toContain("function sparkSvg");
-    expect(ADMIN_FEATURE_STYLES).toContain(".metric-detail:hover .metric-popover");
-    expect(ADMIN_DOCUMENT_HEAD).toContain("position: relative; overflow: visible;");
-    expect(ADMIN_DOCUMENT_HEAD).toContain(".metric:focus-within { z-index: 40; }");
+    expect(ADMIN_CLIENT_TOOLTIPS).toContain('layer.className = "ui-tooltip"');
+    expect(ADMIN_CLIENT_TOOLTIPS).toContain('positionTooltip(trigger, layer)');
+    expect(ADMIN_CLIENT_TOOLTIPS).toContain("TOOLTIP_SAFE_AREA = 12");
+    expect(ADMIN_CLIENT_TOOLTIPS).toContain('layer.style.left = Math.floor(left) + "px"');
+    expect(ADMIN_CLIENT_TOOLTIPS).toContain("positionTooltip(trigger, layer);");
+    expect(ADMIN_CLIENT_TOOLTIPS).toContain('event.key === "Escape"');
+    expect(ADMIN_CLIENT_TOOLTIPS).toContain('document.addEventListener("scroll", () => hideTooltip(), true)');
+    expect(ADMIN_FEATURE_STYLES).toContain("position:fixed; z-index:1000");
+    expect(ADMIN_FEATURE_STYLES).toContain(".hover-detail:focus-visible");
+    expect(ADMIN_FEATURE_STYLES).not.toContain(".metric-popover");
+    expect(ADMIN_FEATURE_STYLES).not.toContain(".usage-summary-popover");
+    expect(ADMIN_CLIENT_PROXY_VIEWS + ADMIN_CLIENT_WORKER_VIEWS + ADMIN_MARKUP).not.toContain("ⓘ");
   });
 
-  it("explains isolation health with an accessible tooltip", () => {
-    expect(ADMIN_MARKUP).toContain('class="info-tooltip" tabindex="0" aria-describedby="iso-tooltip"');
-    expect(ADMIN_MARKUP).toContain('role="tooltip" data-i18n="isoTooltip"');
+  it("explains isolation health through the shared accessible tooltip", () => {
+    expect(ADMIN_MARKUP).toContain('class="hover-detail" tabindex="0" data-i18n="isoTitle" data-i18n-tooltip="isoTooltip"');
     expect(ADMIN_CLIENT_I18N).toContain('isoTooltip: "展示每个 Worker');
-    expect(ADMIN_FEATURE_STYLES).toContain('.info-tooltip:hover [role="tooltip"]');
+    expect(ADMIN_CLIENT_TOOLTIPS).toContain('trigger.setAttribute("aria-describedby", layer.id)');
+    expect(ADMIN_CLIENT_TOOLTIPS).toContain('activeTooltipTrigger?.removeAttribute("aria-describedby")');
   });
 
   it("keeps anonymous Worker IDs available without showing long generated IDs in card titles", () => {
     expect(ADMIN_CLIENT_WORKER_VIEWS).toContain('t("anonymousWorkerName")(idx + 1)');
-    expect(ADMIN_CLIENT_WORKER_VIEWS).toContain('title="\' + escapeAttr(a.id || displayName)');
+    expect(ADMIN_CLIENT_WORKER_VIEWS).toContain('data-tooltip="\' + escapeAttr(a.id || displayName)');
     expect(ADMIN_CLIENT_WORKER_VIEWS).toContain('value="\' + escapeAttr(a.id || "")');
   });
 
