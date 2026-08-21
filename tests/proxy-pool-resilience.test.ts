@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { fetchClashSubscription } from "../src/proxy/clash.js";
 import {
+  applyProbeEgressIps,
+  mergeSubscriptionProxies,
   newProxyId,
   normalizeProxyPool,
   replaceControllerProxies,
@@ -45,6 +47,21 @@ describe("normalizeProxyPool", () => {
     expect(pool[0].host).toBe("1.1.1.1");
     expect(newProxyId().startsWith("px_")).toBe(true);
   });
+
+  it("normalizes, updates, and preserves a measured exit IP", () => {
+    const pool = normalizeProxyPool([
+      { id: "known", host: "192.0.2.1", port: 80, type: "http", egressIp: " 203.0.113.9 " },
+    ]);
+    expect(pool[0].egressIp).toBe("203.0.113.9");
+    expect(applyProbeEgressIps(pool, [{ id: "known", ok: false, egressIp: null }])[0].egressIp).toBe("203.0.113.9");
+    const updated = applyProbeEgressIps(pool, [{ id: "known", ok: true, egressIp: "198.51.100.7" }]);
+    const merged = mergeSubscriptionProxies(
+      [{ ...updated[0], source: "subscription", subscriptionId: "sub" }],
+      "sub",
+      [{ ...updated[0], egressIp: undefined }]
+    );
+    expect(merged[0].egressIp).toBe("198.51.100.7");
+  });
 });
 
 describe("Controller import resilience", () => {
@@ -63,9 +80,13 @@ describe("Controller import resilience", () => {
       clashNodeName: "Mexico",
     }];
     const once = replaceControllerProxies([], imported);
-    const twice = replaceControllerProxies(once, imported);
+    const twice = replaceControllerProxies(
+      [{ ...once[0], egressIp: "203.0.113.12" }],
+      imported
+    );
     expect(twice).toHaveLength(1);
     expect(twice[0].id).toBe("controller_a");
+    expect(twice[0].egressIp).toBe("203.0.113.12");
   });
 
   it("rejects a selector that only contains nested groups", async () => {

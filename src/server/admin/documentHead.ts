@@ -419,7 +419,7 @@ export const ADMIN_DOCUMENT_HEAD = `<!DOCTYPE html>
     /* ── Metrics ── */
     .metrics {
       display: grid;
-      grid-template-columns: repeat(6, 1fr);
+      grid-template-columns: repeat(4, 1fr);
       gap: 12px; margin-bottom: 16px;
     }
     .metric {
@@ -429,7 +429,7 @@ export const ADMIN_DOCUMENT_HEAD = `<!DOCTYPE html>
       border: 1px solid var(--glass-border);
       border-radius: var(--radius); padding: 14px 14px 12px; min-height: 96px;
       display: flex; flex-direction: column; gap: 6px;
-      position: relative; overflow: hidden;
+      position: relative; overflow: visible;
       animation: metric-enter 0.4s ease-out backwards;
     }
     .metric:nth-child(1) { animation-delay: 0ms; }
@@ -452,7 +452,9 @@ export const ADMIN_DOCUMENT_HEAD = `<!DOCTYPE html>
       border-color: var(--accent-border);
       box-shadow: 0 4px 16px var(--accent-glow);
       transform: translateY(-2px);
+      z-index: 40;
     }
+    .metric:focus-within { z-index: 40; }
     .metric .k {
       display: flex; align-items: center; gap: 6px;
       font-size: 11px; color: var(--muted); font-weight: 500; text-transform: none;

@@ -262,16 +262,6 @@ export const ADMIN_CLIENT_CORE = `    function storageGet(key) {
       return Math.round(sec / 86400) + " d ago";
     }
 
-    function sparkSvg(seed, color) {
-      const pts = [];
-      let y = 12;
-      for (let i = 0; i < 12; i++) {
-        y = Math.max(3, Math.min(19, y + Math.sin(seed + i * 0.9) * 3 + ((seed * (i + 1)) % 5) - 2));
-        pts.push((i * 6) + "," + y.toFixed(1));
-      }
-      return '<svg class="spark" viewBox="0 0 66 22" preserveAspectRatio="none"><polyline fill="none" stroke="' + color + '" stroke-width="1.5" points="' + pts.join(" ") + '"/></svg>';
-    }
-
     function bridgeOn() {
       return !!(settings && settings.clashBridge && settings.clashBridge.enabled);
     }
@@ -354,14 +344,15 @@ export const ADMIN_CLIENT_CORE = `    function storageGet(key) {
       const accounts = settings.accounts || [];
       const routeCount = {};
       for (const a of accounts) {
+        const p = a.proxyId ? proxyById(a.proxyId) : null;
         const probe = a.proxyId ? probeResults[a.proxyId] : null;
-        const k = probe?.egressIp || a.proxyId || "__direct__";
+        const k = probe?.egressIp || p?.egressIp || a.proxyId || "__direct__";
         routeCount[k] = (routeCount[k] || 0) + 1;
       }
       return accounts.map((a, idx) => {
         const p = a.proxyId ? proxyById(a.proxyId) : null;
         const probe = a.proxyId ? probeResults[a.proxyId] : null;
-        const key = probe?.egressIp || a.proxyId || "__direct__";
+        const key = probe?.egressIp || p?.egressIp || a.proxyId || "__direct__";
         const shared = routeCount[key] > 1;
         let state = "ok";
         if (!p) state = shared || accounts.length > 1 ? "warn" : "warn";

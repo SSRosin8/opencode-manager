@@ -80,6 +80,36 @@ describe("admin proxy-pool UX contracts", () => {
     expect(ADMIN_FEATURE_STYLES).toContain(".overview-workers-table thead, .attempts-table thead { display:none; }");
   });
 
+  it("separates Worker request outcomes into explicit columns", () => {
+    expect(ADMIN_MARKUP).toContain('data-i18n="colSuccess"');
+    expect(ADMIN_MARKUP).toContain('data-i18n="colFailures"');
+    expect(ADMIN_CLIENT_WORKER_VIEWS).toContain('t("summaryAttempts")');
+    expect(ADMIN_CLIENT_WORKER_VIEWS).toContain('t("modelDetail")');
+    expect(ADMIN_CLIENT_WORKER_VIEWS).toContain('t("workerModelDetail")');
+    expect(ADMIN_CLIENT_WORKER_VIEWS).toContain("w.modelAttemptUsage || w.modelUsage");
+    expect(ADMIN_CLIENT_WORKER_VIEWS).toContain('totals.distinctModelCount');
+    expect(ADMIN_CLIENT_WORKER_VIEWS).toContain('class="ok">\' + fmtNum(w.generationSuccessCount');
+    expect(ADMIN_CLIENT_WORKER_VIEWS).toContain('class="err">\' + fmtNum(w.generationErrorCount');
+    expect(ADMIN_CLIENT_WORKER_VIEWS).toContain('class="mobile-cell-label">\' + escapeHtml(t("colSuccess"))');
+    expect(ADMIN_FEATURE_STYLES).toContain(".overview-workers-table .mobile-cell-label { display:block;");
+    expect(ADMIN_FEATURE_STYLES).toContain(".overview-workers-table { min-width:900px; table-layout:fixed; }");
+    expect(ADMIN_FEATURE_STYLES).toContain("table.nodes.overview-workers-table td { white-space:normal;");
+    expect(ADMIN_CLIENT_I18N).toContain('生成请求（Chat/Responses）');
+    expect(ADMIN_CLIENT_I18N).toContain('模型列表请求');
+    expect(ADMIN_CLIENT_I18N).toContain('网关拒绝记录？');
+    expect(ADMIN_CLIENT_WORKER_VIEWS).toContain('stats.modelTokenUsage');
+    expect(ADMIN_CLIENT_I18N).toContain('含 usage 的响应');
+  });
+
+  it("keeps overview details in focusable hover disclosures and removes fake trends", () => {
+    expect(ADMIN_CLIENT_PROXY_VIEWS).toContain('class="metric metric-detail" tabindex="0"');
+    expect(ADMIN_CLIENT_PROXY_VIEWS).toContain('class="metric-popover" role="tooltip"');
+    expect(ADMIN_CLIENT_CORE).not.toContain("function sparkSvg");
+    expect(ADMIN_FEATURE_STYLES).toContain(".metric-detail:hover .metric-popover");
+    expect(ADMIN_DOCUMENT_HEAD).toContain("position: relative; overflow: visible;");
+    expect(ADMIN_DOCUMENT_HEAD).toContain(".metric:focus-within { z-index: 40; }");
+  });
+
   it("explains isolation health with an accessible tooltip", () => {
     expect(ADMIN_MARKUP).toContain('class="info-tooltip" tabindex="0" aria-describedby="iso-tooltip"');
     expect(ADMIN_MARKUP).toContain('role="tooltip" data-i18n="isoTooltip"');

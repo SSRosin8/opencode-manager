@@ -3,7 +3,7 @@
  * Entry point: starts HTTP server with OpenAI-compatible passthrough + admin UI.
  */
 
-import { createApp, listen } from "./server/http.js";
+import { close, createApp, listen } from "./server/http.js";
 
 async function main(): Promise<void> {
   const app = await createApp();
@@ -14,10 +14,23 @@ async function main(): Promise<void> {
   console.log(`[opencode-manager] OpenAI    http://${host}:${port}/v1`);
   console.log(`[opencode-manager] upstream  ${app.store.get().baseUrl}`);
 
+  let shuttingDown = false;
   const shutdown = () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     console.log("[opencode-manager] shutting down…");
-    app.server.close(() => process.exit(0));
-    setTimeout(() => process.exit(1), 5000).unref();
+    const forceExit = setTimeout(() => process.exit(1), 5000);
+    forceExit.unref();
+    void close(app).then(
+      () => {
+        clearTimeout(forceExit);
+        process.exit(0);
+      },
+      (error: unknown) => {
+        console.error("[opencode-manager] shutdown failed:", error);
+        process.exit(1);
+      }
+    );
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);

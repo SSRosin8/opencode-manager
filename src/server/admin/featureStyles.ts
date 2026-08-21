@@ -163,9 +163,32 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
     .usage-summary-item { min-width:0; padding:12px 16px; background:var(--panel-solid); }
     .usage-summary-item .label { color:var(--muted); font-size:10px; text-transform:uppercase; }
     .usage-summary-item .value { margin-top:3px; color:var(--text); font-size:18px; font-weight:700; }
-    .usage-summary-item .detail { margin-top:2px; color:var(--muted); font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .overview-workers-table { min-width:760px; }
+    .usage-summary-item .detail { display:none; }
+    .metric-detail, .usage-summary-item { position:relative; outline:none; cursor:help; }
+    .metric-popover, .usage-summary-popover {
+      position:absolute; z-index:30; left:12px; top:calc(100% + 7px); width:min(320px, 78vw);
+      padding:9px 11px; border:1px solid var(--border-hi); border-radius:var(--radius-sm);
+      background:var(--surface); box-shadow:0 8px 24px rgba(0,0,0,.18); color:var(--text-2);
+      font-size:11px; font-weight:400; line-height:1.5; text-align:left; white-space:pre-line;
+      opacity:0; visibility:hidden; pointer-events:none; transform:translateY(-3px);
+      transition:opacity .15s ease, transform .15s ease, visibility .15s;
+    }
+    .metric-detail:hover .metric-popover, .metric-detail:focus .metric-popover,
+    .usage-summary-item:hover .usage-summary-popover, .usage-summary-item:focus .usage-summary-popover {
+      opacity:1; visibility:visible; transform:translateY(0);
+    }
+    .metrics .metric-detail:last-child .metric-popover, .usage-summary-item:last-child .usage-summary-popover { left:auto; right:12px; }
+    .metric-footline { color:var(--muted); font-size:11px; }
+    .overview-workers-table { min-width:900px; table-layout:fixed; }
+    .overview-workers-table th:nth-child(1) { width:23%; }
+    .overview-workers-table th:nth-child(2) { width:20%; }
+    .overview-workers-table th:nth-child(3), .overview-workers-table th:nth-child(4) { width:7%; }
+    .overview-workers-table th:nth-child(5), .overview-workers-table th:nth-child(6) { width:14%; }
+    .overview-workers-table th:nth-child(7) { width:7%; }
+    .overview-workers-table th:nth-child(8) { width:8%; }
+    table.nodes.overview-workers-table td { white-space:normal; overflow-wrap:anywhere; }
     .worker-route-primary { max-width:380px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .mobile-cell-label { display:none; }
     .worker-meta { display:flex; align-items:center; gap:6px; margin-top:4px; min-width:0; }
     .attempt-position { cursor:help; }
     table.nodes {
@@ -410,7 +433,7 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
     .rel { position: relative; }
 
     @media (max-width: 1200px) {
-      .metrics { grid-template-columns: repeat(3, 1fr); }
+      .metrics { grid-template-columns: repeat(2, 1fr); }
       .pp-grid { grid-template-columns: 1fr; }
       .pp-grid.sources-view { grid-template-columns: 1fr; }
       .pp-main, .pp-side { height:auto; }
@@ -450,6 +473,7 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
       .overview-workers-table tr:last-child, .attempts-table tr:last-child { margin-bottom:0; }
       .overview-workers-table td, .attempts-table td { min-width:0; padding:0; border:0; position:static !important; background:transparent !important; }
       .overview-workers-table td:first-child, .attempts-table td:first-child { grid-column:1 / -1; }
+      .overview-workers-table .mobile-cell-label { display:block; margin-bottom:3px; color:var(--muted); font:600 11px/1.2 var(--font-sans); }
       .attempts-table td:nth-child(3), .attempts-table td:nth-child(4) { grid-column:1 / -1; }
       .worker-route-primary { max-width:none; }
       .row.two, .row.three { grid-template-columns: 1fr; }

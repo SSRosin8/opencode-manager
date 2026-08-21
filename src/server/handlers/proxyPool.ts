@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { RequestContext } from "../context.js";
 import { probeAnonymousZenProxy, probePoolProxy, type ProbeResult } from "../../proxy/probe.js";
+import { applyProbeEgressIps } from "../../proxy/pool.js";
 import { attachAnonymousZenResult, syncAnonymousWorkers } from "../workerEgress.js";
 import { readBody, sendJson } from "../httpIO.js";
 
@@ -48,7 +49,10 @@ export async function handleProxyPool(
       if (!proxyStillExists) return {};
       const synced = syncAnonymousWorkers(current, [result], probes);
       addedIds = synced.addedIds;
-      return addedIds.length ? { accounts: synced.accounts } : {};
+      return {
+        proxyPool: applyProbeEgressIps(current.proxyPool, [result]),
+        ...(addedIds.length ? { accounts: synced.accounts } : {}),
+      };
     });
     if (!proxyStillExists) probes.delete(result.id);
     if (addedIds.length) {

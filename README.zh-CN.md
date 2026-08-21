@@ -6,9 +6,9 @@
 
 本项目提供本机 Clash Controller 节点导入、Worker 独立出口绑定、真实出口 IP 验证、快速批量测试和 Worker 真实连接测试等功能。
 
-- 接受 **OpenAI 兼容**的客户端请求（`/v1/chat/completions`、`/v1/models`）
+- 接受 **OpenAI 兼容**的客户端请求（`/v1/chat/completions`、`/v1/responses`、`/v1/models`）
 - **透明转发**到 `https://opencode.ai/zen/v1`（可配置）
-- **仅免费模型**：自动抓取 Zen 定价页面，只提供免费模型（列表 + 对话）；付费模型永不暴露
+- **仅免费模型**：自动刷新 Zen 官方模型目录，只提供免费模型（列表 + 对话 + Responses）；付费模型永不暴露
 - 匿名 Zen（自动使用 `Bearer public`）与登录 Zen Key 分池统计，可配置匿名优先、登录优先或混合调度
 - 每个 Worker 可单独禁用，保留配置但不参与流量调度
 - 按 OpenCode 会话粘性绑定 Worker；429、无效 Key 和临时上游故障自动切换
@@ -39,6 +39,7 @@ npm start
 
 - 管理后台：http://127.0.0.1:9876/
 - 对话：`POST http://127.0.0.1:9876/v1/chat/completions`
+- Responses：`POST http://127.0.0.1:9876/v1/responses`
 - 模型列表：`GET http://127.0.0.1:9876/v1/models`
 
 ## 配置
@@ -51,7 +52,7 @@ npm start
 | `OPENCODE_MANAGER_HOST` | 监听地址，默认 `127.0.0.1`；仅在已保护后台时改为 `0.0.0.0` |
 | `OPENCODE_MANAGER_SETTINGS_PATH` | 自定义设置文件路径 |
 | `OPENCODE_MANAGER_STATS_PATH` | 自定义 Worker 统计文件路径 |
-| `OPENCODE_MANAGER_PRICING_URL` | 覆盖用于抓取免费模型的 Zen 定价页面 URL |
+| `OPENCODE_MANAGER_MODELS_URL` | 覆盖用于刷新免费模型的 Zen 官方模型目录 URL |
 | `OPENCODE_SYNTHESIZE_CLI_HEADERS` | 设为 `true` 时合成 CLI 身份请求头（也可在后台配置） |
 | `OPENCODE_USER_AGENT` / `OPENCODE_CLIENT` / `OPENCODE_PROJECT` | 合成 CLI 身份请求头时使用的默认值 |
 
@@ -85,12 +86,12 @@ npm start
 
 本网关**只提供免费模型**——付费模型永远不会暴露给客户端。
 
-- 启动时抓取 OpenCode Zen 定价页面（`https://opencode.ai/docs/zen`），保留所有输入/输出价格均为 `Free` 的模型。
+- 启动时读取 OpenCode Zen 官方模型目录（`https://opencode.ai/zen/v1/models`），保留 `*-free` 模型 ID 和明确列入官方特殊免费白名单的模型。
 - `GET /v1/models` 只返回这些免费模型（上游的付费条目会被丢弃）。
-- `POST /v1/chat/completions` 会在**任何上游调用之前**，以 `403 model_not_allowed` 拒绝非免费模型的请求。
-- 抓取结果缓存到 `data/free-models.json`。抓取失败时保留上一次成功的集合；首次成功抓取之前使用当前已知免费 ID 的静态基线。
+- `POST /v1/chat/completions` 和 `POST /v1/responses` 都会在**任何上游调用之前**，以 `403 model_not_allowed` 拒绝非免费模型的请求。
+- 刷新结果缓存到 `data/free-models.json`。刷新失败时保留上一次成功的集合；首次成功刷新之前使用当前已知免费 ID 的静态基线。
 
-静态基线模型（运行时会从 Zen 定价页刷新，以后台/API显示为准）：
+静态基线模型（运行时会从 Zen 官方模型目录刷新，以后台/API显示为准）：
 
 ```text
 big-pickle  deepseek-v4-flash-free  mimo-v2.5-free  laguna-s-2.1-free
@@ -118,13 +119,13 @@ OpenCode 免费账号经常受 **IP 限制**。将每个 Worker 绑定到不同�
 
 Clash 桥接包含两条独立链路：Controller URL/Secret 是切换节点和查询延迟的**控制面**；本地主机/mixed-port 是实际转发请求的**数据面**。这里的 `127.0.0.1` 始终指运行 opencode-manager 的机器，不是打开后台页面的浏览器所在机器。
 
-导入后先测试候选节点。测试会先记录公网出口 IP，再用 `Bearer public` 发起一次真实匿名 Zen 免费模型请求；只有匿名 Zen 成功的出口才参与自动分配。节点按真实出口 IP 去重，同一出口最多承载一个匿名 Worker和一个登录 Worker。单个 mixed-port 使用共享选择组，网关会串行完成“切换节点 + 建立连接”；运行期间不要在其他客户端中切换同一个选择组。需要多个节点永久并行独占端口时，应为每个 Worker 配置独立的 Mihomo 入站或实例。
+导入后先测试候选节点。测试会先记录并持久化公网出口 IP，再用 `Bearer public` 发起一次真实匿名 Zen 免费模型请求；服务重启后仍会显示上一次成功测得的出口，失败探测不会清除该记录。只有匿名 Zen 成功的出口才参与自动分配。节点按真实出口 IP 去重，同一出口最多承载一个匿名 Worker 和一个登录 Worker。单个 mixed-port 使用共享选择组，网关会串行完成“切换节点 + 建立连接”；运行期间不要在其他客户端中切换同一个选择组。需要多个节点永久并行独占端口时，应为每个 Worker 配置独立的 Mihomo 入站或实例。
 
 “批量测试”先通过 Mihomo 节点延迟接口筛选，再对每个不同公网出口执行匿名 Zen 验证。每个验证可用的唯一出口都会自动添加为匿名 Worker；你只需要手动添加登录 Zen 账号。重复或局部批测只会补充缺少的 Worker，不会重复创建或删除现有配置。普通代理检查最多 8 路并发；Clash 节点的公网 IP 和 Zen 请求复用一次 selector 切换。单个共享 Clash selector 的不同节点仍需串行处理，以避免出口串线。
 
 Worker 页面可以设置调度策略，并控制每个 Worker 是否参与流量。默认“匿名优先”会在所有匿名 Worker 都不可用后才使用登录 Zen；“登录 Zen 优先”顺序相反；“混合轮询”按配置顺序调度。匿名探测和 Worker 连接测试都使用单 token 输入并限制 `max_tokens: 1`，尽量减少免费额度消耗。保存登录 Worker 后，可点击卡片中的“测试连接”验证具体 Key 和路由，结果包含 HTTP 状态、总延迟、节点和公网出口 IP。
 
-总览页会按 Worker 统计真实 Chat 模型使用情况；`/v1/models` 模型列表请求会单独记录，不再与实际使用模型混淆。
+总览页会区分客户端生成请求、Worker 上游尝试和 `/v1/models` 模型列表尝试；重试链只算一个客户端生成请求，Worker 行仍按实际路由尝试计数。全局模型分布按客户端请求链去重，各 Worker 则展示自己实际尝试过的模型。Token 仅累计上游成功响应中实际报告的 `usage`，界面会显示 usage 覆盖情况；缓存命中率按“缓存读取输入 Token / 总输入 Token”计算，并将缓存未命中与明确的缓存写入字段分开。Token 和缓存同时按模型聚合，切换模型后可在悬停详情中分别查看。路由前发生的失败会进入独立的网关拒绝列表，不归到任何 Worker。全局“重置统计”会同时清除 Worker 计数、上游尝试、最近错误和网关拒绝记录。
 
 Worker 列表可以保存为空；此时转发接口会返回明确的 `503`，直到手动添加 Worker 或通过批量测试重新生成。Worker、IP 隔离、代理节点、上游尝试和网关拒绝等密集列表统一每页显示 8 条。桌面侧边栏和较长的状态区块均可折叠，浏览器会记住显示状态；移动端继续使用紧凑的横向导航。
 

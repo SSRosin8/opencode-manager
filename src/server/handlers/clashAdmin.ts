@@ -44,6 +44,15 @@ function planControllerReplacement(
       .filter((proxy) => proxy.source === "controller")
       .map((proxy) => [proxy.id, proxy] as const)
   );
+  if (sameController) {
+    const previousByName = new Map(
+      [...previousById.values()].map((proxy) => [proxy.clashNodeName || proxy.name, proxy] as const)
+    );
+    imported = imported.map((proxy) => ({
+      ...proxy,
+      egressIp: proxy.egressIp ?? previousByName.get(proxy.clashNodeName || proxy.name)?.egressIp,
+    }));
+  }
   const importedByName = new Map(
     imported.map((proxy) => [proxy.clashNodeName || proxy.name, proxy] as const)
   );

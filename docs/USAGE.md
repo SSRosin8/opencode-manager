@@ -36,7 +36,7 @@ The default bind address is `127.0.0.1`. Set `OPENCODE_MANAGER_HOST=0.0.0.0` onl
 
 ## 2. Security Boundary
 
-- `X-OC-Relay-Key` protects `/v1/*`, `/models`, and `/chat/completions` only.
+- `X-OC-Relay-Key` protects `/v1/*` and the compatibility aliases `/models`, `/chat/completions`, and `/responses` only.
 - `/` and `/admin/api/*` are not protected by that token.
 - Admin APIs contain Zen keys, proxy passwords, Clash secrets, and tokenized subscription URLs.
 - Never expose port 9876 directly to the public Internet or an untrusted LAN.
@@ -119,6 +119,8 @@ The test checks public egress and then uses that signed-in key directly; it does
 
 OpenCode sessions remain sticky to a Worker for cache locality. The gateway rotates after 401, 403, 429, 5xx, or transport failures.
 
+The Overview distinguishes client generation requests from actual per-Worker upstream attempts. A retry chain counts as one client request, while every routed attempt remains visible on its Worker; only 2xx final responses count as successful. Global model distribution is deduplicated by request chain, while each Worker shows its actual attempted models. Tokens are accumulated only when a successful upstream response reports `usage`. Streaming requests ask the upstream to include usage, but missing usage is still shown in the coverage details instead of being estimated. Cache hit rate is cache-read input tokens divided by total input tokens; uncached input and explicit cache writes are separate values. Token and cache totals are grouped by model so model changes can be inspected independently. Failures before routing appear under Gateway rejections. Global **Reset stats** clears Worker counters, recent upstream attempts, recent errors, and Gateway rejections.
+
 ## 8. Connect OpenCode
 
 Create or edit project/global `opencode.json`:
@@ -153,9 +155,14 @@ curl -sS http://127.0.0.1:9876/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -H "X-OC-Relay-Key: $RELAY_KEY" \
   -d '{"model":"big-pickle","messages":[{"role":"user","content":"hi"}],"max_tokens":8}'
+
+curl -sS http://127.0.0.1:9876/v1/responses \
+  -H 'Content-Type: application/json' \
+  -H "X-OC-Relay-Key: $RELAY_KEY" \
+  -d '{"model":"big-pickle","input":"hi","max_output_tokens":8}'
 ```
 
-Remove the token header when relay authentication is disabled. Paid or unknown models return `403 model_not_allowed` before upstream access.
+Remove the token header when relay authentication is disabled. Chat Completions and Responses use the same authentication, free-model enforcement, Worker routing, proxy, retry, and statistics path. Paid or unknown models return `403 model_not_allowed` before upstream access.
 
 ## 10. Shortest Layered Validation
 
@@ -167,15 +174,17 @@ Validate in this order and investigate only the first failing layer:
 4. **Clash data plane**: test one node and confirm a public egress IP before starting a batch.
 5. **Worker**: at least one Worker is enabled, ready, and bound to the expected proxy.
 6. **Models**: `/v1/models` confirms relay authentication and the free-model list.
-7. **Chat**: send one minimal `/v1/chat/completions` request last.
+7. **Generation**: send one minimal `/v1/chat/completions` or `/v1/responses` request last.
 
 Skip step 3 when Clash is not used. HTTP/SOCKS proxies still need the real-egress check in step 4.
 
 ## 11. Data, Backup, And Upgrade
 
-- `data/settings.json`: Workers, keys, proxies, subscriptions, and Admin settings; sensitive.
+- `data/settings.json`: Workers, keys, proxies, subscriptions, Admin settings, and each proxy's last successful public egress IP; sensitive. A failed probe does not erase the last successful egress, while **Remove all** removes it with the proxy pool.
 - `data/worker-stats.json`: usage and attempt statistics.
 - `data/free-models.json`: rebuildable free-model cache.
+
+Older `worker-stats.json` files remain readable. Historical totals created before usage coverage and per-model token tracking do not gain those details retroactively; only new responses add them. A legacy cache value that represented uncached input is migrated to cache misses rather than being reported as an explicit cache write.
 
 Override paths with `OPENCODE_MANAGER_SETTINGS_PATH` and `OPENCODE_MANAGER_STATS_PATH`. Stop the service before copying `data/` for backup or migration.
 

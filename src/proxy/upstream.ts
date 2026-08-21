@@ -8,9 +8,11 @@ import { randomUUID } from "node:crypto";
 import {
   AccountRotator,
   buildChatCompletionsUrl,
+  buildResponsesUrl,
   buildModelsUrl,
   buildUpstreamHeaders,
   transformRequestBody,
+  transformResponsesRequestBody,
   type AccountConfig,
   type AccountProxy,
 } from "../relay/index.js";
@@ -36,7 +38,7 @@ export type ProxyFetch = (
 
 export type UpstreamAttemptEvent = {
   requestId: string;
-  operation: "chat" | "models" | "test";
+  operation: "chat" | "responses" | "models" | "test";
   accountId: string;
   accountKind: AccountKind;
   proxyId: string | null;
@@ -330,6 +332,7 @@ export class UpstreamClient {
     body: unknown;
     stream: boolean;
     clientHeaders?: Record<string, string>;
+    protocol?: "chat" | "responses";
     /** Stable OpenCode conversation id used for per-session worker affinity. */
     sessionKey?: string;
   }): Promise<UpstreamResult> {
@@ -340,8 +343,13 @@ export class UpstreamClient {
       opts.body && typeof opts.body === "object" && !Array.isArray(opts.body)
         ? String((opts.body as Record<string, unknown>).model ?? "")
         : "";
-    const transformed = transformRequestBody(model, opts.body, opts.stream);
-    const url = buildChatCompletionsUrl(this.settings.baseUrl);
+    const operation = opts.protocol ?? "chat";
+    const transformed = operation === "responses"
+      ? transformResponsesRequestBody(model, opts.body, opts.stream)
+      : transformRequestBody(model, opts.body, opts.stream);
+    const url = operation === "responses"
+      ? buildResponsesUrl(this.settings.baseUrl)
+      : buildChatCompletionsUrl(this.settings.baseUrl);
     const maxAttempts = Math.max(1, this.rotator.getAccounts().length);
     const requestId = randomUUID();
     let last: UpstreamResult | null = null;
@@ -384,7 +392,7 @@ export class UpstreamClient {
         const retry = retryableStatus(response.status);
         this.emitAttempt({
           requestId,
-          operation: "chat",
+          operation,
           accountId: account.id,
           accountKind: account.kind,
           proxyId: account.proxyId,
@@ -425,7 +433,7 @@ export class UpstreamClient {
         lastError = err instanceof Error ? err : new Error(String(err));
         this.emitAttempt({
           requestId,
-          operation: "chat",
+          operation,
           accountId: account.id,
           accountKind: account.kind,
           proxyId: account.proxyId,

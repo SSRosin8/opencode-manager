@@ -102,6 +102,21 @@ describe("gateway rejection events", () => {
         ])
       );
       expect(status.recentGatewayRejections.every((event) => event.requestId.length > 8)).toBe(true);
+
+      const reset = await fetch(`${base}/admin/api/worker-stats/reset`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      expect(reset.status).toBe(200);
+      const cleared = (await (await fetch(`${base}/admin/api/status`)).json()) as {
+        recentGatewayRejections: GatewayRejectionEvent[];
+        recentErrors: unknown[];
+        lastError: string | null;
+      };
+      expect(cleared.recentGatewayRejections).toEqual([]);
+      expect(cleared.recentErrors).toEqual([]);
+      expect(cleared.lastError).toBeNull();
       expect(JSON.stringify(status)).not.toContain("do-not-store");
       expect(JSON.stringify(status)).not.toContain("private invalid body");
       expect(JSON.stringify(status)).not.toContain("private-model-param");

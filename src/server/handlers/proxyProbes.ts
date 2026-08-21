@@ -3,6 +3,7 @@ import type { RequestContext } from "../context.js";
 import { getClashSelectorCurrent, selectClashProxy } from "../../proxy/clashBridge.js";
 import { probeAnonymousZenProxy, probePoolProxies, summarizeProbeResults, type AnonymousZenProbeResult, type ProbeResult } from "../../proxy/probe.js";
 import type { GatewaySettings } from "../../settings/store.js";
+import { applyProbeEgressIps } from "../../proxy/pool.js";
 import { batchProbeSnapshot } from "../context.js";
 import { anonymousZenSummary, attachAnonymousZenResult, syncAnonymousWorkers } from "../workerEgress.js";
 import { readBody, sendJson } from "../httpIO.js";
@@ -274,9 +275,10 @@ async function finishBatchProbe(args: {
   const synced = syncAnonymousWorkers(store.get(), results, probes);
   let saved: GatewaySettings;
   try {
-    saved = synced.addedIds.length
-      ? await store.save({ accounts: synced.accounts })
-      : store.get();
+    saved = await store.save({
+      proxyPool: applyProbeEgressIps(store.get().proxyPool, results),
+      ...(synced.addedIds.length ? { accounts: synced.accounts } : {}),
+    });
   } catch (error) {
     const failedAt = new Date().toISOString();
     Object.assign(batchProbeProgress, {

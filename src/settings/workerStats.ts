@@ -5,25 +5,20 @@
  * {
  *   prompt_tokens, completion_tokens, total_tokens,
  *   prompt_cache_hit_tokens,   // cache read
- *   prompt_cache_miss_tokens,  // not from cache (treated as cache write when no explicit write field)
+ *   prompt_cache_miss_tokens,  // input tokens not served from cache
  *   prompt_tokens_details: { cached_tokens },
  *   completion_tokens_details: { reasoning_tokens }
  * }
  */
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { readFile } from "node:fs/promises";
 import type { UpstreamAttemptEvent } from "../proxy/upstream.js";
+import type { ModelTokenUsage, TokenUsage } from "./tokenUsage.js";
+import { defaultWorkerStatsPath, WorkerStatsPersistence, type WorkerStatsPersistShape, type WorkerStatsWriter } from "./workerStatsPersistence.js";
+import { emptyWorkerStat } from "./workerStatsSnapshot.js";
 
-export type TokenUsage = {
-  promptTokens: number;
-  completionTokens: number;
-  totalTokens: number;
-  /** Tokens read from prompt cache (hit). */
-  cacheReadTokens: number;
-  /** Tokens written to / missing from cache. */
-  cacheWriteTokens: number;
-};
+export type { ModelTokenUsage, TokenUsage } from "./tokenUsage.js";
+export { parseUsageFromObject, parseUsageFromSseBuffer } from "./tokenUsage.js";
 
 export type WorkerStatSnapshot = {
   accountId: string;
@@ -32,17 +27,30 @@ export type WorkerStatSnapshot = {
   chatCount: number;
   /** Requests made to the /models endpoint (kept for persisted/API compatibility). */
   modelsCount: number;
-  /** Chat attempts grouped by the requested model name. */
+  /** Logical client generation requests grouped by model (retry chains count once). */
   modelUsage: Record<string, number>;
+  /** Actual generation attempts handled by this Worker, grouped by model. */
+  modelAttemptUsage: Record<string, number>;
+  /** Token and cache totals grouped by requested model. */
+  modelTokenUsage: Record<string, ModelTokenUsage>;
   /** Number of distinct models represented in modelUsage. */
   distinctModelCount: number;
   successCount: number;
   errorCount: number;
+  generationAttemptCount: number;
+  generationSuccessCount: number;
+  generationErrorCount: number;
+  generationRequestCount: number;
+  generationCompletedSuccessCount: number;
+  generationCompletedErrorCount: number;
+  usageReportedCount: number;
+  usageMissingCount: number;
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  cacheMissTokens: number;
   /**
    * Cache hit rate over accumulated prompt tokens: cacheRead / promptTokens.
    * null when promptTokens is 0.
@@ -60,36 +68,7 @@ export type WorkerAttemptEnrichment = {
 
 export type WorkerAttemptRecord = UpstreamAttemptEvent & WorkerAttemptEnrichment;
 
-type PersistShape = {
-  workers: Record<
-    string,
-    Omit<WorkerStatSnapshot, "accountId" | "cacheRate" | "distinctModelCount">
-  >;
-  attempts?: WorkerAttemptRecord[];
-};
-
 const MAX_RECENT_ATTEMPTS = 200;
-
-function emptyStat(accountId: string): WorkerStatSnapshot {
-  return {
-    accountId,
-    requestCount: 0,
-    chatCount: 0,
-    modelsCount: 0,
-    modelUsage: {},
-    distinctModelCount: 0,
-    successCount: 0,
-    errorCount: 0,
-    promptTokens: 0,
-    completionTokens: 0,
-    totalTokens: 0,
-    cacheReadTokens: 0,
-    cacheWriteTokens: 0,
-    cacheRate: null,
-    lastRequestAt: null,
-    lastStatus: null,
-  };
-}
 
 /** Non-negative integer (0 allowed). */
 function num(v: unknown): number {
@@ -105,7 +84,7 @@ function asRecord(v: unknown): Record<string, unknown> | null {
 
 function computeCacheRate(cacheRead: number, prompt: number): number | null {
   if (prompt <= 0) return null;
-  return cacheRead / prompt;
+  return Math.min(1, cacheRead / prompt);
 }
 
 function parseModelUsage(v: unknown): Record<string, number> {
@@ -127,15 +106,61 @@ function parseModelUsage(v: unknown): Record<string, number> {
   return usage;
 }
 
-function recordModelUsage(s: WorkerStatSnapshot, model: string | null | undefined): void {
+function parseModelTokenUsage(v: unknown): Record<string, ModelTokenUsage> {
+  const raw = asRecord(v);
+  const usage: Record<string, ModelTokenUsage> = {};
+  if (!raw) return usage;
+  for (const [model, value] of Object.entries(raw)) {
+    const item = asRecord(value);
+    if (!item) continue;
+    const name = model.trim();
+    if (!name) continue;
+    usage[name] = {
+      requestCount: num(item.requestCount),
+      promptTokens: num(item.promptTokens),
+      completionTokens: num(item.completionTokens),
+      totalTokens: num(item.totalTokens),
+      cacheReadTokens: num(item.cacheReadTokens),
+      cacheWriteTokens: num(item.cacheWriteTokens),
+      cacheMissTokens: num(item.cacheMissTokens),
+    };
+  }
+  return usage;
+}
+
+function recordModelUsage(
+  usage: Record<string, number>,
+  model: string | null | undefined
+): void {
   const name = model?.trim();
   if (!name) return;
-  const current = Object.hasOwn(s.modelUsage, name) ? s.modelUsage[name] : 0;
-  Object.defineProperty(s.modelUsage, name, {
+  const current = Object.hasOwn(usage, name) ? usage[name] : 0;
+  Object.defineProperty(usage, name, {
     value: current + 1,
     enumerable: true,
     configurable: true,
     writable: true,
+  });
+}
+
+function mergeModelUsage(target: Record<string, number>, source: Record<string, number>): void {
+  for (const [model, count] of Object.entries(source)) {
+    const current = Object.hasOwn(target, model) ? target[model] : 0;
+    Object.defineProperty(target, model, {
+      value: current + count, enumerable: true, configurable: true, writable: true,
+    });
+  }
+}
+
+function ensureModelTokenUsage(s: WorkerStatSnapshot, model: string): ModelTokenUsage {
+  return s.modelTokenUsage[model] ?? (s.modelTokenUsage[model] = {
+    requestCount: 0,
+    promptTokens: 0,
+    completionTokens: 0,
+    totalTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    cacheMissTokens: 0,
   });
 }
 
@@ -147,122 +172,43 @@ function withDerived(s: WorkerStatSnapshot): WorkerStatSnapshot {
   };
 }
 
-function parseCacheTokens(usage: Record<string, unknown>): {
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-} {
-  const details = asRecord(usage.prompt_tokens_details) ?? {};
-  const inputDetails = asRecord(usage.input_tokens_details) ?? {};
-
-  // Cache read / hit
-  const cacheReadTokens = num(
-    usage.prompt_cache_hit_tokens ??
-      usage.cache_read_input_tokens ??
-      usage.cache_read_tokens ??
-      details.cached_tokens ??
-      inputDetails.cached_tokens
-  );
-
-  // Explicit write / creation fields (OpenAI GPT-5.6+, Anthropic, …)
-  let cacheWriteTokens = num(
-    usage.cache_write_tokens ??
-      usage.prompt_cache_write_tokens ??
-      usage.cache_creation_input_tokens ??
-      usage.cache_creation_tokens ??
-      details.cache_write_tokens ??
-      details.cache_creation_tokens ??
-      inputDetails.cache_write_tokens
-  );
-
-  // OpenCode / DeepSeek: miss tokens = prompt tokens not served from cache
-  // (used as write/uncached when no dedicated write field is present).
-  const miss = num(usage.prompt_cache_miss_tokens);
-  if (!cacheWriteTokens && miss) {
-    cacheWriteTokens = miss;
-  }
-
-  return { cacheReadTokens, cacheWriteTokens };
-}
-
-/** Extract OpenAI / OpenCode-style usage from a JSON completion object. */
-export function parseUsageFromObject(obj: unknown): TokenUsage | null {
-  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return null;
-  const root = obj as Record<string, unknown>;
-  const u = root.usage;
-  if (!u || typeof u !== "object" || Array.isArray(u)) return null;
-  const usage = u as Record<string, unknown>;
-  const promptTokens = num(usage.prompt_tokens ?? usage.input_tokens);
-  const completionTokens = num(usage.completion_tokens ?? usage.output_tokens);
-  let totalTokens = num(usage.total_tokens);
-  if (!totalTokens && (promptTokens || completionTokens)) {
-    totalTokens = promptTokens + completionTokens;
-  }
-  const { cacheReadTokens, cacheWriteTokens } = parseCacheTokens(usage);
-
-  if (
-    !promptTokens &&
-    !completionTokens &&
-    !totalTokens &&
-    !cacheReadTokens &&
-    !cacheWriteTokens
-  ) {
-    return null;
-  }
-  return {
-    promptTokens,
-    completionTokens,
-    totalTokens,
-    cacheReadTokens,
-    cacheWriteTokens,
-  };
-}
-
-/** Scan SSE buffer for the last usage object in `data:` lines. */
-export function parseUsageFromSseBuffer(buf: string): TokenUsage | null {
-  let found: TokenUsage | null = null;
-  const lines = buf.split(/\r?\n/);
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith("data:")) continue;
-    const data = trimmed.slice(5).trim();
-    if (!data || data === "[DONE]") continue;
-    try {
-      const obj = JSON.parse(data) as unknown;
-      const u = parseUsageFromObject(obj);
-      if (u) found = u;
-    } catch {
-      /* ignore partial SSE frames */
-    }
-  }
-  return found;
-}
-
-function defaultStatsPath(): string {
-  return resolve(process.cwd(), "data", "worker-stats.json");
-}
-
 export class WorkerStatsStore {
   readonly path: string;
   private stats = new Map<string, WorkerStatSnapshot>();
   private attempts: WorkerAttemptRecord[] = [];
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private persistEnabled: boolean;
+  private persistence: WorkerStatsPersistence;
+  private closed = false;
+  private closePromise: Promise<void> | null = null;
 
-  constructor(opts?: { path?: string; persist?: boolean }) {
-    this.path = opts?.path ?? process.env.OPENCODE_MANAGER_STATS_PATH ?? defaultStatsPath();
+  constructor(opts?: {
+    path?: string;
+    persist?: boolean;
+    writeFile?: WorkerStatsWriter;
+  }) {
+    this.path = opts?.path ?? process.env.OPENCODE_MANAGER_STATS_PATH ?? defaultWorkerStatsPath();
     this.persistEnabled = opts?.persist !== false;
+    this.persistence = new WorkerStatsPersistence(
+      this.path,
+      this.persistEnabled,
+      opts?.writeFile
+    );
   }
 
   async load(): Promise<void> {
-    if (!this.persistEnabled) return;
+    if (!this.persistEnabled || this.closed) return;
     try {
       const text = await readFile(this.path, "utf8");
-      const parsed = JSON.parse(text) as PersistShape;
+      const parsed = JSON.parse(text) as WorkerStatsPersistShape;
       const workers = parsed?.workers;
       if (workers && typeof workers === "object") {
         for (const [id, raw] of Object.entries(workers)) {
           if (!id || !raw || typeof raw !== "object") continue;
           const r = raw as Record<string, unknown>;
+          const legacyChat = num(r.chatCount);
+          const legacySuccess = num(r.successCount);
+          const hasCacheMiss = r.cacheMissTokens !== undefined;
           this.stats.set(
             id,
             withDerived({
@@ -271,14 +217,25 @@ export class WorkerStatsStore {
               chatCount: num(r.chatCount),
               modelsCount: num(r.modelsCount),
               modelUsage: parseModelUsage(r.modelUsage),
+              modelAttemptUsage: parseModelUsage(r.modelAttemptUsage ?? r.modelUsage),
+              modelTokenUsage: parseModelTokenUsage(r.modelTokenUsage),
               distinctModelCount: 0,
               successCount: num(r.successCount),
               errorCount: num(r.errorCount),
+              generationAttemptCount: r.generationAttemptCount === undefined ? legacyChat : num(r.generationAttemptCount),
+              generationSuccessCount: r.generationSuccessCount === undefined ? legacySuccess : num(r.generationSuccessCount),
+              generationErrorCount: r.generationErrorCount === undefined ? Math.max(0, legacyChat - legacySuccess) : num(r.generationErrorCount),
+              generationRequestCount: r.generationRequestCount === undefined ? legacyChat : num(r.generationRequestCount),
+              generationCompletedSuccessCount: r.generationCompletedSuccessCount === undefined ? legacySuccess : num(r.generationCompletedSuccessCount),
+              generationCompletedErrorCount: r.generationCompletedErrorCount === undefined ? Math.max(0, legacyChat - legacySuccess) : num(r.generationCompletedErrorCount),
+              usageReportedCount: num(r.usageReportedCount),
+              usageMissingCount: num(r.usageMissingCount),
               promptTokens: num(r.promptTokens),
               completionTokens: num(r.completionTokens),
               totalTokens: num(r.totalTokens),
               cacheReadTokens: num(r.cacheReadTokens),
-              cacheWriteTokens: num(r.cacheWriteTokens),
+              cacheWriteTokens: hasCacheMiss ? num(r.cacheWriteTokens) : 0,
+              cacheMissTokens: hasCacheMiss ? num(r.cacheMissTokens) : num(r.cacheWriteTokens),
               cacheRate: null,
               lastRequestAt: typeof r.lastRequestAt === "string" ? r.lastRequestAt : null,
               lastStatus: typeof r.lastStatus === "number" ? r.lastStatus : null,
@@ -307,17 +264,19 @@ export class WorkerStatsStore {
   }
 
   private scheduleSave(): void {
-    if (!this.persistEnabled) return;
+    if (this.closed) return;
     if (this.saveTimer) clearTimeout(this.saveTimer);
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
-      void this.persist();
+      void this.persist().catch((error: unknown) => {
+        console.warn(`[worker-stats] failed to persist ${this.path}:`, error);
+      });
     }, 500);
+    this.saveTimer.unref();
   }
 
-  async persist(): Promise<void> {
-    if (!this.persistEnabled) return;
-    const workers: PersistShape["workers"] = {};
+  persist(): Promise<void> {
+    const workers: WorkerStatsPersistShape["workers"] = {};
     for (const [id, s] of this.stats) {
       const {
         accountId: _a,
@@ -327,19 +286,33 @@ export class WorkerStatsStore {
       } = s;
       workers[id] = rest;
     }
-    await mkdir(dirname(this.path), { recursive: true });
-    await writeFile(
-      this.path,
-      JSON.stringify({ workers, attempts: this.attempts }, null, 2),
-      "utf8"
+    return this.persistence.enqueue(
+      JSON.stringify({ workers, attempts: this.attempts }, null, 2)
     );
+  }
+
+  /** Cancel debounce and wait until the latest snapshot and all older writes finish. */
+  async flush(): Promise<void> {
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    await this.persist();
+  }
+
+  /** Stop scheduling background saves and durably flush the latest snapshot. */
+  close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
+    this.closed = true;
+    this.closePromise = this.flush();
+    return this.closePromise;
   }
 
   private ensure(id: string): WorkerStatSnapshot {
     const key = id || "unknown";
     let s = this.stats.get(key);
     if (!s) {
-      s = emptyStat(key);
+      s = emptyWorkerStat(key);
       this.stats.set(key, s);
     }
     return s;
@@ -357,11 +330,18 @@ export class WorkerStatsStore {
     s.requestCount += 1;
     if (opts.kind === "chat") {
       s.chatCount += 1;
-      recordModelUsage(s, opts.model);
+      s.generationAttemptCount += 1;
+      s.generationRequestCount += 1;
+      if (opts.status >= 200 && opts.status < 300) s.generationSuccessCount += 1;
+      else s.generationErrorCount += 1;
+      if (opts.status >= 200 && opts.status < 300) s.generationCompletedSuccessCount += 1;
+      else s.generationCompletedErrorCount += 1;
+      recordModelUsage(s.modelUsage, opts.model);
+      recordModelUsage(s.modelAttemptUsage, opts.model);
     } else {
       s.modelsCount += 1;
     }
-    if (opts.status >= 200 && opts.status < 400) s.successCount += 1;
+    if (opts.status >= 200 && opts.status < 300) s.successCount += 1;
     else s.errorCount += 1;
     s.lastStatus = opts.status;
     s.lastRequestAt = new Date().toISOString();
@@ -374,6 +354,12 @@ export class WorkerStatsStore {
     event: UpstreamAttemptEvent & WorkerAttemptEnrichment,
     enrichment?: WorkerAttemptEnrichment
   ): void {
+    const isGeneration = event.operation === "chat" || event.operation === "responses";
+    const firstGenerationAttempt = isGeneration && !this.attempts.some(
+      (attempt) =>
+        attempt.requestId === event.requestId &&
+        (attempt.operation === "chat" || attempt.operation === "responses")
+    );
     const record: WorkerAttemptRecord = structuredClone({
       ...event,
       ...enrichment,
@@ -383,16 +369,37 @@ export class WorkerStatsStore {
       this.attempts.splice(0, this.attempts.length - MAX_RECENT_ATTEMPTS);
     }
 
-    if (event.operation === "chat" || event.operation === "models") {
+    if (
+      event.operation === "chat" ||
+      event.operation === "responses" ||
+      event.operation === "models"
+    ) {
       const s = this.ensure(event.accountId);
       s.requestCount += 1;
-      if (event.operation === "chat") {
+      if (event.operation === "chat" || event.operation === "responses") {
         s.chatCount += 1;
-        recordModelUsage(s, event.model);
+        s.generationAttemptCount += 1;
+        recordModelUsage(s.modelAttemptUsage, event.model);
+        if (event.status !== null && event.status >= 200 && event.status < 300) {
+          s.generationSuccessCount += 1;
+        } else {
+          s.generationErrorCount += 1;
+        }
+        if (firstGenerationAttempt) {
+          s.generationRequestCount += 1;
+          recordModelUsage(s.modelUsage, event.model);
+        }
+        if (!event.willRetry) {
+          if (event.status !== null && event.status >= 200 && event.status < 300) {
+            s.generationCompletedSuccessCount += 1;
+          } else {
+            s.generationCompletedErrorCount += 1;
+          }
+        }
       } else {
         s.modelsCount += 1;
       }
-      if (event.status !== null && event.status >= 200 && event.status < 400) {
+      if (event.status !== null && event.status >= 200 && event.status < 300) {
         s.successCount += 1;
       } else {
         s.errorCount += 1;
@@ -414,14 +421,39 @@ export class WorkerStatsStore {
       .map((attempt) => structuredClone(attempt));
   }
 
-  addTokens(accountId: string, usage: TokenUsage): void {
+  addTokens(accountId: string, usage: TokenUsage, model?: string | null): void {
     const s = this.ensure(accountId);
-    s.promptTokens += usage.promptTokens;
-    s.completionTokens += usage.completionTokens;
-    s.totalTokens += usage.totalTokens;
-    s.cacheReadTokens += usage.cacheReadTokens;
-    s.cacheWriteTokens += usage.cacheWriteTokens;
+    const promptTokens = num(usage.promptTokens);
+    const completionTokens = num(usage.completionTokens);
+    const totalTokens = num(usage.totalTokens);
+    const cacheReadTokens = num(usage.cacheReadTokens);
+    const cacheWriteTokens = num(usage.cacheWriteTokens);
+    const cacheMissTokens = num(usage.cacheMissTokens);
+    s.promptTokens += promptTokens;
+    s.completionTokens += completionTokens;
+    s.totalTokens += totalTokens;
+    s.cacheReadTokens += cacheReadTokens;
+    s.cacheWriteTokens += cacheWriteTokens;
+    s.cacheMissTokens += cacheMissTokens;
+    s.usageReportedCount += 1;
+    const name = model?.trim();
+    if (name) {
+      const modelUsage = ensureModelTokenUsage(s, name);
+      modelUsage.promptTokens += promptTokens;
+      modelUsage.completionTokens += completionTokens;
+      modelUsage.totalTokens += totalTokens;
+      modelUsage.cacheReadTokens += cacheReadTokens;
+      modelUsage.cacheWriteTokens += cacheWriteTokens;
+      modelUsage.cacheMissTokens += cacheMissTokens;
+      modelUsage.requestCount += 1;
+    }
     this.stats.set(s.accountId, withDerived(s));
+    this.scheduleSave();
+  }
+
+  recordMissingUsage(accountId: string): void {
+    const s = this.ensure(accountId);
+    s.usageMissingCount += 1;
     this.scheduleSave();
   }
 
@@ -443,12 +475,23 @@ export class WorkerStatsStore {
     chatCount: number;
     modelsCount: number;
     modelUsage: Record<string, number>;
+    modelAttemptUsage: Record<string, number>;
+    modelTokenUsage: Record<string, ModelTokenUsage>;
     distinctModelCount: number;
+    generationAttemptCount: number;
+    generationSuccessCount: number;
+    generationErrorCount: number;
+    generationRequestCount: number;
+    generationCompletedSuccessCount: number;
+    generationCompletedErrorCount: number;
+    usageReportedCount: number;
+    usageMissingCount: number;
     promptTokens: number;
     completionTokens: number;
     totalTokens: number;
     cacheReadTokens: number;
     cacheWriteTokens: number;
+    cacheMissTokens: number;
     cacheRate: number | null;
   } {
     const list = accountIds ? this.listForAccounts(accountIds) : this.getAll();
@@ -457,20 +500,40 @@ export class WorkerStatsStore {
         a.requestCount += s.requestCount;
         a.chatCount += s.chatCount;
         a.modelsCount += s.modelsCount;
-        for (const [model, count] of Object.entries(s.modelUsage)) {
-          const current = Object.hasOwn(a.modelUsage, model) ? a.modelUsage[model] : 0;
-          Object.defineProperty(a.modelUsage, model, {
-            value: current + count,
-            enumerable: true,
-            configurable: true,
-            writable: true,
+        a.generationAttemptCount += s.generationAttemptCount;
+        a.generationSuccessCount += s.generationSuccessCount;
+        a.generationErrorCount += s.generationErrorCount;
+        a.generationRequestCount += s.generationRequestCount;
+        a.generationCompletedSuccessCount += s.generationCompletedSuccessCount;
+        a.generationCompletedErrorCount += s.generationCompletedErrorCount;
+        a.usageReportedCount += s.usageReportedCount;
+        a.usageMissingCount += s.usageMissingCount;
+        mergeModelUsage(a.modelUsage, s.modelUsage);
+        mergeModelUsage(a.modelAttemptUsage, s.modelAttemptUsage);
+        for (const [model, modelTokens] of Object.entries(s.modelTokenUsage)) {
+          const target = a.modelTokenUsage[model] ?? (a.modelTokenUsage[model] = {
+            requestCount: 0,
+            promptTokens: 0,
+            completionTokens: 0,
+            totalTokens: 0,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            cacheMissTokens: 0,
           });
+          target.requestCount += modelTokens.requestCount;
+          target.promptTokens += modelTokens.promptTokens;
+          target.completionTokens += modelTokens.completionTokens;
+          target.totalTokens += modelTokens.totalTokens;
+          target.cacheReadTokens += modelTokens.cacheReadTokens;
+          target.cacheWriteTokens += modelTokens.cacheWriteTokens;
+          target.cacheMissTokens += modelTokens.cacheMissTokens;
         }
         a.promptTokens += s.promptTokens;
         a.completionTokens += s.completionTokens;
         a.totalTokens += s.totalTokens;
         a.cacheReadTokens += s.cacheReadTokens;
         a.cacheWriteTokens += s.cacheWriteTokens;
+        a.cacheMissTokens += s.cacheMissTokens;
         return a;
       },
       {
@@ -478,11 +541,22 @@ export class WorkerStatsStore {
         chatCount: 0,
         modelsCount: 0,
         modelUsage: {} as Record<string, number>,
+        modelAttemptUsage: {} as Record<string, number>,
+        modelTokenUsage: {} as Record<string, ModelTokenUsage>,
+        generationAttemptCount: 0,
+        generationSuccessCount: 0,
+        generationErrorCount: 0,
+        generationRequestCount: 0,
+        generationCompletedSuccessCount: 0,
+        generationCompletedErrorCount: 0,
+        usageReportedCount: 0,
+        usageMissingCount: 0,
         promptTokens: 0,
         completionTokens: 0,
         totalTokens: 0,
         cacheReadTokens: 0,
         cacheWriteTokens: 0,
+        cacheMissTokens: 0,
       }
     );
     return {
@@ -500,6 +574,6 @@ export class WorkerStatsStore {
       this.stats.clear();
       this.attempts = [];
     }
-    await this.persist();
+    await this.flush();
   }
 }

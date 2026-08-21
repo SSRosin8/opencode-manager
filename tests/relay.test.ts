@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   AccountRotator,
   buildChatCompletionsUrl,
+  buildResponsesUrl,
   buildModelsUrl,
   buildUpstreamHeaders,
   forwardOpencodeClientHeaders,
@@ -14,6 +15,7 @@ import {
   parseEffortLevel,
   passthroughBody,
   transformRequestBody,
+  transformResponsesRequestBody,
   DEFAULT_BASE_URL,
 } from "../src/relay/index.js";
 
@@ -27,10 +29,27 @@ describe("URL building", () => {
     expect(buildModelsUrl("https://opencode.ai/zen/v1")).toBe(
       "https://opencode.ai/zen/v1/models"
     );
+    expect(buildResponsesUrl("https://opencode.ai/zen/v1")).toBe(
+      "https://opencode.ai/zen/v1/responses"
+    );
   });
 });
 
 describe("transparent body passthrough + OpenCode fixes", () => {
+  it("normalizes Responses payloads without converting their input format", () => {
+    const input = [{ role: "user", content: [{ type: "input_text", text: "hello" }] }];
+    const out = transformResponsesRequestBody(
+      "mimo-v2.5-high",
+      { model: "mimo-v2.5-high", input, stream: false, client_metadata: { secret: true } },
+      true
+    ) as Record<string, unknown>;
+    expect(out.model).toBe("mimo-v2.5");
+    expect(out.input).toEqual(input);
+    expect(out.stream).toBe(true);
+    expect(out.reasoning).toEqual({ effort: "high" });
+    expect(out).not.toHaveProperty("client_metadata");
+  });
+
   it("preserves representative chat payload fields while normalizing model/stream", () => {
     const payload = {
       model: "big-pickle",
@@ -50,6 +69,15 @@ describe("transparent body passthrough + OpenCode fixes", () => {
     expect(out.tools).toEqual(payload.tools);
     // original object not mutated
     expect(payload).not.toHaveProperty("stream");
+  });
+
+  it("requests usage in streaming chat responses", () => {
+    const out = transformRequestBody(
+      "big-pickle",
+      { model: "big-pickle", messages: [], stream_options: { custom: true } },
+      true
+    ) as { stream_options: Record<string, unknown> };
+    expect(out.stream_options).toEqual({ custom: true, include_usage: true });
   });
 
   it("passthroughBody keeps extra fields without stripping", () => {

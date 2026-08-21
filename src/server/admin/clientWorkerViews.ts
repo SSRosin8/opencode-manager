@@ -258,16 +258,29 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
       if (!body) return;
       const workers = status?.workers || [];
       const totals = status?.usageTotals || {};
-      const successCount = workers.reduce((sum, worker) => sum + (Number(worker.successCount) || 0), 0);
-      const errorCount = workers.reduce((sum, worker) => sum + (Number(worker.errorCount) || 0), 0);
-      const finishedCount = successCount + errorCount;
+      const generationRequests = Number(totals.generationRequestCount ?? totals.generationAttemptCount ?? totals.chatCount ?? 0);
+      const generationSuccess = Number(totals.generationCompletedSuccessCount ?? totals.generationSuccessCount ?? 0);
+      const generationErrors = Number(totals.generationCompletedErrorCount ?? totals.generationErrorCount ?? 0);
+      const finishedCount = generationSuccess + generationErrors;
+      const modelUsageText = Object.entries(totals.modelUsage || {}).map(([model, count]) => model + " × " + fmtNum(count)).join(", ") || "—";
+      const modelStatsText = (stats) => Object.entries(stats.modelTokenUsage || {}).map(([model, usage]) =>
+        t("modelStatsItem")(model, fmtNum(usage.requestCount), fmtNum(usage.totalTokens), fmtRate(usage.promptTokens ? usage.cacheReadTokens / usage.promptTokens : null))
+      ).join("\\n") || "—";
+      const usageDetailText = (stats) => Number(stats.usageReportedCount || 0) + Number(stats.usageMissingCount || 0) > 0 || !Number(stats.totalTokens || 0)
+        ? t("usageDetail")(fmtNum(stats.promptTokens), fmtNum(stats.completionTokens), fmtNum(stats.usageReportedCount), fmtNum(stats.usageMissingCount))
+        : t("usageDetailLegacy")(fmtNum(stats.promptTokens), fmtNum(stats.completionTokens));
+      const coverageKnown = Number(totals.usageReportedCount || 0) + Number(totals.usageMissingCount || 0) > 0 || !Number(totals.totalTokens || 0);
+      const coverageText = coverageKnown
+        ? t("coverageKnown")(fmtNum(totals.usageReportedCount), fmtNum(totals.usageMissingCount))
+        : t("coverageUnknown");
+      const otherInput = Math.max(0, Number(totals.promptTokens || 0) - Number(totals.cacheReadTokens || 0));
       if (summary) {
         summary.innerHTML = [
-          [t("summaryAttempts"), fmtNum(totals.requestCount), "Chat " + fmtNum(totals.chatCount) + " · Models " + fmtNum(totals.modelsCount)],
-          [t("summarySuccessRate"), finishedCount ? fmtRate(successCount / finishedCount) : "—", fmtNum(successCount) + " / " + fmtNum(errorCount)],
-          [t("summaryTokens"), fmtNum(totals.totalTokens), "in " + fmtNum(totals.promptTokens) + " · out " + fmtNum(totals.completionTokens)],
-          [t("summaryCacheRate"), fmtRate(totals.cacheRate), "read " + fmtNum(totals.cacheReadTokens)],
-        ].map((item) => '<div class="usage-summary-item"><div class="label">' + escapeHtml(item[0]) + '</div><div class="value">' + escapeHtml(item[1]) + '</div><div class="detail">' + escapeHtml(item[2]) + '</div></div>').join("");
+          [t("summaryAttempts"), fmtNum(generationRequests), t("modelDetail")(fmtNum(totals.generationAttemptCount), fmtNum(totals.modelsCount), fmtNum(totals.distinctModelCount), modelUsageText) + "\\n" + modelStatsText(totals)],
+          [t("summarySuccessRate"), finishedCount ? fmtRate(generationSuccess / finishedCount) : "—", t("successDetail")(fmtNum(generationSuccess), fmtNum(generationErrors))],
+          [t("summaryTokens"), fmtNum(totals.totalTokens), usageDetailText(totals)],
+          [t("summaryCacheRate"), fmtRate(totals.cacheRate), t("cacheFormula")(fmtNum(totals.cacheReadTokens), fmtNum(otherInput), fmtNum(totals.cacheWriteTokens), coverageText)],
+        ].map((item) => '<div class="usage-summary-item" tabindex="0"><div class="label">' + escapeHtml(item[0]) + '</div><div class="value">' + escapeHtml(item[1]) + '</div><div class="detail">' + escapeHtml(item[2]) + '</div><div class="usage-summary-popover" role="tooltip">' + escapeHtml(item[2]) + '</div></div>').join("");
       }
       const idleWorkers = workers.filter((worker) => !worker.requestCount && worker.ready && worker.enabled);
       const visibleWorkers = showIdleWorkers ? workers : workers.filter((worker) => worker.requestCount || !worker.ready || !worker.enabled);
@@ -277,25 +290,26 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
       toggleIdle.textContent = showIdleWorkers ? t("hideIdleWorkers") : t("showIdleWorkers")(idleWorkers.length);
       toggleIdle.onclick = () => { showIdleWorkers = !showIdleWorkers; renderWorkerStats(); };
       if (!workers.length) {
-        body.innerHTML = '<tr><td colspan="6" class="muted" style="padding:14px">' + escapeHtml(t("noWorkers")) + '</td></tr>';
+        body.innerHTML = '<tr><td colspan="8" class="muted" style="padding:14px">' + escapeHtml(t("noWorkers")) + '</td></tr>';
       } else if (!visibleWorkers.length) {
-        body.innerHTML = '<tr><td colspan="6" class="muted" style="padding:14px">' + escapeHtml(t("idleWorkersSummary")(idleWorkers.length)) + '</td></tr>';
+        body.innerHTML = '<tr><td colspan="8" class="muted" style="padding:14px">' + escapeHtml(t("idleWorkersSummary")(idleWorkers.length)) + '</td></tr>';
       } else {
         body.innerHTML = workerPageData.items.map((w) => {
           const kindLabel = t(w.kind === "authenticated_zen" ? "authenticatedZen" : "anonymousZen");
           const routeName = w.proxyName || (w.proxyId ? w.proxyId : t("directEgress"));
           const egress = w.egressIp || t("unknownEgress");
           const stateLabel = !w.enabled ? t("disabledState") : w.ready ? t("readyState") : t("coolingState");
-          const statusText = w.lastStatus == null
-            ? (w.lastRequestAt ? t("outcomeTransportError") : "—")
-            : "HTTP " + w.lastStatus;
+          const attemptModelUsage = w.modelAttemptUsage || w.modelUsage || {};
+          const attemptModelText = Object.entries(attemptModelUsage).map(([model, count]) => model + " × " + fmtNum(count)).join(", ") || "—";
           return '<tr>' +
             '<td title="' + escapeAttr(w.accountId) + '"><div class="worker-route-primary"><strong>' + escapeHtml(routeName) + '</strong></div><div class="muted mono">' + escapeHtml(egress) + '</div><div class="worker-meta"><span class="tag ' + (w.kind === "anonymous_zen" ? "blue" : "info") + '">' + escapeHtml(kindLabel) + '</span></div></td>' +
-            '<td class="mono"><strong>' + fmtNum(w.requestCount) + '</strong><div><span class="ok">' + fmtNum(w.successCount) + '</span> / <span class="err">' + fmtNum(w.errorCount) + '</span></div><div class="muted">' + escapeHtml(statusText) + '</div></td>' +
-            '<td class="mono"><strong>' + fmtNum(w.totalTokens) + '</strong><div class="muted">in ' + fmtNum(w.promptTokens) + ' · out ' + fmtNum(w.completionTokens) + '</div></td>' +
-            '<td class="mono">' + escapeHtml(fmtRate(w.cacheRate)) + '<div class="muted">read ' + fmtNum(w.cacheReadTokens) + ' · write ' + fmtNum(w.cacheWriteTokens) + '</div></td>' +
-            '<td><span class="tag ' + (!w.enabled ? "" : w.ready ? "ok" : "warn") + '">' + escapeHtml(stateLabel) + '</span>' + (w.enabled && !w.ready && w.cooldownUntil ? '<div class="muted">' + escapeHtml(relTime(new Date(w.cooldownUntil).toISOString())) + '</div>' : '') + '</td>' +
-            '<td class="muted">' + escapeHtml(w.lastRequestAt ? relTime(w.lastRequestAt) : "—") + '</td>' +
+            '<td class="mono" title="' + escapeAttr(t("workerModelDetail")(fmtNum(w.generationAttemptCount), fmtNum(w.modelsCount), fmtNum(Object.keys(attemptModelUsage).length), attemptModelText) + "\\n" + modelStatsText(w)) + '"><span class="mobile-cell-label">' + escapeHtml(t("colRequests")) + '</span><strong>' + fmtNum(w.generationAttemptCount ?? w.chatCount ?? 0) + '</strong></td>' +
+            '<td class="mono"><span class="mobile-cell-label">' + escapeHtml(t("colSuccess")) + '</span><strong class="ok">' + fmtNum(w.generationSuccessCount ?? 0) + '</strong></td>' +
+            '<td class="mono"><span class="mobile-cell-label">' + escapeHtml(t("colFailures")) + '</span><strong class="err">' + fmtNum(w.generationErrorCount ?? 0) + '</strong></td>' +
+            '<td class="mono" title="' + escapeAttr(usageDetailText(w)) + '"><span class="mobile-cell-label">' + escapeHtml(t("colTokens")) + '</span><strong>' + fmtNum(w.totalTokens) + '</strong></td>' +
+            '<td class="mono" title="' + escapeAttr(t("cacheBreakdown")(fmtNum(w.cacheReadTokens), fmtNum(w.cacheMissTokens), fmtNum(w.cacheWriteTokens))) + '"><span class="mobile-cell-label">' + escapeHtml(t("colCache")) + '</span>' + escapeHtml(fmtRate(w.cacheRate)) + '</td>' +
+            '<td><span class="mobile-cell-label">' + escapeHtml(t("colState")) + '</span><span class="tag ' + (!w.enabled ? "" : w.ready ? "ok" : "warn") + '">' + escapeHtml(stateLabel) + '</span>' + (w.enabled && !w.ready && w.cooldownUntil ? '<div class="muted">' + escapeHtml(relTime(new Date(w.cooldownUntil).toISOString())) + '</div>' : '') + '</td>' +
+            '<td class="muted"><span class="mobile-cell-label">' + escapeHtml(t("colLastReq")) + '</span>' + escapeHtml(w.lastRequestAt ? relTime(w.lastRequestAt) : "—") + '</td>' +
             '</tr>';
         }).join("");
       }

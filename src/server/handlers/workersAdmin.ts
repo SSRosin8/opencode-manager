@@ -81,6 +81,7 @@ export async function handleWorkersAdmin(
       }
     }
     await workerStats.reset(accountId);
+    if (!accountId) store.clearRequestHistory();
     const accountIds = store.get().accounts.map((a) => a.id);
     sendJson(res, 200, {
       ok: true,

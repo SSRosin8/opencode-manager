@@ -46,7 +46,7 @@ export async function handleCoreSettings(
     sendJson(res, 200, freeModels.status());
     return true;
   }
-  // Force a re-scrape of the Zen pricing page
+  // Force a refresh from the official Zen model catalog.
   if (method === "POST" && path === "/admin/api/free-models/refresh") {
     const status = await freeModels.refresh();
     sendJson(res, 200, status);
@@ -112,8 +112,20 @@ export async function handleCoreSettings(
       upstream.rotator.readyCount(),
       upstream.rotator.getAccounts().length
     );
-    const accounts = store.get().accounts;
+    const currentSettings = store.get();
+    const accounts = currentSettings.accounts;
     const accountIds = accounts.map((a) => a.id);
+    const proxyById = new Map(currentSettings.proxyPool.map((proxy) => [proxy.id, proxy] as const));
+    const recentAttempts = workerStats.recentAttempts(100).map((attempt) => ({
+      ...attempt,
+      egressIp: attempt.egressIp ?? (attempt.proxyId ? proxyById.get(attempt.proxyId)?.egressIp : null) ?? null,
+    }));
+    const latestAttemptEgress = new Map<string, string>();
+    for (const attempt of recentAttempts) {
+      if (attempt.egressIp && !latestAttemptEgress.has(attempt.accountId)) {
+        latestAttemptEgress.set(attempt.accountId, attempt.egressIp);
+      }
+    }
     const rotatorStates = new Map(
       upstream.rotator.getAccounts().map((account) => [account.id, account] as const)
     );
@@ -121,7 +133,7 @@ export async function handleCoreSettings(
       const account = accounts.find((item) => item.id === worker.accountId);
       const kind = account ? inferAccountKind(account) : "anonymous_zen";
       const proxy = account?.proxyId
-        ? store.get().proxyPool.find((item) => item.id === account.proxyId)
+        ? proxyById.get(account.proxyId)
         : null;
       const state = rotatorStates.get(worker.accountId);
       return {
@@ -131,16 +143,18 @@ export async function handleCoreSettings(
         credentialLabel: credentialLabel(kind, account?.apiKey ?? ""),
         proxyId: account?.proxyId ?? null,
         proxyName: proxy?.name ?? state?.clashNodeName ?? null,
-        egressIp: account?.proxyId ? probes.get(account.proxyId)?.egressIp ?? null : null,
+        egressIp: account?.proxyId
+          ? probes.get(account.proxyId)?.egressIp ?? proxy?.egressIp ?? latestAttemptEgress.get(worker.accountId) ?? null
+          : latestAttemptEgress.get(worker.accountId) ?? null,
         ready: state ? upstream.rotator.isReady(state) : false,
         cooldownUntil: state?.cooldownUntil ?? 0,
       };
     });
     const anonymousIds = accounts
-      .filter((account) => account.kind === "anonymous_zen")
+      .filter((account) => inferAccountKind(account) === "anonymous_zen")
       .map((account) => account.id);
     const authenticatedIds = accounts
-      .filter((account) => account.kind === "authenticated_zen")
+      .filter((account) => inferAccountKind(account) === "authenticated_zen")
       .map((account) => account.id);
     sendJson(res, 200, {
       ...store.getStatus(),
@@ -152,7 +166,7 @@ export async function handleCoreSettings(
         anonymous_zen: workerStats.totals(anonymousIds),
         authenticated_zen: workerStats.totals(authenticatedIds),
       },
-      recentAttempts: workerStats.recentAttempts(100),
+      recentAttempts,
     });
     return true;
   }

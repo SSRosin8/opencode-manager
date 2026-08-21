@@ -66,7 +66,9 @@ export async function createApp(opts?: {
     workerStats.recordAttempt(event, {
       credentialLabel: credentialLabel(event.accountKind, account?.apiKey ?? ""),
       proxyName: proxy?.name ?? event.clashNodeName,
-      egressIp: event.proxyId ? probes.get(event.proxyId)?.egressIp ?? null : null,
+      egressIp: event.proxyId
+        ? probes.get(event.proxyId)?.egressIp ?? proxy?.egressIp ?? null
+        : null,
     });
   });
 
@@ -77,15 +79,6 @@ export async function createApp(opts?: {
     await freeModels.loadCache().catch(() => {});
   } else {
     await freeModels.loadCache().catch(() => {});
-    freeModels.refresh().then((status) => {
-      if (status.lastError) {
-        console.warn(
-          `[free-models] refresh failed, using ${status.count} known-free: ${status.lastError}`
-        );
-      } else {
-        console.log(`[free-models] scraped ${status.count} free models from opencode.ai/docs/zen`);
-      }
-    });
   }
 
   const context: RequestContext = {
@@ -128,6 +121,23 @@ export async function createApp(opts?: {
     }
   });
 
+  if (!opts?.freeModels && !process.env.VITEST) {
+    const refreshFreeModels = async (): Promise<void> => {
+      const status = await freeModels.refresh();
+      if (status.lastError) {
+        console.warn(
+          `[free-models] refresh failed, using ${status.count} known-free: ${status.lastError}`
+        );
+      } else {
+        console.log(`[free-models] refreshed ${status.count} models from the official Zen catalog`);
+      }
+    };
+    void refreshFreeModels();
+    const timer = setInterval(() => void refreshFreeModels(), 15 * 60 * 1000);
+    timer.unref();
+    server.once("close", () => clearInterval(timer));
+  }
+
   return { server, store, upstream, port, host, probes, workerStats, freeModels };
 }
 
@@ -139,7 +149,11 @@ async function handleRequest(
   const method = (req.method || "GET").toUpperCase();
   const url = new URL(req.url || "/", "http://localhost");
   const path = url.pathname.replace(/\/+$/, "") || "/";
-  const relayPath = path === "/models" || path === "/chat/completions" || path.startsWith("/v1/");
+  const relayPath =
+    path === "/models" ||
+    path === "/chat/completions" ||
+    path === "/responses" ||
+    path.startsWith("/v1/");
 
   if (relayPath) {
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -202,8 +216,15 @@ export function listen(app: App): Promise<void> {
 }
 
 export function close(app: App): Promise<void> {
-  return new Promise((resolve, reject) => {
+  const closeServer = new Promise<void>((resolve, reject) => {
     app.store.setRunning(false);
     app.server.close((error) => (error ? reject(error) : resolve()));
   });
+  return closeServer.then(
+    () => app.workerStats.close(),
+    async (error: unknown) => {
+      await app.workerStats.close();
+      throw error;
+    }
+  );
 }

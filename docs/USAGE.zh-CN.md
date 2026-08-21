@@ -40,7 +40,7 @@ PORT=9988 npm start
 
 ## 2. 安全边界
 
-- `X-OC-Relay-Key` 只保护 `/v1/*`、`/models` 和 `/chat/completions`。
+- `X-OC-Relay-Key` 只保护 `/v1/*` 以及兼容别名 `/models`、`/chat/completions` 和 `/responses`。
 - `/` 和 `/admin/api/*` 不受该令牌保护。
 - 管理 API 包含 Zen Key、代理口令、Clash secret 和带 token 的订阅 URL。
 - 不要把 9876 端口直接暴露到公网或不可信局域网。
@@ -130,6 +130,8 @@ HTTP/SOCKS5 代理可直接添加，不需要 Clash 桥接。VLESS、Hysteria2�
 
 网关会保持 OpenCode 会话与 Worker 的粘性，以提高缓存命中；遇到 401、403、429、5xx 或传输错误时切换 Worker并进入冷却。
 
+总览会区分客户端生成请求和每个 Worker 的实际上游尝试。同一重试链只算一个客户端请求，但每次实际路由仍会记录到对应 Worker；只有最终 2xx 响应算成功。全局模型分布按请求链去重，各 Worker 则展示自己实际尝试过的模型。Token 只累计成功上游响应实际报告的 `usage`。流式请求会要求上游附带 usage，但缺失时不会估算，而会反映在 usage 覆盖详情中。缓存命中率是“缓存读取输入 Token / 总输入 Token”；未缓存输入与明确的缓存写入是两个独立数值。Token 和缓存会按模型分别聚合，切换模型后仍可独立核对。路由前失败会进入网关拒绝列表。全局“重置统计”会清除 Worker 计数、最近上游尝试、最近错误和网关拒绝记录。
+
 ## 8. 接入 OpenCode
 
 在项目目录或 OpenCode 全局配置位置创建/修改 `opencode.json`：
@@ -166,9 +168,14 @@ curl -sS http://127.0.0.1:9876/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -H "X-OC-Relay-Key: $RELAY_KEY" \
   -d '{"model":"big-pickle","messages":[{"role":"user","content":"hi"}],"max_tokens":8}'
+
+curl -sS http://127.0.0.1:9876/v1/responses \
+  -H 'Content-Type: application/json' \
+  -H "X-OC-Relay-Key: $RELAY_KEY" \
+  -d '{"model":"big-pickle","input":"hi","max_output_tokens":8}'
 ```
 
-令牌为空时移除对应 header。付费或未知模型会在请求上游前返回 `403 model_not_allowed`。
+令牌为空时移除对应 header。Chat Completions 和 Responses 共用相同的鉴权、免费模型限制、Worker 调度、代理、重试和统计链路。付费或未知模型会在请求上游前返回 `403 model_not_allowed`。
 
 ## 10. 最短分层验收路径
 
@@ -180,7 +187,7 @@ curl -sS http://127.0.0.1:9876/v1/chat/completions \
 4. **Clash 数据面**：先测试一个节点，确认能得到公网出口 IP；不要一开始就运行整批。
 5. **Worker**：确认至少一个 Worker 为启用、就绪，并绑定预期代理。
 6. **模型接口**：调用 `/v1/models`，确认令牌和免费模型列表正常。
-7. **对话接口**：最后调用一次最小 `/v1/chat/completions` 请求。
+7. **生成接口**：最后调用一次最小 `/v1/chat/completions` 或 `/v1/responses` 请求。
 
 若没有使用 Clash，跳过第 3 步；HTTP/SOCKS 代理仍需通过第 4 步验证真实出口。
 
@@ -188,9 +195,11 @@ curl -sS http://127.0.0.1:9876/v1/chat/completions \
 
 默认数据文件：
 
-- `data/settings.json`：Worker、Key、代理、订阅和后台配置；需要保密。
+- `data/settings.json`：Worker、Key、代理、订阅、后台配置，以及每个代理最后一次成功探测的公网出口 IP；需要保密。探测失败不会清除上一次成功出口，“删除全部代理”会随代理池一起删除这些记录。
 - `data/worker-stats.json`：用量和请求尝试统计。
 - `data/free-models.json`：免费模型缓存，可重新生成。
+
+旧版 `worker-stats.json` 仍可读取。升级前产生的历史累计值不会补出 usage 覆盖率和按模型 Token 明细；只有升级后的新响应会增加这些细分。旧版曾用缓存字段表示未缓存输入，加载时会迁移为缓存未命中，不会继续显示为明确的缓存写入。
 
 可通过 `OPENCODE_MANAGER_SETTINGS_PATH` 和 `OPENCODE_MANAGER_STATS_PATH` 修改前两项路径。备份或迁移前先停止服务，然后复制 `data/`。升级前先停止现有前台进程，避免新旧进程争用同一端口：
 

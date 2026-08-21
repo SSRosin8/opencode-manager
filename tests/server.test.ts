@@ -139,6 +139,15 @@ describe("gateway HTTP entry", () => {
       });
       expect(chatAliasMissing.status).toBe(401);
 
+      for (const responsesPath of ["/responses", "/v1/responses"]) {
+        const responsesMissing = await fetch(`http://127.0.0.1:${port}${responsesPath}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: "big-pickle", input: "hello" }),
+        });
+        expect(responsesMissing.status).toBe(401);
+      }
+
       const authorized = await fetch(`http://127.0.0.1:${port}/v1/models`, {
         headers: { "X-OC-Relay-Key": "relay-secret" },
       });
@@ -441,6 +450,75 @@ describe("gateway HTTP entry", () => {
       expect(text).toContain("chat.completion.chunk");
       expect(text).toContain("[DONE]");
       expect(text).toContain("Hi");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("proxies non-stream and streaming Responses API requests intact", async () => {
+    const responseJson = {
+      id: "resp-test",
+      object: "response",
+      output: [{ type: "message", role: "assistant", content: [] }],
+      usage: { input_tokens: 3, output_tokens: 2, total_tokens: 5 },
+    };
+    const responseFrames =
+      'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"Hi"}\n\n' +
+      'event: response.completed\ndata: {"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}}\n\n';
+    let calls = 0;
+    const { port, dir } = await bootMocked(async (url, init) => {
+      expect(String(url)).toBe("https://opencode.ai/zen/v1/responses");
+      const body = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+      expect(body.model).toBe("hy3-free");
+      expect(body.input).toBe("hello");
+      calls += 1;
+      if (calls === 1) {
+        return new Response(JSON.stringify(responseJson), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+      }
+      if (calls === 2) {
+        return new Response(responseFrames, {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          });
+      }
+      return new Response(
+        JSON.stringify({ error: { message: "invalid responses input", type: "invalid_request_error" } }),
+        { status: 400, headers: { "Content-Type": "application/json" } }
+      );
+    }, new FreeModelRegistry({ defaultIds: ["hy3-free"] }));
+
+    try {
+      const nonStream = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "hy3-free", input: "hello" }),
+      });
+      expect(nonStream.status).toBe(200);
+      expect(await nonStream.json()).toEqual(responseJson);
+
+      const stream = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "hy3-free", input: "hello", stream: true }),
+      });
+      expect(stream.status).toBe(200);
+      const text = await stream.text();
+      expect(text).toContain("response.output_text.delta");
+      expect(text).toContain("response.completed");
+      expect(text).toContain('"delta":"Hi"');
+
+      const rejected = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "hy3-free", input: "hello" }),
+      });
+      expect(rejected.status).toBe(400);
+      expect(await rejected.json()).toEqual({
+        error: { message: "invalid responses input", type: "invalid_request_error" },
+      });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

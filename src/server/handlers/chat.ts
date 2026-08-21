@@ -11,8 +11,12 @@ export async function handleChat(
   ctx: RequestContext
 ): Promise<boolean> {
   const { store, upstream, workerStats, freeModels } = ctx;
-  // OpenAI-compatible chat completions
-  if (method === "POST" && (path === "/v1/chat/completions" || path === "/chat/completions")) {
+  // OpenAI-compatible chat completions and Responses API.
+  const isResponses = path === "/v1/responses" || path === "/responses";
+  if (
+    method === "POST" &&
+    (isResponses || path === "/v1/chat/completions" || path === "/chat/completions")
+  ) {
     const raw = await readBody(req);
     let body: unknown;
     try {
@@ -66,6 +70,7 @@ export async function handleChat(
         body,
         stream,
         clientHeaders: clientHeadersFrom(req),
+        protocol: isResponses ? "responses" : "chat",
       });
       store.recordRequest(
         path,
@@ -77,15 +82,16 @@ export async function handleChat(
         upstream.rotator.getAccounts().length
       );
 
-      if (!stream && result.body && result.status < 400) {
+      if (!stream && result.body && result.status >= 200 && result.status < 300) {
         // Buffer non-stream body to extract usage, then forward intact.
         const buf = await readStreamFully(result.body);
         try {
           const parsed = JSON.parse(buf.toString("utf8")) as unknown;
           const usage = parseUsageFromObject(parsed);
-          if (usage) workerStats.addTokens(result.accountId, usage);
+          if (usage) workerStats.addTokens(result.accountId, usage, reqModel);
+          else workerStats.recordMissingUsage(result.accountId);
         } catch {
-          /* ignore non-JSON bodies */
+          workerStats.recordMissingUsage(result.accountId);
         }
         const headers: Record<string, string> = {};
         result.headers.forEach((value, key) => {
@@ -112,7 +118,8 @@ export async function handleChat(
         });
         sseText += decoder.decode();
         const usage = parseUsageFromSseBuffer(sseText);
-        if (usage) workerStats.addTokens(result.accountId, usage);
+        if (usage) workerStats.addTokens(result.accountId, usage, reqModel);
+        else if (result.status >= 200 && result.status < 300) workerStats.recordMissingUsage(result.accountId);
       } else {
         await pipeUpstream(res, result);
       }
@@ -120,7 +127,10 @@ export async function handleChat(
       const message = err instanceof Error ? err.message : String(err);
       store.recordRequest(path, 502, message);
       sendJson(res, 502, {
-        error: { message: `Upstream chat failed: ${message}`, type: "upstream_error" },
+        error: {
+          message: `Upstream ${isResponses ? "responses" : "chat"} failed: ${message}`,
+          type: "upstream_error",
+        },
       });
     }
     return true;

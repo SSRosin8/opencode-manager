@@ -13,6 +13,10 @@ export function buildChatCompletionsUrl(baseUrl: string): string {
   return `${normalizeBaseUrl(baseUrl)}/chat/completions`;
 }
 
+export function buildResponsesUrl(baseUrl: string): string {
+  return `${normalizeBaseUrl(baseUrl)}/responses`;
+}
+
 export function buildModelsUrl(baseUrl: string): string {
   return `${normalizeBaseUrl(baseUrl)}/models`;
 }

@@ -6,9 +6,9 @@ Standalone **OpenCode free-worker** LLM gateway: an OpenAI-compatible gateway fo
 
 This project provides local Clash Controller node import, per-worker egress binding, public-IP verification, faster batch probing, and real worker connection tests.
 
-- Accepts **OpenAI-compatible** client requests (`/v1/chat/completions`, `/v1/models`)
+- Accepts **OpenAI-compatible** client requests (`/v1/chat/completions`, `/v1/responses`, `/v1/models`)
 - **Transparent passthrough** to `https://opencode.ai/zen/v1` (configurable)
-- **Free-only models**: auto-scrapes the Zen pricing page and serves ONLY free models (list + chat); paid models are never exposed
+- **Free-only models**: refreshes the official Zen model catalog and serves ONLY free models (list + chat + responses); paid models are never exposed
 - Separate anonymous Zen (`Bearer public`) and signed-in Zen pools, with configurable anonymous-first, signed-in-first, or mixed routing
 - Per-worker enable/disable controls keep a Worker configured without sending it traffic
 - Per-OpenCode-session worker affinity with failover on 429, invalid keys, and temporary upstream errors
@@ -39,6 +39,7 @@ Development boundaries and module ownership are defined in [AGENTS.md](AGENTS.md
 
 - Admin UI: http://127.0.0.1:9876/
 - Chat: `POST http://127.0.0.1:9876/v1/chat/completions`
+- Responses: `POST http://127.0.0.1:9876/v1/responses`
 - Models: `GET http://127.0.0.1:9876/v1/models`
 
 ## Configuration
@@ -51,7 +52,7 @@ Development boundaries and module ownership are defined in [AGENTS.md](AGENTS.md
 | `OPENCODE_MANAGER_HOST` | Bind address, defaults to `127.0.0.1`; use `0.0.0.0` only behind protected admin access |
 | `OPENCODE_MANAGER_SETTINGS_PATH` | Custom settings file path |
 | `OPENCODE_MANAGER_STATS_PATH` | Custom Worker statistics file path |
-| `OPENCODE_MANAGER_PRICING_URL` | Override the Zen pricing page URL used to scrape free models |
+| `OPENCODE_MANAGER_MODELS_URL` | Override the official Zen model catalog URL used to refresh free models |
 | `OPENCODE_SYNTHESIZE_CLI_HEADERS` | `true` to synthesize CLI identity headers (also configurable in Admin) |
 | `OPENCODE_USER_AGENT` / `OPENCODE_CLIENT` / `OPENCODE_PROJECT` | Default values for synthesized CLI identity headers |
 
@@ -85,12 +86,12 @@ An empty relay token preserves the existing open-access behavior. OpenCode Go is
 
 This gateway serves **only free models** — paid models are never exposed to clients.
 
-- On boot it scrapes the OpenCode Zen pricing page (`https://opencode.ai/docs/zen`) and keeps every model whose Input & Output price is `Free`.
+- On boot it reads the official OpenCode Zen model catalog (`https://opencode.ai/zen/v1/models`) and keeps `*-free` model ids plus the explicit official special-free allowlist.
 - `GET /v1/models` returns only those free models (upstream's paid entries are dropped).
-- `POST /v1/chat/completions` rejects any request for a non-free model with `403 model_not_allowed` **before** any upstream call.
-- The scraped set is cached to `data/free-models.json`. If a scrape fails, the last successful set is kept; before the first successful scrape a static baseline of the currently-known free ids is used.
+- `POST /v1/chat/completions` and `POST /v1/responses` reject any request for a non-free model with `403 model_not_allowed` **before** any upstream call.
+- The refreshed set is cached to `data/free-models.json`. If a refresh fails, the last successful set is kept; before the first successful refresh a static baseline of the currently-known free ids is used.
 
-Static baseline models (the runtime refreshes from Zen pricing; use Admin/API as the authority):
+Static baseline models (the runtime refreshes from the Zen catalog; use Admin/API as the authority):
 
 ```text
 big-pickle  deepseek-v4-flash-free  mimo-v2.5-free  laguna-s-2.1-free
@@ -118,13 +119,13 @@ A subscription fetch and a Controller import are different data views. A fetch p
 
 The bridge has two independent paths: Controller URL/secret is the **control plane** used to inspect and switch nodes; local host/mixed-port is the **data plane** carrying relay traffic. `127.0.0.1` always means the machine running opencode-manager, not the machine whose browser opened Admin.
 
-Probe candidate nodes after importing. A probe records the public egress IP and then sends a real anonymous Zen free-model request with `Bearer public`; only successful egress routes are eligible for automatic assignment. Nodes are deduplicated by public IP, and one egress may host at most one anonymous worker plus one signed-in worker. A single mixed-port uses one shared selector; the gateway serializes node selection and connection setup. Do not switch that selector from another client while the gateway is running. Use separate Mihomo inbounds or instances when workers must permanently own concurrent ports.
+Probe candidate nodes after importing. A probe records and persists the public egress IP, then sends a real anonymous Zen free-model request with `Bearer public`; after a restart the UI keeps showing the last successful egress, and a failed probe does not erase it. Only successful egress routes are eligible for automatic assignment. Nodes are deduplicated by public IP, and one egress may host at most one anonymous worker plus one signed-in worker. A single mixed-port uses one shared selector; the gateway serializes node selection and connection setup. Do not switch that selector from another client while the gateway is running. Use separate Mihomo inbounds or instances when workers must permanently own concurrent ports.
 
 Testing an individual node verifies its public IP and anonymous Zen access, then immediately adds a missing anonymous Worker. **Batch Test** first screens nodes through Mihomo's delay API, then verifies every distinct public IP against anonymous Zen. Each verified unique egress is automatically added as an anonymous Worker; you only need to add signed-in Zen accounts manually. Re-running individual or batch tests only adds missing Workers and never duplicates or removes existing ones. Direct checks run with up to eight-way concurrency; Clash checks reuse one selector switch for the public-IP and Zen requests. A single shared Clash selector still processes different nodes serially to prevent route mix-ups.
 
 The Worker page controls routing strategy and whether each Worker receives traffic. The default `Anonymous first` strategy exhausts all usable anonymous Workers before signed-in keys. `Signed-in first` reverses that preference, while `Mixed` follows the configured Worker order. Connection probes use a one-token input and `max_tokens: 1` to minimize free-quota consumption. After saving a signed-in Worker, click **Test connection** on its card to verify the exact key and route. Results include HTTP status, total latency, node, and public egress IP.
 
-The Overview page reports actual chat model usage per Worker. `/v1/models` list requests are tracked separately from models used by chat requests. Failures that happen before upstream routing, such as unsupported endpoints, invalid JSON, blocked models, authentication failures, or an unavailable Worker pool, appear in a separate Gateway rejections list instead of being attributed to a Worker.
+The Overview separates client generation requests, per-Worker upstream attempts, and `/v1/models` attempts; a retry chain counts as one client generation request while Worker rows retain the actual routing attempts. The global model distribution is deduplicated by client request chain, while each Worker shows the models it actually attempted. Tokens include only `usage` reported by successful upstream responses, with usage coverage shown in the details. Cache hit rate is cache-read input tokens divided by total input tokens; cache misses and explicit cache writes remain separate. Token and cache totals are also grouped by model so model changes can be inspected independently. Failures before upstream routing appear in a separate Gateway rejections list. The global **Reset stats** action clears Worker counters, upstream attempts, recent errors, and gateway rejections together.
 
 Workers may be saved as an empty list. In that state relay requests return a clear `503` until Workers are added manually or recreated by Batch Test. Dense Worker, IP-isolation, proxy-node, upstream-attempt, and gateway-rejection lists use eight-item pages. The desktop sidebar and long status sections can be collapsed, and the browser remembers those display preferences; mobile keeps the compact horizontal navigation.
 

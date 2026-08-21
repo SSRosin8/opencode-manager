@@ -99,6 +99,15 @@ export function transformRequestBody(model: string, body: unknown, stream: boole
     model,
     stream,
   };
+  if (stream) {
+    const streamOptions = modifiedBody.stream_options;
+    modifiedBody.stream_options = {
+      ...(streamOptions && typeof streamOptions === "object" && !Array.isArray(streamOptions)
+        ? streamOptions as Record<string, unknown>
+        : {}),
+      include_usage: true,
+    };
+  }
 
   // Strip fields OpenCode upstream rejects (client_metadata).
   if (Object.prototype.hasOwnProperty.call(modifiedBody, "client_metadata")) {
@@ -128,6 +137,32 @@ export function transformRequestBody(model: string, body: unknown, stream: boole
   }
 
   return modifiedBody;
+}
+
+/** Apply only provider-compatible normalization to an OpenAI Responses request. */
+export function transformResponsesRequestBody(
+  model: string,
+  body: unknown,
+  stream: boolean
+): unknown {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return body;
+  const transformed: Record<string, unknown> = {
+    ...(body as Record<string, unknown>),
+    model,
+    stream,
+  };
+  delete transformed.client_metadata;
+  if (Array.isArray(transformed.tools) && transformed.tools.length > 128) {
+    transformed.tools = transformed.tools.slice(0, 128);
+  }
+  const parsed = parseEffortLevel(model);
+  if (parsed) {
+    transformed.model = parsed.baseModel;
+    if (transformed.reasoning === undefined) {
+      transformed.reasoning = { effort: parsed.effort };
+    }
+  }
+  return transformed;
 }
 
 /**

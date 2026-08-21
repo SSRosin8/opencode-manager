@@ -39,6 +39,8 @@ export type PoolProxy = {
   bridgeable?: boolean;
   /** Clash selector node name (usually same as name). */
   clashNodeName?: string;
+  /** Last successfully measured public exit IP. Persists across process restarts. */
+  egressIp?: string;
 };
 
 export type ProxySubscription = {
@@ -172,7 +174,30 @@ export function normalizePoolProxy(raw: unknown, index = 0): PoolProxy | null {
         : typeof p.name === "string"
           ? p.name
           : undefined,
+    egressIp:
+      typeof p.egressIp === "string" && p.egressIp.trim()
+        ? p.egressIp.trim().slice(0, 64)
+        : undefined,
   };
+}
+
+/** Apply successful public-IP probe results without erasing previously known exits. */
+export function applyProbeEgressIps(
+  pool: PoolProxy[],
+  results: Array<{ id: string; ok: boolean; egressIp?: string | null }>
+): PoolProxy[] {
+  const measured = new Map(
+    results
+      .filter((result): result is { id: string; ok: true; egressIp: string } =>
+        result.ok && typeof result.egressIp === "string" && Boolean(result.egressIp.trim())
+      )
+      .map((result) => [result.id, result.egressIp.trim().slice(0, 64)] as const)
+  );
+  if (!measured.size) return pool;
+  return pool.map((proxy) => {
+    const egressIp = measured.get(proxy.id);
+    return egressIp ? { ...proxy, egressIp } : proxy;
+  });
 }
 
 export function normalizeProxyPool(raw: unknown): PoolProxy[] {
@@ -324,11 +349,13 @@ export function mergeSubscriptionProxies(
   subscriptionId: string,
   imported: PoolProxy[]
 ): PoolProxy[] {
+  const previousById = new Map(pool.map((proxy) => [proxy.id, proxy] as const));
   const kept = pool.filter(
     (p) => !(p.source === "subscription" && p.subscriptionId === subscriptionId)
   );
   const tagged = imported.map((p) => ({
     ...p,
+    egressIp: p.egressIp ?? previousById.get(p.id)?.egressIp,
     source: "subscription" as const,
     subscriptionId,
   }));
@@ -340,8 +367,15 @@ export function replaceControllerProxies(
   pool: PoolProxy[],
   imported: PoolProxy[]
 ): PoolProxy[] {
+  const previousById = new Map(pool.map((proxy) => [proxy.id, proxy] as const));
   const kept = pool.filter((proxy) => proxy.source !== "controller");
-  return [...kept, ...imported];
+  return [
+    ...kept,
+    ...imported.map((proxy) => ({
+      ...proxy,
+      egressIp: proxy.egressIp ?? previousById.get(proxy.id)?.egressIp,
+    })),
+  ];
 }
 
 /** Build undici/socks proxy URI. */

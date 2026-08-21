@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { RequestContext } from "../context.js";
 import { probeAnonymousZenProxy, probePoolProxy } from "../../proxy/probe.js";
+import { applyProbeEgressIps } from "../../proxy/pool.js";
 import { inferAccountKind } from "../../relay/index.js";
 import { attachAnonymousZenResult } from "../workerEgress.js";
 import { readStreamFully, sendJson } from "../httpIO.js";
@@ -52,6 +53,12 @@ export async function handleWorkerTests(
           )
         : attachAnonymousZenResult(networkProbe, null);
       probes.set(probe);
+      if (probe.ok && probe.egressIp) {
+        const saved = await store.save({
+          proxyPool: applyProbeEgressIps(store.get().proxyPool, [probe]),
+        });
+        upstream.updateSettings(saved);
+      }
       if (!probe.ok) {
         sendJson(res, 502, {
           ok: false,

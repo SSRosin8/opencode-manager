@@ -100,7 +100,9 @@ export const ADMIN_MARKUP = `</head>
                 <thead>
                   <tr>
                     <th data-i18n="colWorkerRoute">Worker / route</th>
-                    <th data-i18n="colTraffic">Traffic</th>
+                    <th data-i18n="colRequests">Requests</th>
+                    <th data-i18n="colSuccess">Success</th>
+                    <th data-i18n="colFailures">Failures</th>
                     <th data-i18n="colTokens">Tokens</th>
                     <th data-i18n="colCache">Cache</th>
                     <th data-i18n="colState">State</th>
@@ -125,12 +127,12 @@ export const ADMIN_MARKUP = `</head>
               <table class="nodes attempts-table">
                 <thead>
                   <tr>
-                    <th data-i18n="colRequestAttempt">Request / attempt</th>
-                    <th data-i18n="colOperation">Operation</th>
-                    <th data-i18n="colWorkerRoute">Worker / route</th>
+                    <th data-i18n="colRequestChain">Request chain</th>
+                    <th data-i18n="colEndpointModel">Endpoint / model</th>
+                    <th data-i18n="colWorkerEgress">Worker / egress</th>
                     <th data-i18n="colResult">Result</th>
                     <th data-i18n="colLatency">Latency</th>
-                    <th data-i18n="colSwitch">Switch</th>
+                    <th data-i18n="colNextAction">Next action</th>
                   </tr>
                 </thead>
                 <tbody id="ov-attempts"></tbody>

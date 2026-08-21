@@ -304,6 +304,16 @@ export class SettingsStore {
     );
   }
 
+  /** Clear transient request/error history without changing gateway settings. */
+  clearRequestHistory(): void {
+    this.status.lastRequestAt = null;
+    this.status.lastRequestPath = null;
+    this.status.lastRequestStatus = null;
+    this.status.lastError = null;
+    this.status.recentErrors = [];
+    this.status.recentGatewayRejections = [];
+  }
+
   updateReadyCount(ready: number, total: number): void {
     this.status.readyAccountCount = ready;
     this.status.enabledAccountCount = total;

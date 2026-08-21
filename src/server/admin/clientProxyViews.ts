@@ -4,6 +4,7 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
       const pool = settings.proxyPool || [];
       const direct = pool.filter((p) => p.usable).length;
       const bridged = pool.filter((p) => !p.usable && p.bridgeable).length;
+      const unavailable = Math.max(0, pool.length - direct - bridged);
       const total = pool.length;
       const ready = st.readyAccountCount ?? 0;
       const workers = st.accountCount ?? (settings.accounts || []).length;
@@ -14,13 +15,11 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
       const clashOn = !!st.clashBridgeEnabled || bridgeOn();
 
       const html = [
-        { k: t("metricGateway"), v: running ? t("running") : t("stopped"), vcls: running ? "ok" : "", foot: running ? '<span class="tag ok">' + escapeHtml(t("healthy")) + '</span>' + sparkSvg(1, "#22c55e") : '<span class="tag err">' + escapeHtml(t("stopped")) + '</span>' },
-        { k: t("metricWorkers"), v: workers + " " + t("total") + ", " + enabledWorkers + " " + t("enabled"), vcls: "", foot: '<div class="donut-wrap"><div class="donut" style="--p:' + pct + '%" data-pct="' + pct + '%"></div><div class="legend-dots"><span class="r">' + ready + " " + t("ready") + '</span><span class="b">' + busy + " " + t("busy") + '</span></div></div>' },
-        { k: t("metricProxyNodes"), v: total + " " + t("total"), vcls: "blue", foot: sparkSvg(2, "var(--accent)") },
-        { k: t("metricDirect"), v: String(direct), vcls: "blue", foot: sparkSvg(3, "var(--accent-hi)") },
-        { k: t("metricBridged"), v: String(bridged), vcls: "blue", foot: sparkSvg(4, "var(--accent)") },
-        { k: t("metricClash"), v: clashOn ? t("enabled") : t("disabled"), vcls: clashOn ? "ok" : "", foot: clashOn ? '<span class="tag ok">' + escapeHtml(bridgeProbeOk === false ? t("disconnected") : t("connected")) + '</span>' : '<span class="tag">' + escapeHtml(t("disabled")) + '</span>' },
-      ].map((m, index) => '<div class="metric" data-metric-index="' + index + '"><div class="k">' + escapeHtml(m.k) + '</div><div class="v ' + m.vcls + '">' + escapeHtml(m.v) + '</div><div class="foot">' + m.foot + '</div></div>').join("");
+        { k: t("metricGateway"), v: running ? t("running") : t("stopped"), vcls: running ? "ok" : "", foot: '<span class="tag ' + (running ? 'ok' : 'err') + '">' + escapeHtml(running ? t("healthy") : t("stopped")) + '</span>', detail: t("metricGatewayDetail") },
+        { k: t("metricWorkers"), v: ready + " / " + enabledWorkers, vcls: ready === enabledWorkers ? "ok" : "", foot: '<span class="metric-footline">' + escapeHtml(t("readyWorkers")) + '</span>', detail: t("metricWorkersDetail")(workers, enabledWorkers, ready, busy, pct) },
+        { k: t("metricProxyNodes"), v: String(total), vcls: "blue", foot: '<span class="metric-footline">' + escapeHtml(t("availableRoutes")) + '</span>', detail: t("metricProxyDetail")(direct, bridged, unavailable) },
+        { k: t("metricClash"), v: clashOn ? t("enabled") : t("disabled"), vcls: clashOn ? "ok" : "", foot: clashOn ? '<span class="tag ok">' + escapeHtml(bridgeProbeOk === false ? t("disconnected") : t("connected")) + '</span>' : '<span class="tag">' + escapeHtml(t("disabled")) + '</span>', detail: t("metricClashDetail") },
+      ].map((m, index) => '<div class="metric metric-detail" tabindex="0" data-metric-index="' + index + '"><div class="k">' + escapeHtml(m.k) + '</div><div class="v ' + m.vcls + '">' + escapeHtml(m.v) + '</div><div class="foot">' + m.foot + '</div><div class="metric-popover" role="tooltip">' + escapeHtml(m.detail) + '</div></div>').join("");
       $(targetId).innerHTML = html;
     }
 
@@ -36,13 +35,12 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
       const donut = metric.querySelector(".donut");
       const readyLabel = metric.querySelector(".legend-dots .r");
       const busyLabel = metric.querySelector(".legend-dots .b");
-      if (value) value.textContent = workers + " " + t("total") + ", " + enabled + " " + t("enabled");
-      if (donut) {
-        donut.style.setProperty("--p", pct + "%");
-        donut.dataset.pct = pct + "%";
-      }
-      if (readyLabel) readyLabel.textContent = ready + " " + t("ready");
-      if (busyLabel) busyLabel.textContent = busy + " " + t("busy");
+      if (value) value.textContent = ready + " / " + enabled;
+      if (donut) donut.remove();
+      if (readyLabel) readyLabel.textContent = t("readyWorkers");
+      if (busyLabel) busyLabel.remove();
+      const detail = metric.querySelector(".metric-popover");
+      if (detail) detail.textContent = t("metricWorkersDetail")(workers, enabled, ready, busy, pct);
     }
 
     function patchBatchWorkerMetrics() {
@@ -98,10 +96,10 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
           const egressCls = shared || !p ? "shared" : "";
           const egressTitle = !p
             ? t("sharedIp")
-            : (shared ? t("sharedIp") : (probe?.egressIp || "—"));
+            : (shared ? t("sharedIp") : (probe?.egressIp || p.egressIp || "—"));
           const egressSub = !p
             ? t("multipleWorkers")
-            : (shared ? t("multipleWorkers") : (probe?.egressIp ? (p.type + " · " + p.port) : t("notTested")));
+            : (shared ? t("multipleWorkers") : ((probe?.egressIp || p.egressIp) ? (p.type + " · " + p.port) : t("notTested")));
           const midName = p ? p.name : t("noProxy");
           const midSub = p
             ? ((p.clashType || p.type) + (p.usable ? " · " + t("routeDirect") : showBridge ? " · " + (p.clashType || p.type) : ""))

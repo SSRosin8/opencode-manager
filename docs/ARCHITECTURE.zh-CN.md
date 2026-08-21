@@ -64,7 +64,7 @@ settings -> domain event types when required
 
 HTTP 层应由一个小型装配模块和多个领域路由组成：
 
-- Relay：模型列表、Chat Completions、鉴权、流式响应。
+- Relay：模型列表、Chat Completions、Responses、鉴权、流式响应。
 - Settings/Status：设置读写、运行状态、免费模型状态。
 - Workers：启停、连接测试、统计重置、代理分配。
 - Proxy Pool/Probe：节点增删、单测、批测状态与批测任务。
@@ -86,7 +86,8 @@ HTTP 层应由一个小型装配模块和多个领域路由组成：
 ## 状态与持久化
 
 - `GatewaySettings` 是持久化配置的唯一规范模型；所有外部输入先归一化再保存。
-- 运行时统计和批测进度不得混入长期配置，除非具有明确迁移策略。
+- Worker 请求、Token 和上游尝试由独立统计存储持久化，不混入 `GatewaySettings`；成功探测的公网出口 IP 属于代理节点的持久配置字段。
+- 批测进度等短期任务状态只保留在运行时，不得混入长期配置，除非具有明确迁移策略。
 - 写入应保持原子性或可恢复性，加载损坏文件时不得泄漏内容。
 - 修改配置格式时需要兼容旧数据的测试，并在使用指南中说明迁移影响。
 

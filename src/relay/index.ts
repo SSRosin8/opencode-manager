@@ -16,6 +16,7 @@ export {
 } from "./accounts.js";
 export {
   transformRequestBody,
+  transformResponsesRequestBody,
   passthroughBody,
   injectReasoningContentForThinkingModel,
   isThinkingMessageModel,
@@ -25,5 +26,6 @@ export {
   DEFAULT_BASE_URL,
   normalizeBaseUrl,
   buildChatCompletionsUrl,
+  buildResponsesUrl,
   buildModelsUrl,
 } from "./url.js";

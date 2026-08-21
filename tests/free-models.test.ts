@@ -1,5 +1,5 @@
 /**
- * Unit tests for the free-model scraper + registry.
+ * Unit tests for the free-model catalog + registry.
  */
 import { describe, expect, it } from "vitest";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
@@ -12,31 +12,26 @@ import {
   parseFreeModelIds,
 } from "../src/proxy/freeModels.js";
 
-const PRICING_HTML = `<html><body>
-<h2>Pricing</h2>
-<p>prices per 1M tokens</p>
-<table><thead><tr><th>Model</th><th>Input</th><th>Output</th><th>Cached Read</th><th>Cached Write</th></tr></thead><tbody>
-<tr><td>Big Pickle</td><td>Free</td><td>Free</td><td>Free</td><td>-</td></tr>
-<tr><td>DeepSeek V4 Flash Free</td><td>Free</td><td>Free</td><td>Free</td><td>-</td></tr>
-<tr><td>MiMo-V2.5 Free</td><td>Free</td><td>Free</td><td>Free</td><td>-</td></tr>
-<tr><td>MiniMax M3</td><td>$0.30</td><td>$1.20</td><td>$0.06</td><td>-</td></tr>
-<tr><td>Claude Opus 4.5</td><td>$5.00</td><td>$25.00</td><td>$0.50</td><td>$6.25</td></tr>
-</tbody></table>
-<table><thead><tr><th>Model</th><th>Model ID</th></tr></thead><tbody>
-<tr><td>Big Pickle</td><td>big-pickle</td></tr>
-</tbody></table>
-</body></html>`;
+const MODEL_CATALOG = {
+  object: "list",
+  data: [
+    { id: "big-pickle", object: "model" },
+    { id: "deepseek-v4-flash-free", object: "model" },
+    { id: "mimo-v2.5-free", object: "model" },
+    { id: "minimax-m3", object: "model" },
+    { id: "claude-opus-5", object: "model" },
+  ],
+};
 
 describe("parseFreeModelIds", () => {
-  it("extracts only rows whose Input & Output are Free", () => {
-    const ids = parseFreeModelIds(PRICING_HTML);
+  it("extracts only official free ids and the explicit special free id", () => {
+    const ids = parseFreeModelIds(MODEL_CATALOG);
     expect(ids.sort()).toEqual(["big-pickle", "deepseek-v4-flash-free", "mimo-v2.5-free"]);
   });
 
-  it("ignores non-pricing tables (no Cached Write header)", () => {
-    const html = `<table><thead><tr><th>Model</th><th>Model ID</th></tr></thead>
-      <tbody><tr><td>Big Pickle</td><td>big-pickle</td></tr></tbody></table>`;
-    expect(parseFreeModelIds(html)).toEqual([]);
+  it("rejects malformed catalogs and paid ids with misleading metadata", () => {
+    expect(parseFreeModelIds({ models: [{ id: "big-pickle" }] })).toEqual([]);
+    expect(parseFreeModelIds({ data: [{ id: "gpt-5.5", free: true }, null] })).toEqual([]);
   });
 
   it("normalizes display names to model ids", () => {
@@ -64,13 +59,15 @@ describe("FreeModelRegistry", () => {
     expect(KNOWN_FREE_MODELS.length).toBeGreaterThan(0);
   });
 
-  it("refresh scrapes, persists cache, and falls back on failure", async () => {
+  it("refreshes the catalog, persists cache, and falls back on failure", async () => {
     const dir = await mkdtemp(join(tmpdir(), "opencode-manager-fm-"));
     try {
       const reg = new FreeModelRegistry({ cachePath: join(dir, "free-models.json") });
 
-      // Successful scrape
-      let status = await reg.refresh(async () => new Response(PRICING_HTML, { status: 200 }));
+      // Successful catalog refresh
+      let status = await reg.refresh(async () =>
+        new Response(JSON.stringify(MODEL_CATALOG), { status: 200 })
+      );
       expect(status.count).toBe(3);
       expect(status.lastError).toBeNull();
       expect(status.usingBaseline).toBe(false);
@@ -107,6 +104,51 @@ describe("FreeModelRegistry", () => {
       expect(status.lastError).toBeTruthy();
       expect(status.usingBaseline).toBe(true);
       expect(reg.has("big-pickle")).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("cancels a chunked catalog response as soon as it exceeds the size limit", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "opencode-manager-fm3-"));
+    let cancelled = false;
+    try {
+      const oversized = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array(1024 * 1024));
+          controller.enqueue(new Uint8Array(1024 * 1024 + 1));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      });
+      const reg = new FreeModelRegistry({ cachePath: join(dir, "free-models.json") });
+      const status = await reg.refresh(async () => new Response(oversized, { status: 200 }));
+
+      expect(status.lastError).toBe("model catalog response is too large");
+      expect(cancelled).toBe(true);
+      expect(status.usingBaseline).toBe(true);
+      expect(reg.has("big-pickle")).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("supports fetch response doubles without a readable body", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "opencode-manager-fm4-"));
+    try {
+      const responseDouble = {
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        body: null,
+        text: async () => JSON.stringify(MODEL_CATALOG),
+      } as Response;
+      const reg = new FreeModelRegistry({ cachePath: join(dir, "free-models.json") });
+      const status = await reg.refresh((async () => responseDouble) as typeof fetch);
+
+      expect(status.lastError).toBeNull();
+      expect(status.count).toBe(3);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

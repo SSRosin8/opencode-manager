@@ -608,7 +608,9 @@ describe("admin proxy probe HTTP APIs", () => {
   it("POST /admin/api/proxy-pool/:id/test returns latency", async () => {
     const port = await boot([
       px({ id: "px1", name: "SG", type: "http", host: "10.0.0.9", port: 8080 }),
-    ]);
+    ], async (_url, init) => init.method === "POST"
+      ? new Response(JSON.stringify({ choices: [] }), { status: 200 })
+      : new Response("203.0.113.19", { status: 200 }));
     const res = await fetch(`http://127.0.0.1:${port}/admin/api/proxy-pool/px1/test`, {
       method: "POST",
     });
@@ -621,6 +623,7 @@ describe("admin proxy probe HTTP APIs", () => {
     expect(data.result.ok).toBe(true);
     expect(data.result.latencyMs).toBeGreaterThanOrEqual(0);
     expect(data.probeResults.px1.latencyMs).toBe(data.result.latencyMs);
+    expect(app?.store.get().proxyPool.find((proxy) => proxy.id === "px1")?.egressIp).toBe("203.0.113.19");
   });
 
   it("POST /admin/api/proxy-pool/test-batch probes all", async () => {
@@ -635,7 +638,9 @@ describe("admin proxy probe HTTP APIs", () => {
         usable: false,
         bridgeable: true,
       }),
-    ]);
+    ], async (_url, init) => init.method === "POST"
+      ? new Response(JSON.stringify({ choices: [] }), { status: 200 })
+      : new Response("198.51.100.31", { status: 200 }));
     const res = await fetch(`http://127.0.0.1:${port}/admin/api/proxy-pool/test-batch`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -650,6 +655,7 @@ describe("admin proxy probe HTTP APIs", () => {
     expect(data.summary.ok).toBe(1);
     expect(data.summary.skip).toBe(1);
     expect(data.results.find((r) => r.id === "b")?.skipped).toBe(true);
+    expect(app?.store.get().proxyPool.find((proxy) => proxy.id === "a")?.egressIp).toBe("198.51.100.31");
   });
 
   it("publishes incremental batch progress and rejects overlapping batches", async () => {
