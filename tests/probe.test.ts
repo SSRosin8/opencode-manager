@@ -431,13 +431,15 @@ describe("probeAnonymousZenProxy", () => {
   });
 
   it.each([
-    [401, "blocked"],
-    [403, "blocked"],
-    [429, "rate_limited"],
-    [500, "temporary_failure"],
-    [400, "temporary_failure"],
-    [407, "unreachable"],
-  ] as const)("maps HTTP %i to %s", async (httpStatus, status) => {
+    [401, "blocked", "unauthorized"],
+    [403, "blocked", "forbidden"],
+    [429, "rate_limited", "rate_limited"],
+    [500, "temporary_failure", "upstream_failure"],
+    [400, "temporary_failure", "invalid_request"],
+    [404, "temporary_failure", "not_found"],
+    [408, "temporary_failure", "request_timeout"],
+    [407, "unreachable", "proxy_auth_required"],
+  ] as const)("maps HTTP %i to %s with reason %s", async (httpStatus, status, reasonCode) => {
     const result = await probeAnonymousZenProxy(
       px({ id: `s${httpStatus}`, name: "status", type: "http", host: "10.0.0.5", port: 8080 }),
       bridgeOff,
@@ -454,6 +456,7 @@ describe("probeAnonymousZenProxy", () => {
     expect(result.ok).toBe(false);
     expect(result.httpStatus).toBe(httpStatus);
     expect(result.error).toBe("upstream rejected");
+    expect(result.reasonCode).toBe(reasonCode);
     if (httpStatus === 429) expect(result.retryAfterSeconds).toBe(120);
   });
 
@@ -479,6 +482,7 @@ describe("probeAnonymousZenProxy", () => {
     expect(result.status).toBe("unreachable");
     expect(result.httpStatus).toBeNull();
     expect(result.error).toBe("Timeout");
+    expect(result.reasonCode).toBe("transport_timeout");
     expect(result.latencyMs).toBeGreaterThanOrEqual(10);
   });
 
@@ -656,6 +660,73 @@ describe("admin proxy probe HTTP APIs", () => {
     expect(data.summary.skip).toBe(1);
     expect(data.results.find((r) => r.id === "b")?.skipped).toBe(true);
     expect(app?.store.get().proxyPool.find((proxy) => proxy.id === "a")?.egressIp).toBe("198.51.100.31");
+  });
+
+  it.each([
+    [200, "primary_model_failure"],
+    [503, "provider_failure"],
+  ] as const)("cross-checks one egress after repeated 503s and diagnoses %s", async (
+    fallbackStatus,
+    diagnosis
+  ) => {
+    const models: string[] = [];
+    let ip = 0;
+    const port = await boot([
+      px({ id: "cross-a", name: "a", type: "http", host: "10.0.0.1", port: 80 }),
+      px({ id: "cross-b", name: "b", type: "http", host: "10.0.0.2", port: 80 }),
+      px({ id: "cross-c", name: "c", type: "http", host: "10.0.0.3", port: 80 }),
+    ], async (_url, init) => {
+      if (init.method !== "POST") return new Response(`203.0.113.${++ip}`, { status: 200 });
+      const model = (JSON.parse(String(init.body)) as { model: string }).model;
+      models.push(model);
+      const primary = model === "big-pickle";
+      return new Response(JSON.stringify({ error: { message: "provider unavailable" } }), {
+        status: primary ? 503 : fallbackStatus,
+      });
+    });
+    const response = await fetch(`http://127.0.0.1:${port}/admin/api/proxy-pool/test-batch`, {
+      method: "POST",
+      body: "{}",
+    });
+    const body = await response.json() as {
+      results: Array<{ anonymousZen?: { ok?: boolean; status?: string; diagnosis?: string; crossCheck?: { model: string } } }>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(models.filter((model) => model !== "big-pickle")).toHaveLength(1);
+    expect(models).toHaveLength(4);
+    expect(body.results.filter((result) => result.anonymousZen?.crossCheck)).toHaveLength(1);
+    expect(body.results.find((result) => result.anonymousZen?.crossCheck)?.anonymousZen).toMatchObject({
+      diagnosis,
+      ...(fallbackStatus === 200 ? { ok: true, status: "usable" } : { ok: false }),
+      crossCheck: { model: expect.not.stringMatching(/^big-pickle$/) },
+    });
+  });
+
+  it("does not cross-check after a non-503 result breaks the sequence", async () => {
+    const models: string[] = [];
+    let ip = 0;
+    const port = await boot([
+      px({ id: "break-a", name: "a", type: "http", host: "10.0.0.1", port: 80 }),
+      px({ id: "break-b", name: "b", type: "http", host: "10.0.0.2", port: 80 }),
+      px({ id: "break-c", name: "c", type: "http", host: "10.0.0.3", port: 80 }),
+    ], async (_url, init) => {
+      if (init.method !== "POST") return new Response(`203.0.113.${++ip}`, { status: 200 });
+      const model = (JSON.parse(String(init.body)) as { model: string }).model;
+      models.push(model);
+      const primaryCount = models.filter((item) => item === "big-pickle").length;
+      if (model === "big-pickle") {
+        await new Promise((resolve) => setTimeout(resolve, (primaryCount - 1) * 10));
+      }
+      return new Response(JSON.stringify({ choices: [] }), {
+        status: model === "big-pickle" && primaryCount === 2 ? 200 : 503,
+      });
+    });
+    const response = await fetch(`http://127.0.0.1:${port}/admin/api/proxy-pool/test-batch`, {
+      method: "POST", body: "{}",
+    });
+    expect(response.status).toBe(200);
+    expect(models.filter((model) => model !== "big-pickle")).toHaveLength(0);
   });
 
   it("publishes incremental batch progress and rejects overlapping batches", async () => {

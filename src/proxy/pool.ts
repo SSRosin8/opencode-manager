@@ -438,6 +438,8 @@ export type AssignHealthyProxiesResult = {
   unassigned: number;
   /** Distinct healthy+bindable proxies available at assign time. */
   healthyAvailable: number;
+  /** Existing authenticated-worker bindings that remained unchanged. */
+  preserved: number;
   assignments: Array<{
     accountId: string;
     proxyId: string | null;
@@ -446,9 +448,10 @@ export type AssignHealthyProxiesResult = {
 };
 
 /**
- * Bind each worker to a unique pool proxy that probed healthy.
- * Prefer lower latency; reassign all workers (does not share one proxy across workers).
- * When healthy proxies run out, remaining workers get proxyId=null.
+ * Repair authenticated-worker bindings without disturbing anonymous workers.
+ * Existing reachable bindings win; only missing, stale, or same-kind duplicate
+ * bindings consume the remaining lowest-latency egresses. Anonymous and
+ * authenticated workers may intentionally share one measured public IP.
  */
 export function assignHealthyProxiesToWorkers(
   input: AssignHealthyProxiesInput
@@ -457,8 +460,7 @@ export function assignHealthyProxiesToWorkers(
     .filter((p) => {
       if (!isBindablePoolProxy(p, input.bridge)) return false;
       const pr = input.probeResults[p.id];
-      if (!(pr && pr.ok && pr.health === "healthy")) return false;
-      if (!pr.anonymousZen?.ok) return false;
+      if (!(pr && pr.ok && pr.egressIp)) return false;
       return p.source !== "controller" || Boolean(pr.egressIp);
     })
     .sort((a, b) => {
@@ -475,9 +477,11 @@ export function assignHealthyProxiesToWorkers(
       return list.findIndex((candidate) => input.probeResults[candidate.id]?.egressIp === ip) === index;
     });
 
-  const cursorByKind = { anonymous_zen: 0, authenticated_zen: 0 };
+  const healthyById = new Map(healthy.map((proxy) => [proxy.id, proxy]));
+  const reservedAuthenticatedIps = new Set<string>();
   let assigned = 0;
   let unassigned = 0;
+  let preserved = 0;
   const assignments: AssignHealthyProxiesResult["assignments"] = [];
   const accounts = input.accounts.map((a) => {
     const kind: "anonymous_zen" | "authenticated_zen" =
@@ -488,10 +492,31 @@ export function assignHealthyProxiesToWorkers(
           : a.apiKey.trim()
             ? "authenticated_zen"
             : "anonymous_zen";
-    const cursor = cursorByKind[kind];
-    if (cursor < healthy.length) {
-      const p = healthy[cursor];
-      cursorByKind[kind] += 1;
+    if (kind === "anonymous_zen") {
+      assignments.push({
+        accountId: a.id,
+        proxyId: a.proxyId ?? null,
+        proxyName: input.pool.find((proxy) => proxy.id === a.proxyId)?.name ?? null,
+      });
+      return { ...a, kind, proxyId: a.proxyId ?? null, proxy: a.proxy ?? null };
+    }
+
+    const current = a.proxyId ? healthyById.get(a.proxyId) : undefined;
+    const currentIp = current ? input.probeResults[current.id]?.egressIp : null;
+    if (current && currentIp && !reservedAuthenticatedIps.has(currentIp)) {
+      reservedAuthenticatedIps.add(currentIp);
+      preserved += 1;
+      assigned += 1;
+      assignments.push({ accountId: a.id, proxyId: current.id, proxyName: current.name });
+      return { ...a, kind, proxyId: current.id, proxy: null as AccountProxy };
+    }
+
+    const p = healthy.find((candidate) => {
+      const ip = input.probeResults[candidate.id]?.egressIp;
+      return Boolean(ip && !reservedAuthenticatedIps.has(ip));
+    });
+    if (p) {
+      reservedAuthenticatedIps.add(input.probeResults[p.id]!.egressIp!);
       assigned += 1;
       assignments.push({ accountId: a.id, proxyId: p.id, proxyName: p.name });
       return {
@@ -516,6 +541,7 @@ export function assignHealthyProxiesToWorkers(
     assigned,
     unassigned,
     healthyAvailable: healthy.length,
+    preserved,
     assignments,
   };
 }

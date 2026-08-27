@@ -13,9 +13,10 @@ export const ADMIN_CLIENT_CORE = `    function storageGet(key) {
     let status = null;
     const workerTestingIds = new Set();
     const workerTestResults = new Map();
+    const workerTestModels = new Map();
     let collapsedWorkerIds = readCollapsedWorkerIds();
     let page = storageGet("opencode-manager-page") || "overview";
-    if (!["overview", "gateway", "proxy", "workers", "usage"].includes(page)) page = "overview";
+    if (!["overview", "gateway", "proxy", "workers", "models", "usage"].includes(page)) page = "overview";
     let proxyTab = storageGet("opencode-manager-proxy-tab") || "nodes";
     if (!["nodes", "sources", "bindings"].includes(proxyTab)) proxyTab = "nodes";
     let showIdleWorkers = false;
@@ -197,13 +198,10 @@ export const ADMIN_CLIENT_CORE = `    function storageGet(key) {
         if (fs.options[2]) fs.options[2].textContent = t("srcSub");
         if (fs.options[3]) fs.options[3].textContent = t("srcController");
       }
-      const fh = $("flt-health");
-      if (fh) {
-        if (fh.options[0]) fh.options[0].textContent = t("allHealth");
-        if (fh.options[1]) fh.options[1].textContent = t("healthy");
-        if (fh.options[2]) fh.options[2].textContent = t("warning");
-        if (fh.options[3]) fh.options[3].textContent = t("unreachable");
-      }
+      const fr = $("flt-route-health");
+      if (fr) ["allConnectivity", "routeReachable", "routeUnreachable", "routeConfigError", "routeUntested"].forEach((key, i) => { if (fr.options[i]) fr.options[i].textContent = t(key); });
+      const fz = $("flt-zen-health");
+      if (fz) ["allZenStatus", "zenUsable", "zenRateLimited", "zenBlocked", "zenTemporary", "zenUnreachable", "zenUnverified"].forEach((key, i) => { if (fz.options[i]) fz.options[i].textContent = t(key); });
       $("lang-en").classList.toggle("active", lang === "en");
       $("lang-zh").classList.toggle("active", lang === "zh");
       syncThemeControl();
@@ -356,13 +354,61 @@ export const ADMIN_CLIENT_CORE = `    function storageGet(key) {
       return structural === "healthy" ? "warn" : structural;
     }
 
+    function routeHealth(p) {
+      if (!p) return "unreachable";
+      if (testingIds.has(p.id)) return "testing";
+      const pr = probeResults[p.id];
+      if (pr?.skipped && ["disabled", "unusable", "bridge_required", "no_egress"].includes(pr.reason)) return "config_error";
+      if (pr) return pr.ok ? "reachable" : "unreachable";
+      if (!p.enabled || (!p.usable && (!p.bridgeable || !bridgeOn()))) return "config_error";
+      return "untested";
+    }
+
+    function zenHealth(p) {
+      return probeResults[p?.id]?.anonymousZen?.status || "unverified";
+    }
+
+    function routeHealthTag(p) {
+      const state = routeHealth(p);
+      const keys = { testing: "testing", reachable: "routeReachable", unreachable: "routeUnreachable", config_error: "routeConfigError", untested: "routeUntested" };
+      const classes = { testing: "accent", reachable: "ok", unreachable: "err", config_error: "warn", untested: "" };
+      const pr = probeResults[p.id];
+      const details = [
+        t(keys[state]),
+        pr?.latencyMs != null ? t("detailNetworkLatency") + ": " + pr.latencyMs + " ms" : null,
+        pr?.egressIp ? t("detailEgressIp") + ": " + pr.egressIp : null,
+        pr?.error ? t("detailError") + ": " + pr.error : null,
+        pr?.testedAt ? t("detailTestedAt") + ": " + relTime(pr.testedAt) : null,
+      ].filter(Boolean).join("\\n");
+      return '<span class="tag ' + classes[state] + ' hover-detail" tabindex="0" data-tooltip="' + escapeAttr(details) + '">' + escapeHtml(t(keys[state])) + '</span>';
+    }
+
     function anonymousZenTag(p) {
       const result = probeResults[p.id]?.anonymousZen;
       if (!result) return '<span class="tag">' + escapeHtml(t("zenUnverified")) + '</span>';
-      if (result.status === "usable") return '<span class="tag ok">' + escapeHtml(t("zenUsable")) + '</span>';
-      if (result.status === "rate_limited") return '<span class="tag warn">' + escapeHtml(t("zenRateLimited")) + '</span>';
-      if (result.status === "temporary_failure") return '<span class="tag warn">' + escapeHtml(t("zenTemporary")) + '</span>';
-      return '<span class="tag err">' + escapeHtml(result.status === "blocked" ? t("zenBlocked") : t("zenUnreachable")) + '</span>';
+      const keys = { usable: "zenUsable", rate_limited: "zenRateLimited", temporary_failure: "zenTemporary", blocked: "zenBlocked", unreachable: "zenUnreachable" };
+      const reasonKeys = {
+        invalid_request: "zenInvalidRequest", payment_required: "zenPaymentRequired",
+        not_found: "zenNotFound", request_timeout: "zenRequestTimeout",
+        request_conflict: "zenRequestRejected", request_rejected: "zenRequestRejected",
+        upstream_failure: "zenUpstreamFailure", unexpected_redirect: "zenUnexpectedResponse",
+        unexpected_http_status: "zenUnexpectedResponse", transport_timeout: "zenTransportTimeout",
+        transport_dns: "zenDnsFailure", transport_tls: "zenTlsFailure",
+        transport_connection: "zenConnectionFailure", transport_failure: "zenTransportFailure",
+        primary_model_failure: "zenPrimaryModelFailure", provider_failure: "zenProviderFailure",
+        inconclusive: "zenCrossCheckInconclusive",
+      };
+      const labelKey = reasonKeys[result.diagnosis] || reasonKeys[result.reasonCode] || keys[result.status] || "zenUnreachable";
+      const cls = result.status === "usable" ? "ok" : ["rate_limited", "temporary_failure"].includes(result.status) ? "warn" : "err";
+      const details = [
+        t(labelKey),
+        result.httpStatus != null ? "HTTP " + result.httpStatus : null,
+        result.latencyMs != null ? t("detailZenLatency") + ": " + result.latencyMs + " ms" : null,
+        result.retryAfterSeconds != null ? t("detailRetryAfter") + ": " + result.retryAfterSeconds + "s" : null,
+        result.error ? t("detailError") + ": " + result.error : null,
+        result.testedAt ? t("detailTestedAt") + ": " + relTime(result.testedAt) : null,
+      ].filter(Boolean).join("\\n");
+      return '<span class="tag ' + cls + ' hover-detail" tabindex="0" data-tooltip="' + escapeAttr(details) + '">' + escapeHtml(t(labelKey)) + '</span>';
     }
 
     function latencyCell(p) {

@@ -24,12 +24,10 @@ Prerequisites: Node.js **20.18.1 or newer** and npm. Mihomo/Clash Meta with its 
 git clone https://github.com/SSRosin8/opencode-manager.git
 cd opencode-manager
 npm ci
-npm run build
 npm start
-# or: npm run dev
 ```
 
-`npm start` runs in the foreground of the current terminal; closing the terminal stops it, and `Ctrl+C` shuts it down. It runs the built `dist/` output, so rebuild after source changes. `npm run dev` runs the source directly for development.
+`npm start` builds the source, starts the service in the background, waits for health, and prints the Admin URL. Use `npm run status`, `npm run restart`, and `npm stop` for routine operation. Runtime metadata and logs are stored under the ignored `data/run/` directory. For foreground operation use `npm run build && npm run foreground`; use `npm run dev` during development.
 
 The service listens on `127.0.0.1:9876` by default. For first-time setup, Clash/Mihomo configuration, OpenCode integration, verification, backups, and troubleshooting, see:
 
@@ -48,11 +46,13 @@ Development boundaries and module ownership are defined in [AGENTS.md](AGENTS.md
 |--------|---------|
 | Admin UI | Basic Gateway settings, proxy sources and tests, Worker routing, client access, and optional CLI compatibility headers |
 | `data/settings.json` | Persisted settings (auto-created) |
+| `data/probe-state.json` | Sanitized proxy probe results and latest batch state |
 | `PORT` | Listen port |
 | `OPENCODE_MANAGER_HOST` | Bind address, defaults to `127.0.0.1`; use `0.0.0.0` only behind protected admin access |
 | `OPENCODE_MANAGER_SETTINGS_PATH` | Custom settings file path |
 | `OPENCODE_MANAGER_STATS_PATH` | Custom Worker statistics file path |
 | `OPENCODE_MANAGER_MODELS_URL` | Override the official Zen model catalog URL used to refresh free models |
+| `OPENCODE_MANAGER_ANONYMOUS_ZEN_TIMEOUT_MS` | Anonymous Zen probe timeout in milliseconds (5,000-120,000) |
 | `OPENCODE_SYNTHESIZE_CLI_HEADERS` | `true` to synthesize CLI identity headers (also configurable in Admin) |
 | `OPENCODE_USER_AGENT` / `OPENCODE_CLIENT` / `OPENCODE_PROJECT` | Default values for synthesized CLI identity headers |
 
@@ -119,7 +119,7 @@ A subscription fetch and a Controller import are different data views. A fetch p
 
 The bridge has two independent paths: Controller URL/secret is the **control plane** used to inspect and switch nodes; local host/mixed-port is the **data plane** carrying relay traffic. `127.0.0.1` always means the machine running opencode-manager, not the machine whose browser opened Admin.
 
-Probe candidate nodes after importing. A probe records and persists the public egress IP, then sends a real anonymous Zen free-model request with `Bearer public`; after a restart the UI keeps showing the last successful egress, and a failed probe does not erase it. Only successful egress routes are eligible for automatic assignment. Nodes are deduplicated by public IP, and one egress may host at most one anonymous worker plus one signed-in worker. A single mixed-port uses one shared selector; the gateway serializes node selection and connection setup. Do not switch that selector from another client while the gateway is running. Use separate Mihomo inbounds or instances when workers must permanently own concurrent ports.
+Probe candidate nodes after importing. A probe records and persists the public egress IP, then sends a real anonymous Zen free-model request with `Bearer public`; the latest probe state survives restarts. A unique egress that passes anonymous Zen creates an anonymous Worker automatically. Repairing signed-in bindings only requires a reachable route with a verified IP. Nodes are deduplicated by public IP, and one egress may host at most one anonymous worker plus one signed-in worker. A single mixed-port uses one shared selector; the gateway serializes node selection and connection setup. Do not switch that selector from another client while the gateway is running. Use separate Mihomo inbounds or instances when workers must permanently own concurrent ports.
 
 Testing an individual node verifies its public IP and anonymous Zen access, then immediately adds a missing anonymous Worker. **Batch Test** first screens nodes through Mihomo's delay API, then verifies every distinct public IP against anonymous Zen. Each verified unique egress is automatically added as an anonymous Worker; you only need to add signed-in Zen accounts manually. Re-running individual or batch tests only adds missing Workers and never duplicates or removes existing ones. Direct screening runs with up to twelve-way concurrency; Clash checks reuse one selector switch for the public-IP and Zen requests. A single shared Clash selector still processes different nodes serially to prevent route mix-ups.
 
@@ -127,7 +127,7 @@ The Worker page controls routing strategy and whether each Worker receives traff
 
 The Overview separates client generation requests, per-Worker upstream attempts, and `/v1/models` attempts; a retry chain counts as one client generation request while Worker rows retain the actual routing attempts. The global model distribution is deduplicated by client request chain, while each Worker shows the models it actually attempted. Tokens include only `usage` reported by successful upstream responses, with usage coverage shown in the details. Cache hit rate is cache-read input tokens divided by total input tokens; cache misses and explicit cache writes remain separate. Token and cache totals are also grouped by model so model changes can be inspected independently. Failures before upstream routing appear in a separate Gateway rejections list. The global **Reset stats** action clears Worker counters, upstream attempts, recent errors, and gateway rejections together.
 
-Workers may be saved as an empty list. In that state relay requests return a clear `503` until Workers are added manually or recreated by Batch Test. Dense Worker, IP-isolation, proxy-node, upstream-attempt, and gateway-rejection lists use eight-item pages. Desktop navigation keeps Overview separate, groups Gateway/Proxy Pool/Workers under Resources, and places Client Usage under Client access. Each group and the whole sidebar can be collapsed independently, and the browser remembers those display preferences; mobile keeps all destinations visible in compact horizontal navigation.
+Workers may be saved as an empty list. In that state relay requests return a clear `503` until Workers are added manually or recreated by Batch Test. Dense Worker, IP-isolation, proxy-node, upstream-attempt, and gateway-rejection lists use eight-item pages. Desktop navigation keeps Overview separate, groups Gateway/Proxy Pool/Workers/Models under Resources, and places Client Usage under Client access. Each group and the whole sidebar can be collapsed independently, and the browser remembers those display preferences; mobile keeps all destinations visible in compact horizontal navigation.
 
 Admin detail hints use one keyboard-accessible tooltip style. Hovering or focusing the relevant card, statistic, or truncated value opens its hint; the layer automatically flips, stays within the viewport, and closes on Escape, scrolling, or resize.
 

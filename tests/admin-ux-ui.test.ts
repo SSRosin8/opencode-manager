@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import { ADMIN_CLIENT_ACTIONS } from "../src/server/admin/clientActions.js";
 import { ADMIN_CLIENT_CORE } from "../src/server/admin/clientCore.js";
 import { ADMIN_CLIENT_I18N } from "../src/server/admin/clientI18n.js";
+import { ADMIN_CLIENT_MODELS } from "../src/server/admin/clientModels.js";
 import { ADMIN_CLIENT_PROXY_VIEWS } from "../src/server/admin/clientProxyViews.js";
 import { ADMIN_CLIENT_TOOLTIPS } from "../src/server/admin/clientTooltips.js";
 import { ADMIN_CLIENT_WORKER_VIEWS } from "../src/server/admin/clientWorkerViews.js";
 import { ADMIN_DOCUMENT_HEAD } from "../src/server/admin/documentHead.js";
 import { ADMIN_MARKUP } from "../src/server/admin/markup.js";
+import { ADMIN_MODELS_MARKUP } from "../src/server/admin/modelsMarkup.js";
 import { ADMIN_FEATURE_STYLES } from "../src/server/admin/featureStyles.js";
 
 describe("admin proxy-pool UX contracts", () => {
@@ -238,8 +240,35 @@ describe("admin proxy-pool UX contracts", () => {
     expect(ADMIN_CLIENT_I18N).toContain('navMonitorGroup: "客户端接入"');
     expect(ADMIN_FEATURE_STYLES).toContain('.sidebar.is-collapsed .nav-group-toggle');
     expect(ADMIN_FEATURE_STYLES).toContain('.nav-group, .nav-group.is-collapsed { display:contents; }');
-    expect(ADMIN_CLIENT_CORE).toContain('if (!["overview", "gateway", "proxy", "workers", "usage"].includes(page))');
+    expect(ADMIN_CLIENT_CORE).toContain('if (!["overview", "gateway", "proxy", "workers", "models", "usage"].includes(page))');
     expect(ADMIN_CLIENT_CORE).toContain('groupContent.classList.remove("is-collapsed")');
+  });
+
+  it("shows and refreshes the official free-model catalog", () => {
+    expect(ADMIN_MARKUP).toContain('data-page="models"');
+    expect(ADMIN_MODELS_MARKUP).toContain('id="model-search"');
+    expect(ADMIN_MODELS_MARKUP).toContain('id="btn-refresh-models"');
+    expect(ADMIN_CLIENT_MODELS).toContain('fetch("/admin/api/free-models"');
+    expect(ADMIN_CLIENT_MODELS).toContain('fetch("/admin/api/free-models/refresh"');
+    expect(ADMIN_CLIENT_MODELS).toContain("freeModelStatus.lastError");
+    expect(ADMIN_CLIENT_I18N).toContain('navModels: "模型"');
+  });
+
+  it("separates exit connectivity from Zen availability", () => {
+    expect(ADMIN_MARKUP).toContain('id="flt-route-health"');
+    expect(ADMIN_MARKUP).toContain('id="flt-zen-health"');
+    expect(ADMIN_MARKUP).toContain('data-i18n="colConnectivity"');
+    expect(ADMIN_MARKUP).toContain('data-i18n="colZenAccess"');
+    expect(ADMIN_CLIENT_CORE).toContain("function routeHealth(p)");
+    expect(ADMIN_CLIENT_CORE).toContain("function zenHealth(p)");
+    expect(ADMIN_CLIENT_CORE).toContain('result.retryAfterSeconds');
+    expect(ADMIN_CLIENT_CORE).toContain('upstream_failure: "zenUpstreamFailure"');
+    expect(ADMIN_CLIENT_I18N).toContain('zenUpstreamFailure: "Zen 上游故障"');
+    expect(ADMIN_CLIENT_CORE).toContain('provider_failure: "zenProviderFailure"');
+    expect(ADMIN_CLIENT_WORKER_VIEWS).toContain('class="select select-sm acc-model"');
+    expect(ADMIN_CLIENT_WORKER_VIEWS).toContain('class="input acc-key"');
+    expect(ADMIN_CLIENT_PROXY_VIEWS).toContain("routeHealth(p) !== route");
+    expect(ADMIN_CLIENT_PROXY_VIEWS).toContain("zenHealth(p) !== zen");
   });
 
   it("shows the supported Responses endpoint in client usage without exposing admin routes", () => {

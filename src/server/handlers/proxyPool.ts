@@ -4,6 +4,8 @@ import { probeAnonymousZenProxy, probePoolProxy, type ProbeResult } from "../../
 import { applyProbeEgressIps } from "../../proxy/pool.js";
 import { attachAnonymousZenResult, syncAnonymousWorkers } from "../workerEgress.js";
 import { readBody, sendJson } from "../httpIO.js";
+import { persistProbeState } from "../context.js";
+import { logProbeFailure } from "../probeDiagnostics.js";
 
 export async function handleProxyPool(
   req: IncomingMessage,
@@ -41,6 +43,7 @@ export async function handleProxyPool(
           })
         )
       : attachAnonymousZenResult(networkProbe, null);
+    logProbeFailure("single", result);
     probes.set(result);
     let addedIds: string[] = [];
     let proxyStillExists = false;
@@ -55,6 +58,7 @@ export async function handleProxyPool(
       };
     });
     if (!proxyStillExists) probes.delete(result.id);
+    await persistProbeState(ctx);
     if (addedIds.length) {
       upstream.updateSettings(settings);
       store.updateReadyCount(
@@ -118,6 +122,7 @@ export async function handleProxyPool(
     }
     const saved = await store.removeAllProxies();
     probes.clear();
+    await persistProbeState(ctx);
     upstream.updateSettings(saved);
     store.updateReadyCount(
       upstream.rotator.readyCount(),
@@ -145,6 +150,7 @@ export async function handleProxyPool(
     }
     const saved = await store.removeProxy(id);
     probes.delete(id);
+    await persistProbeState(ctx);
     upstream.updateSettings(saved);
     store.updateReadyCount(
       upstream.rotator.readyCount(),

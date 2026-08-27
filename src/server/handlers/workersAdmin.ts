@@ -91,7 +91,7 @@ export async function handleWorkersAdmin(
     return true;
   }
 
-  // POST /admin/api/workers/assign-proxies — bind each worker to a unique probe-healthy proxy
+  // Repair signed-in Worker bindings while preserving anonymous and valid existing routes.
   if (method === "POST" && path === "/admin/api/workers/assign-proxies") {
     if (batchProbeProgress.running) {
       sendJson(res, 409, {
@@ -127,7 +127,7 @@ export async function handleWorkersAdmin(
       sendJson(res, 400, {
         error: {
           message:
-            "No healthy proxies in the pool. Run Batch Test first, then assign again.",
+            "No reachable proxies with a verified egress IP. Run Batch Test first, then assign again.",
         },
         healthyAvailable: 0,
         assigned: 0,
@@ -148,6 +148,7 @@ export async function handleWorkersAdmin(
       assigned: result.assigned,
       unassigned: result.unassigned,
       healthyAvailable: result.healthyAvailable,
+      preserved: result.preserved,
       assignments: result.assignments,
     });
     return true;

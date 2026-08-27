@@ -104,7 +104,7 @@ export const ADMIN_CLIENT_ACTIONS = `    $("btn-top-refresh").onclick = () => re
         const data = await res.json();
         if (!res.ok) {
           const msg =
-            data.error?.message && String(data.error.message).includes("No healthy")
+            data.healthyAvailable === 0
               ? t("toastAssignNoHealthy")
               : (data.error?.message || t("toastAssignFail"));
           toast(msg, false);
@@ -113,7 +113,7 @@ export const ADMIN_CLIENT_ACTIONS = `    $("btn-top-refresh").onclick = () => re
         settings = data.settings || settings;
         await loadStatus();
         renderAll();
-        toast(t("toastAssignProxies")(data.assigned || 0, (settings.accounts || []).length, data.healthyAvailable || 0));
+        toast(t("toastAssignProxies")(data.assigned || 0, data.preserved || 0, data.unassigned || 0));
       } catch {
         toast(t("toastAssignFail"), false);
       } finally {
@@ -236,7 +236,7 @@ export const ADMIN_CLIENT_ACTIONS = `    $("btn-top-refresh").onclick = () => re
     applyStaticI18n();
     showPage(page);
     $("run-label").textContent = t("loading");
-    Promise.all([loadSettings(), loadStatus(), loadProbes()]).then(() => {
+    Promise.all([loadSettings(), loadStatus(), loadProbes(), loadFreeModels()]).then(() => {
       renderAll();
       syncBatchProgress(batchProgress);
     }).catch((e) => toast(String(e), false));

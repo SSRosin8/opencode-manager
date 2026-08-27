@@ -6,7 +6,11 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js",
+    "start": "npm run build && node scripts/service.mjs start",
+    "stop": "node scripts/service.mjs stop",
+    "restart": "npm run build && node scripts/service.mjs restart",
+    "status": "node scripts/service.mjs status",
+    "foreground": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "test": "vitest run",
     "test:watch": "vitest",

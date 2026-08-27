@@ -6,6 +6,7 @@ import type { SettingsStore } from "../settings/store.js";
 import type { WorkerStatsStore } from "../settings/workerStats.js";
 import type { FreeModelRegistry } from "../proxy/freeModels.js";
 import type { BatchProbeControl } from "./batchProbeControl.js";
+import type { ProbeStateStore } from "../settings/probeState.js";
 
 export type BatchProbeProgress = {
   running: boolean;
@@ -53,4 +54,9 @@ export type RequestContext = {
   freeModels: FreeModelRegistry;
   batchProbeProgress: BatchProbeProgress;
   batchProbeControl: BatchProbeControl;
+  probeState: ProbeStateStore;
 };
+
+export function persistProbeState(ctx: RequestContext): Promise<void> {
+  return ctx.probeState.save(ctx.probes.getAll(), ctx.batchProbeProgress);
+}

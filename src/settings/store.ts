@@ -161,16 +161,18 @@ function normalizeAccounts(raw: unknown): AccountConfig[] {
         : a.proxyId === null
           ? null
           : null;
+    const apiKey = typeof a.apiKey === "string" ? a.apiKey : "";
+    const kind = inferAccountKind({
+      apiKey,
+      kind:
+        a.kind === "anonymous_zen" || a.kind === "authenticated_zen"
+          ? a.kind
+          : undefined,
+    });
     return {
       id: typeof a.id === "string" && a.id ? a.id : `account-${i + 1}`,
-      apiKey: typeof a.apiKey === "string" ? a.apiKey : "",
-      kind: inferAccountKind({
-        apiKey: typeof a.apiKey === "string" ? a.apiKey : "",
-        kind:
-          a.kind === "anonymous_zen" || a.kind === "authenticated_zen"
-            ? a.kind
-            : undefined,
-      }),
+      apiKey: kind === "anonymous_zen" ? "" : apiKey,
+      kind,
       enabled: a.enabled !== false,
       proxyId,
       proxy: normalizeProxy(a.proxy),

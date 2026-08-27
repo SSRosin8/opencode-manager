@@ -1,5 +1,10 @@
 /** Proxy, Worker, modal, responsive, and other feature-level styles. */
 export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
+    .models-metrics { grid-template-columns:repeat(3, minmax(0, 1fr)); }
+    .model-list { display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:8px; }
+    .model-item { display:flex; align-items:center; justify-content:space-between; gap:10px; min-width:0; padding:10px 12px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--panel-solid); }
+    .model-item code { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .empty-state { padding:18px; color:var(--muted); text-align:center; border:1px dashed var(--border); border-radius:var(--radius-sm); }
     .readiness-band { display:flex; align-items:center; justify-content:space-between; gap:16px; min-height:58px; padding:10px 14px; margin-bottom:12px; border:1px solid var(--border); border-left:3px solid var(--accent); border-radius:var(--radius-sm); background:var(--panel-solid); }
     .readiness-band.ok { border-left-color:var(--ok); }
     .readiness-band.warn { border-left-color:var(--warn); }
@@ -346,6 +351,7 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
     .worker-card .worker-actions {
       display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; align-items: center;
     }
+    .worker-card .acc-model { max-width: 180px; }
     .worker-card .worker-title {
       min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
@@ -534,6 +540,8 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
       .confirm-float { left: 12px; right: 12px; bottom: 12px; width: auto; }
     }
     @media (max-width: 600px) {
+      .models-metrics { grid-template-columns:1fr; }
+      .table-tools .select { flex:1 1 calc(50% - 4px); min-width:140px; }
       .getting-started-head { flex-direction:column; }
       .getting-started-steps { grid-template-columns:1fr; }
       .topbar { gap:6px; }

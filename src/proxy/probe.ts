@@ -23,7 +23,11 @@ import { buildChatCompletionsUrl, DEFAULT_BASE_URL } from "../relay/url.js";
 export const DEFAULT_PROBE_URL = "https://api.ipify.org";
 export const DEFAULT_PROBE_TIMEOUT_MS = 8000;
 export const DEFAULT_ANONYMOUS_ZEN_MODEL = "big-pickle";
-export const DEFAULT_ANONYMOUS_ZEN_TIMEOUT_MS = 45_000;
+const configuredAnonymousZenTimeout = Number(process.env.OPENCODE_MANAGER_ANONYMOUS_ZEN_TIMEOUT_MS);
+/** Zen can be slower than the IP echo endpoint, especially through Clash. */
+export const DEFAULT_ANONYMOUS_ZEN_TIMEOUT_MS = Number.isFinite(configuredAnonymousZenTimeout)
+  ? Math.min(120_000, Math.max(5_000, configuredAnonymousZenTimeout))
+  : 45_000;
 
 export type ProbeHealth = "healthy" | "warn" | "bad" | "testing" | "skip";
 
@@ -87,6 +91,38 @@ export type AnonymousZenProbeStatus =
   | "temporary_failure"
   | "unreachable";
 
+export type AnonymousZenProbeReasonCode =
+  | "rate_limited"
+  | "unauthorized"
+  | "forbidden"
+  | "proxy_auth_required"
+  | "payment_required"
+  | "invalid_request"
+  | "not_found"
+  | "request_timeout"
+  | "request_conflict"
+  | "request_rejected"
+  | "upstream_failure"
+  | "unexpected_redirect"
+  | "unexpected_http_status"
+  | "transport_timeout"
+  | "transport_dns"
+  | "transport_tls"
+  | "transport_connection"
+  | "transport_failure"
+  | "primary_model_failure"
+  | "provider_failure";
+
+export type AnonymousZenCrossCheck = {
+  model: string;
+  status: AnonymousZenProbeStatus;
+  ok: boolean;
+  httpStatus: number | null;
+  latencyMs: number | null;
+  error: string | null;
+  reasonCode?: AnonymousZenProbeReasonCode;
+};
+
 export type AnonymousZenProbeResult = {
   id: string;
   status: AnonymousZenProbeStatus;
@@ -96,6 +132,11 @@ export type AnonymousZenProbeResult = {
   error: string | null;
   testedAt: string;
   retryAfterSeconds?: number;
+  /** Stable diagnostic detail while `status` remains API-compatible. */
+  reasonCode?: AnonymousZenProbeReasonCode;
+  model?: string;
+  crossCheck?: AnonymousZenCrossCheck;
+  diagnosis?: "primary_model_failure" | "provider_failure" | "inconclusive";
 };
 
 export type AnonymousZenProbeOptions = {
@@ -223,12 +264,38 @@ async function timedProxyFetch(
   }
 }
 
-function anonymousZenStatus(httpStatus: number): AnonymousZenProbeStatus {
-  if (httpStatus >= 200 && httpStatus < 300) return "usable";
-  if (httpStatus === 429) return "rate_limited";
-  if (httpStatus === 401 || httpStatus === 403) return "blocked";
-  if (httpStatus === 407) return "unreachable";
-  return "temporary_failure";
+function anonymousZenClassification(httpStatus: number): {
+  status: AnonymousZenProbeStatus;
+  reasonCode?: AnonymousZenProbeReasonCode;
+} {
+  if (httpStatus >= 200 && httpStatus < 300) return { status: "usable" };
+  if (httpStatus === 429) return { status: "rate_limited", reasonCode: "rate_limited" };
+  if (httpStatus === 401) return { status: "blocked", reasonCode: "unauthorized" };
+  if (httpStatus === 403) return { status: "blocked", reasonCode: "forbidden" };
+  if (httpStatus === 407) return { status: "unreachable", reasonCode: "proxy_auth_required" };
+  if (httpStatus === 400 || httpStatus === 422) {
+    return { status: "temporary_failure", reasonCode: "invalid_request" };
+  }
+  if (httpStatus === 402) return { status: "temporary_failure", reasonCode: "payment_required" };
+  if (httpStatus === 404) return { status: "temporary_failure", reasonCode: "not_found" };
+  if (httpStatus === 408) return { status: "temporary_failure", reasonCode: "request_timeout" };
+  if (httpStatus === 409) return { status: "temporary_failure", reasonCode: "request_conflict" };
+  if (httpStatus >= 500) return { status: "temporary_failure", reasonCode: "upstream_failure" };
+  if (httpStatus >= 300 && httpStatus < 400) {
+    return { status: "temporary_failure", reasonCode: "unexpected_redirect" };
+  }
+  if (httpStatus >= 400 && httpStatus < 500) {
+    return { status: "temporary_failure", reasonCode: "request_rejected" };
+  }
+  return { status: "temporary_failure", reasonCode: "unexpected_http_status" };
+}
+
+function transportReasonCode(message: string, timedOut: boolean): AnonymousZenProbeReasonCode {
+  if (timedOut) return "transport_timeout";
+  if (/ENOTFOUND|EAI_AGAIN|dns|getaddrinfo/i.test(message)) return "transport_dns";
+  if (/CERT|TLS|SSL|certificate/i.test(message)) return "transport_tls";
+  if (/ECONN|socket|connect/i.test(message)) return "transport_connection";
+  return "transport_failure";
 }
 
 function retryAfterSeconds(headers: Headers): number | undefined {
@@ -348,15 +415,18 @@ export async function probeAnonymousZenProxy(
           max_tokens: 1,
         }),
       });
-      const status = anonymousZenStatus(response.status);
+      const classification = anonymousZenClassification(response.status);
+      const status = classification.status;
       const result: AnonymousZenProbeResult = {
         id: proxy.id,
+        model,
         status,
         ok: status === "usable",
         httpStatus: response.status,
         latencyMs: Math.round(performance.now() - started),
         error: status === "usable" ? null : await zenResponseError(response),
         testedAt,
+        ...(classification.reasonCode ? { reasonCode: classification.reasonCode } : {}),
       };
       const retryAfter = retryAfterSeconds(response.headers);
       if (retryAfter !== undefined) result.retryAfterSeconds = retryAfter;
@@ -369,12 +439,14 @@ export async function probeAnonymousZenProxy(
         /abort|timeout/i.test(message);
       return {
         id: proxy.id,
+        model,
         status: "unreachable",
         ok: false,
         httpStatus: null,
         latencyMs: Math.round(performance.now() - started),
         error: timedOut ? "Timeout" : message,
         testedAt,
+        reasonCode: transportReasonCode(message, timedOut),
       };
     } finally {
       clearTimeout(timer);

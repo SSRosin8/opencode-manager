@@ -221,12 +221,16 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
       const q = ($("node-search").value || "").trim().toLowerCase();
       const proto = $("flt-proto").value;
       const source = $("flt-source").value;
-      const health = $("flt-health").value;
+      const route = $("flt-route-health").value;
+      const zen = $("flt-zen-health").value;
       return (settings.proxyPool || []).filter((p) => {
-        if (q && !(p.name + p.host + p.type + (p.clashType || "")).toLowerCase().includes(q)) return false;
+        const pr = probeResults[p.id];
+        const haystack = [p.name, p.host, p.type, p.clashType, pr?.egressIp, pr?.error, pr?.anonymousZen?.error].filter(Boolean).join(" ").toLowerCase();
+        if (q && !haystack.includes(q)) return false;
         if (proto && (p.clashType || p.type) !== proto && p.type !== proto) return false;
         if (source && p.source !== source) return false;
-        if (health && nodeHealth(p) !== health) return false;
+        if (route && routeHealth(p) !== route) return false;
+        if (zen && zenHealth(p) !== zen) return false;
         return true;
       });
     }
@@ -248,20 +252,15 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
       const slice = list.slice((nodePage - 1) * PAGE_SIZE, nodePage * PAGE_SIZE);
       const body = $("nodes-body");
       if (!list.length) {
-        body.innerHTML = '<tr><td colspan="9" class="muted" style="padding:16px">' + escapeHtml(t("poolEmpty")) + '</td></tr>';
+        body.innerHTML = '<tr><td colspan="10" class="muted" style="padding:16px">' + escapeHtml(t("poolEmpty")) + '</td></tr>';
       } else {
         body.innerHTML = slice.map((p) => {
           const h = nodeHealth(p);
           const route = nodeRoute(p);
           const assigned = assignedWorkers(p.id);
           const rowCls = h === "warn" ? "row-warn" : h === "bad" ? "row-err" : "";
-          const zenResult = probeResults[p.id]?.anonymousZen;
-          const healthTag = h === "testing"
-            ? '<span class="tag accent"><span class="spin"></span>' + escapeHtml(t("testing")) + '</span>'
-            : zenResult ? anonymousZenTag(p)
-            : h === "healthy" ? anonymousZenTag(p)
-            : h === "warn" ? '<span class="tag warn">' + escapeHtml(t("warning")) + '</span>'
-            : '<span class="tag err">' + escapeHtml(t("unreachable")) + '</span>';
+          const connectivityTag = routeHealthTag(p);
+          const zenTag = anonymousZenTag(p);
           const routeTag = '<span class="tag ' + route.cls + '">' + escapeHtml(route.label) + '</span>';
           const aw = assigned.length
             ? assigned.map((a) => escapeHtml(a.id)).join(", ")
@@ -278,7 +277,8 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
             '<td class="mono">' + escapeHtml(p.host + ":" + p.port) + '</td>' +
             '<td>' + escapeHtml(p.source === "subscription" ? t("srcSub") : p.source === "controller" ? t("srcController") : t("srcManual")) + '</td>' +
             '<td>' + routeTag + '</td>' +
-            '<td>' + healthTag + '</td>' +
+            '<td>' + connectivityTag + '</td>' +
+            '<td>' + zenTag + '</td>' +
             '<td>' + latencyCell(p) + '</td>' +
             '<td>' + aw + '</td>' +
             '<td style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">' + testBtn + enableBridgeBtn +
@@ -312,15 +312,19 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
       const all = settings.proxyPool || [];
       const removeAll = $("btn-remove-all-proxies");
       if (removeAll) removeAll.disabled = !all.length || batchTesting;
-      const healthy = all.filter((p) => nodeHealth(p) === "healthy").length;
-      const warn = all.filter((p) => nodeHealth(p) === "warn").length;
-      const bad = all.filter((p) => nodeHealth(p) === "bad").length;
+      const reachable = all.filter((p) => routeHealth(p) === "reachable").length;
+      const zenUsable = all.filter((p) => zenHealth(p) === "usable").length;
+      const unverified = all.filter((p) => zenHealth(p) === "unverified").length;
+      const attention = all.filter((p) =>
+        routeHealth(p) === "unreachable" || routeHealth(p) === "config_error" ||
+        !["usable", "unverified"].includes(zenHealth(p))
+      ).length;
       if (lang === "zh") {
         $("nodes-sum").innerHTML =
-          all.length + " 节点 · <b class=\\"ok\\">" + healthy + "</b> 健康 · <b class=\\"warn\\">" + warn + "</b> 需桥接 · <b class=\\"err\\">" + bad + "</b> 不可用";
+          all.length + " 节点 · <b class=\\"ok\\">" + reachable + "</b> 出口可达 · <b class=\\"ok\\">" + zenUsable + "</b> Zen 可用 · <b class=\\"warn\\">" + attention + "</b> 需关注 · " + unverified + " 未验证";
       } else {
         $("nodes-sum").innerHTML =
-          all.length + " nodes · <b class=\\"ok\\">" + healthy + "</b> healthy · <b class=\\"warn\\">" + warn + "</b> require bridge · <b class=\\"err\\">" + bad + "</b> unavailable";
+          all.length + " nodes · <b class=\\"ok\\">" + reachable + "</b> reachable · <b class=\\"ok\\">" + zenUsable + "</b> Zen usable · <b class=\\"warn\\">" + attention + "</b> attention · " + unverified + " unverified";
       }
 
       const pager = $("nodes-pager");

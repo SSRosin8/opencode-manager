@@ -1,12 +1,13 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { RequestContext } from "../context.js";
 import { getClashSelectorCurrent, selectClashProxy } from "../../proxy/clashBridge.js";
-import { probeAnonymousZenProxy, probePoolProxies, summarizeProbeResults, type AnonymousZenProbeResult, type ProbeResult } from "../../proxy/probe.js";
+import { DEFAULT_ANONYMOUS_ZEN_TIMEOUT_MS, probeAnonymousZenProxy, probePoolProxies, summarizeProbeResults, type AnonymousZenProbeResult, type ProbeResult } from "../../proxy/probe.js";
 import type { GatewaySettings } from "../../settings/store.js";
 import { applyProbeEgressIps } from "../../proxy/pool.js";
-import { batchProbeSnapshot } from "../context.js";
+import { batchProbeSnapshot, persistProbeState } from "../context.js";
 import { anonymousZenSummary, attachAnonymousZenResult, syncAnonymousWorkers } from "../workerEgress.js";
 import { readBody, sendJson } from "../httpIO.js";
+import { logBatchSummary, logProbeFailure } from "../probeDiagnostics.js";
 
 export async function handleProxyProbes(
   req: IncomingMessage,
@@ -48,6 +49,9 @@ export async function handleProxyProbes(
       batchProbeProgress.cancelRequested = true;
     }
     batchProbeProgress.updatedAt = new Date().toISOString();
+    void persistProbeState(ctx).catch((error) => {
+      console.warn(`[probe-state] save failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
     sendJson(res, 200, { progress: batchProbeSnapshot(batchProbeProgress) });
     return true;
   }
@@ -79,6 +83,7 @@ export async function handleProxyProbes(
       finishedAt: null,
       error: null,
     });
+    await persistProbeState(ctx);
     const s = store.get();
     let ids: string[] | null = null;
     let raw: Buffer;
@@ -92,6 +97,7 @@ export async function handleProxyProbes(
         finishedAt,
         error: err instanceof Error ? err.message : String(err),
       });
+      await persistProbeState(ctx);
       throw err;
     }
     if (raw.length) {
@@ -108,6 +114,7 @@ export async function handleProxyProbes(
           finishedAt,
           error: "Invalid JSON",
         });
+        await persistProbeState(ctx);
         sendJson(res, 400, { error: { message: "Invalid JSON" } });
         return true;
       }
@@ -122,6 +129,7 @@ export async function handleProxyProbes(
       total: targets.length,
       updatedAt: new Date().toISOString(),
     });
+    await persistProbeState(ctx);
     const bridgeFetch = subscriptionFetch ?? globalThis.fetch;
     const incrementallyAddedWorkerIds: string[] = [];
     let workerSyncChain = Promise.resolve();
@@ -140,6 +148,7 @@ export async function handleProxyProbes(
           upstream.rotator.readyCount(),
           upstream.rotator.getAccounts().length
         );
+        await persistProbeState(ctx);
       }).catch((err) => {
         workerSyncError ??= err;
       });
@@ -157,6 +166,9 @@ export async function handleProxyProbes(
       const anonymousModel = freeModels.has("big-pickle")
         ? "big-pickle"
         : freeModels.ids()[0];
+      const fallbackAnonymousModel = freeModels.ids().find((model) => model !== anonymousModel);
+      let previousProviderFailureEgress: string | null = null;
+      let crossCheckClaimed = false;
       results = await probePoolProxies(targets, s.clashBridge, {
         fetchImpl: ctx?.probeFetch,
         bridgeFetch,
@@ -179,9 +191,9 @@ export async function handleProxyProbes(
             check = probeAnonymousZenProxy(proxy, s.clashBridge, {
               baseUrl: s.baseUrl,
               model: anonymousModel,
-              // Batch checks share one Clash selector. Do not let one dead
-              // egress block every remaining node for the 45s manual-test timeout.
-              timeoutMs: 8_000,
+              // Match the single-node Zen probe timeout. The previous 8s
+              // override classified slower but reachable Zen routes as dead.
+              timeoutMs: DEFAULT_ANONYMOUS_ZEN_TIMEOUT_MS,
               fetchImpl: ctx?.probeFetch,
               bridgeFetch,
               clashQueue: clashProbeQueue,
@@ -193,9 +205,54 @@ export async function handleProxyProbes(
             anonymousByIp.set(result.egressIp, check);
           }
           const anonymous = await check;
+          const matchingFailure = anonymous.httpStatus === 503 && anonymous.reasonCode === "upstream_failure";
+          const shouldCrossCheck = matchingFailure && !crossCheckClaimed &&
+            Boolean(fallbackAnonymousModel) && previousProviderFailureEgress !== null &&
+            previousProviderFailureEgress !== result.egressIp;
+          if (matchingFailure) previousProviderFailureEgress = result.egressIp;
+          else previousProviderFailureEgress = null;
+          if (shouldCrossCheck && fallbackAnonymousModel) {
+            crossCheckClaimed = true;
+            const fallback = await probeAnonymousZenProxy(proxy, s.clashBridge, {
+              baseUrl: s.baseUrl,
+              model: fallbackAnonymousModel,
+              timeoutMs: DEFAULT_ANONYMOUS_ZEN_TIMEOUT_MS,
+              fetchImpl: ctx?.probeFetch,
+              bridgeFetch,
+              clashQueue: clashProbeQueue,
+              skipClashSwitch: true,
+              signal: batchProbeControl.signal(),
+            });
+            const providerFailure = fallback.httpStatus === 503 && fallback.reasonCode === "upstream_failure";
+            const diagnosis = fallback.ok ? "primary_model_failure" : providerFailure ? "provider_failure" : "inconclusive";
+            return attachAnonymousZenResult(result, {
+              ...anonymous,
+              id: result.id,
+              ...(fallback.ok ? {
+                status: "usable" as const,
+                ok: true,
+                httpStatus: fallback.httpStatus,
+                latencyMs: fallback.latencyMs,
+                error: null,
+                model: fallbackAnonymousModel,
+              } : {}),
+              ...(diagnosis !== "inconclusive" ? { reasonCode: diagnosis } : {}),
+              diagnosis,
+              crossCheck: {
+                model: fallbackAnonymousModel,
+                status: fallback.status,
+                ok: fallback.ok,
+                httpStatus: fallback.httpStatus,
+                latencyMs: fallback.latencyMs,
+                error: fallback.error,
+                ...(fallback.reasonCode ? { reasonCode: fallback.reasonCode } : {}),
+              },
+            });
+          }
           return attachAnonymousZenResult(result, { ...anonymous, id: result.id });
         },
         onResult: async (result, completed) => {
+          logProbeFailure("batch", result);
           probes.set(result);
           batchProbeProgress.completed = completed;
           batchProbeProgress.completedIds.push(result.id);
@@ -204,6 +261,9 @@ export async function handleProxyProbes(
           batchProbeProgress.stageTotal = targets.length;
           batchProbeProgress.updatedAt = new Date().toISOString();
           enqueueResultWorkerSync(result);
+          void persistProbeState(ctx).catch((error) => {
+            console.warn(`[probe-state] save failed: ${error instanceof Error ? error.message : String(error)}`);
+          });
         },
         onStageProgress: (stage, completed, total) => {
           batchProbeProgress.stage = stage;
@@ -236,13 +296,14 @@ export async function handleProxyProbes(
         finishedAt,
         error: finalError instanceof Error ? finalError.message : String(finalError),
       });
+      await persistProbeState(ctx);
       throw finalError;
     }
     await workerSyncChain;
     return finishBatchProbe({
       res, store, upstream, probes, results, targets, batchProbeProgress,
       workerSyncError, incrementallyAddedWorkerIds,
-      cancelled: batchProbeControl.isCancelled(),
+      cancelled: batchProbeControl.isCancelled(), probeState: ctx.probeState,
     });
   }
 
@@ -260,15 +321,17 @@ async function finishBatchProbe(args: {
   workerSyncError: unknown;
   incrementallyAddedWorkerIds: string[];
   cancelled: boolean;
+  probeState: RequestContext["probeState"];
 }): Promise<boolean> {
   const {
     res, store, upstream, probes, results, targets, batchProbeProgress,
-    workerSyncError, incrementallyAddedWorkerIds, cancelled,
+    workerSyncError, incrementallyAddedWorkerIds, cancelled, probeState,
   } = args;
   if (workerSyncError) {
     const message = workerSyncError instanceof Error ? workerSyncError.message : String(workerSyncError);
     const finishedAt = new Date().toISOString();
     Object.assign(batchProbeProgress, { running: false, updatedAt: finishedAt, finishedAt, error: message });
+    await probeState.save(probes.getAll(), batchProbeProgress);
     throw workerSyncError;
   }
   probes.setMany(results);
@@ -287,6 +350,7 @@ async function finishBatchProbe(args: {
       finishedAt: failedAt,
       error: error instanceof Error ? error.message : String(error),
     });
+    await probeState.save(probes.getAll(), batchProbeProgress);
     throw error;
   }
   if (synced.addedIds.length) {
@@ -311,6 +375,8 @@ async function finishBatchProbe(args: {
     finishedAt,
     error: null,
   });
+  await probeState.save(probes.getAll(), batchProbeProgress);
+  logBatchSummary(results, cancelled);
   sendJson(res, 200, {
     results,
     summary: summarizeProbeResults(results),

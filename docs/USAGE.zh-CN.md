@@ -11,7 +11,6 @@ node --version
 git clone https://github.com/SSRosin8/opencode-manager.git
 cd opencode-manager
 npm ci
-npm run build
 npm start
 ```
 
@@ -21,16 +20,16 @@ npm start
 curl http://127.0.0.1:9876/health
 ```
 
-`npm start` 是前台进程：保持终端打开，按 `Ctrl+C` 可优雅停止；关闭终端也会终止服务。它运行 `dist/`，修改源码或拉取新代码后应先重新执行 `npm run build`。开发模式使用 `npm run dev`，无需先构建。
+`npm start` 会构建源码、在后台启动服务、等待健康检查并输出管理后台地址。日常可使用 `npm run status`、`npm run restart` 和 `npm stop` 管理。运行状态与日志保存在 Git 已忽略的 `data/run/` 目录。需要前台运行时使用 `npm run build && npm run foreground`；开发调试可使用 `npm run dev`。
 
-项目当前不自带后台守护服务。若服务已经在另一个终端启动，先在那个终端按 `Ctrl+C`，或找到准确 PID 后执行 `kill -TERM <PID>`，再启动新版本。可用以下命令确认端口监听者：
+服务命令支持幂等启动，并通过 `SIGTERM` 优雅停止。需要直接确认端口监听者时可使用：
 
 ```bash
 ss -ltnp | grep ':9876'
 # macOS 可用：lsof -nP -iTCP:9876 -sTCP:LISTEN
 ```
 
-后台修改监听端口后必须重启。项目不会自动加载 `.env`；临时修改端口可使用：
+后台修改监听端口后执行 `npm run restart`。项目不会自动加载 `.env`；临时修改端口可使用：
 
 ```bash
 PORT=9988 npm start
@@ -56,7 +55,7 @@ PORT=9988 npm start
 桌面端导航按实际使用职责划分：
 
 - **总览**：查看服务状态、请求结果、Token 用量、路由尝试和网关拒绝。
-- **资源配置**：包含网关、代理池和 Workers，分别管理转发入口、可用出口和调度身份。
+- **资源配置**：包含网关、代理池、Workers 和模型，分别管理转发入口、可用出口、调度身份和当前检测到的官方免费模型集合。
 - **客户端接入**：包含客户端用法，集中展示 OpenAI 兼容 Base URL 和支持的接口。
 
 两个分组标题都可以点击，只会展开或收起各自的页面入口，并在浏览器中记住状态；侧边栏底部按钮用于收起整个侧栏。移动端会平铺页面入口，避免因分组折叠而隐藏导航。
@@ -123,6 +122,10 @@ HTTP/SOCKS5 代理可直接添加，不需要 Clash 桥接。VLESS、Hysteria2�
 
 “删除全部代理”会清空整个代理池和探测缓存，并解除所有 Worker 的代理绑定；Worker、订阅和 Clash 桥接配置会保留，之后可以重新拉取或导入节点。批测运行期间不能执行此操作。
 
+节点探测结果和最近一次批测摘要会保存到 `data/probe-state.json`，因此重启服务不会清空健康、延迟和出口信息。若关停时批测仍在运行，重启后会恢复为“因服务重启中断”，已完成结果会保留；重新发起测试即可验证剩余节点。
+
+匿名 Zen 验证默认使用 45 秒超时，不再沿用较短的网络出口探测超时；如果线路确实较慢，可通过 `OPENCODE_MANAGER_ANONYMOUS_ZEN_TIMEOUT_MS` 调整，范围为 5000 到 120000 毫秒。结果详情会区分超时、限流、拒绝访问和上游 HTTP 错误。
+
 ## 6. 添加登录 Zen Worker
 
 进入“Workers”页面：
@@ -134,7 +137,11 @@ HTTP/SOCKS5 代理可直接添加，不需要 Clash 桥接。VLESS、Hysteria2�
 5. 保存 Workers。
 6. 点击该 Worker 的“测试连接”。
 
-登录 Worker 测试会检查公网出口，然后直接使用该登录 Key 请求最小模型，不会先消耗匿名 Zen 额度。可用开关会保留配置但停止流量调度。
+Worker 卡片可从当前检测到的免费模型集合中选择测试模型。匿名 Worker 固定使用 `Bearer public`，因此页面不显示 API Key；登录 Worker 会检查公网出口，然后直接使用其登录 Key 请求所选模型，未填写 Key 时不会开始测试。可用开关会保留配置但停止流量调度。
+
+批量测试的主模型按验证完成顺序，在两个不同出口连续返回相同的 `503` 上游故障时，系统会仅选择第二个失败出口，用另一个官方免费模型交叉验证一次。备用模型成功表示主模型对该出口不可用；备用模型也返回同类 `503` 表示该出口的 Provider 路由不可用。每批最多增加一次交叉请求，不会因此停止整批测试。
+
+“修复登录 Worker 绑定”会保留所有仍可达且出口 IP 不冲突的现有登录 Worker 绑定，只为未绑定、节点已删除、禁用、不可达或与另一个登录 Worker 共用出口的项补充分配。它不会修改匿名 Worker；同一个出口允许分别承载一个匿名 Worker 和一个登录 Worker。
 
 ## 7. 选择调度策略
 
@@ -210,14 +217,16 @@ curl -sS http://127.0.0.1:9876/v1/responses \
 默认数据文件：
 
 - `data/settings.json`：Worker、Key、代理、订阅、后台配置，以及每个代理最后一次成功探测的公网出口 IP；需要保密。探测失败不会清除上一次成功出口，“删除全部代理”会随代理池一起删除这些记录。
+- `data/probe-state.json`：脱敏的节点探测结果和最近一次批测状态。
 - `data/worker-stats.json`：用量和请求尝试统计。
 - `data/free-models.json`：免费模型缓存，可重新生成。
 
 旧版 `worker-stats.json` 仍可读取。升级前产生的历史累计值不会补出 usage 覆盖率和按模型 Token 明细；只有升级后的新响应会增加这些细分。旧版曾用缓存字段表示未缓存输入，加载时会迁移为缓存未命中，不会继续显示为明确的缓存写入。
 
-可通过 `OPENCODE_MANAGER_SETTINGS_PATH` 和 `OPENCODE_MANAGER_STATS_PATH` 修改前两项路径。备份或迁移前先停止服务，然后复制 `data/`。升级前先停止现有前台进程，避免新旧进程争用同一端口：
+可通过 `OPENCODE_MANAGER_SETTINGS_PATH` 和 `OPENCODE_MANAGER_STATS_PATH` 修改前两项路径。备份或迁移前先停止服务，然后复制 `data/`。升级前先停止正在运行的服务，避免新旧进程争用同一端口：
 
 ```bash
+npm stop
 git pull --ff-only
 npm ci
 npm run build
@@ -229,7 +238,7 @@ npm start
 
 ### 批测长时间运行
 
-先看按钮是“筛选”还是“验证”。验证 Clash 节点必须串行，失联节点还会等待 IP/Zen 超时。页面会自动轮询，刷新后也会恢复当前任务。不要同时切换同一个 Clash Selector。
+先看按钮是“筛选”还是“验证”。验证 Clash 节点必须串行，失联节点还会等待 IP/Zen 超时。刷新页面会恢复进度显示；服务重启会将运行中的批测标记为中断并保留已完成结果。不要同时切换同一个 Clash Selector。
 
 ### `503 no_workers_configured`
 

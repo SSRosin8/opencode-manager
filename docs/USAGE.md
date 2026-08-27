@@ -11,7 +11,6 @@ node --version
 git clone https://github.com/SSRosin8/opencode-manager.git
 cd opencode-manager
 npm ci
-npm run build
 npm start
 ```
 
@@ -21,9 +20,9 @@ Open http://127.0.0.1:9876/ or check:
 curl http://127.0.0.1:9876/health
 ```
 
-`npm start` is a foreground process: keep the terminal open and press `Ctrl+C` for a graceful shutdown; closing the terminal also stops it. It runs `dist/`, so run `npm run build` after source changes or pulling new code. Use `npm run dev` to run source directly during development.
+`npm start` builds the source, starts the service in the background, waits for health, and prints the Admin URL. Use `npm run status`, `npm run restart`, and `npm stop` for routine operation. Runtime metadata and logs are stored under the ignored `data/run/` directory. For foreground operation use `npm run build && npm run foreground`; use `npm run dev` during development.
 
-The project does not install a background service. If another terminal already runs it, stop that process with `Ctrl+C`, or resolve its exact PID and use `kill -TERM <PID>`, before starting a new build. Check the listener with:
+The service commands are idempotent and stop with `SIGTERM`. To inspect the listener directly:
 
 ```bash
 ss -ltnp | grep ':9876'
@@ -52,7 +51,7 @@ The Overview presents the recommended five-step path: configure the gateway, add
 The desktop navigation reflects how the service is operated:
 
 - **Overview**: service health, request results, usage, routing attempts, and gateway rejections.
-- **Resources**: Gateway, Proxy Pool, and Workers. These pages define the relay, available egresses, and routing identities.
+- **Resources**: Gateway, Proxy Pool, Workers, and Models. These pages define the relay, available egresses, routing identities, and the detected official free-model set.
 - **Client access**: Client Usage, including the OpenAI-compatible base URL and supported endpoints.
 
 The two group headings collapse their own entries and remember that choice in the browser. The button at the bottom collapses the whole sidebar. On mobile, navigation is kept flat so that a collapsed group cannot hide a destination.
@@ -112,6 +111,10 @@ Batch Test has two phases:
 
 A shared Selector must verify nodes serially to avoid route mix-ups. Every newly usable, unique egress is immediately saved as an anonymous Worker. During the batch, the UI updates progress, completed nodes, health totals, and Worker metrics in place without rebuilding the metric cards; the Workers list and IP Isolation refresh once after the batch finishes. Pause lets active node checks finish and then stops scheduling more work; Resume continues. Cancel aborts in-flight network requests, drops pending nodes, and keeps completed results and Workers already created. Duplicate egress IPs create only one anonymous Worker; proxy nodes themselves remain in the pool.
 
+Probe results and the last batch summary are persisted under `data/probe-state.json`, so restarting the service does not erase health, latency, or egress information. A batch that was active during shutdown is restored as interrupted (completed results are kept); start a new test to verify remaining nodes.
+
+Anonymous Zen verification uses a 45-second timeout by default instead of the shorter network-egress timeout. Adjust `OPENCODE_MANAGER_ANONYMOUS_ZEN_TIMEOUT_MS` for slower routes; values are bounded to 5,000-120,000 ms. Result details distinguish timeouts, rate limits, access denials, and upstream HTTP errors.
+
 **Remove all** clears the entire proxy pool and all cached probe results, and unbinds Workers from their proxies. It keeps the Workers, subscriptions, and Clash bridge settings so nodes can be imported again later. This action is unavailable while a batch test is running.
 
 ## 6. Add Signed-In Zen Workers
@@ -123,7 +126,11 @@ On Workers:
 3. Bind a verified proxy node and save.
 4. Click Test connection.
 
-The test checks public egress and then uses that signed-in key directly; it does not consume anonymous Zen quota first. Disable a Worker to retain its configuration without routing traffic to it.
+Each Worker card can select a test model from the current detected free-model set. Anonymous Workers always use `Bearer public`, so they do not show an API key field. A signed-in Worker checks public egress and then uses its key with the selected model; testing is rejected before any network probe when the key is empty. Disable a Worker to retain its configuration without routing traffic to it.
+
+When the batch test's primary model returns the same upstream `503` on two consecutive distinct egresses (in verification completion order), the second failed egress is cross-checked once with another official free model. A successful fallback identifies a primary-model availability issue; the same `503` identifies a provider route unavailable for that egress. The batch adds at most one cross-check request and continues testing all nodes.
+
+**Repair signed-in bindings** preserves every reachable, non-conflicting signed-in binding and only fills Workers that are unbound, deleted, disabled, unreachable, or share an egress with another signed-in Worker. It never changes anonymous Workers. One egress may intentionally host one anonymous Worker and one signed-in Worker.
 
 ## 7. Routing Strategies
 
@@ -195,6 +202,7 @@ Skip step 3 when Clash is not used. HTTP/SOCKS proxies still need the real-egres
 ## 11. Data, Backup, And Upgrade
 
 - `data/settings.json`: Workers, keys, proxies, subscriptions, Admin settings, and each proxy's last successful public egress IP; sensitive. A failed probe does not erase the last successful egress, while **Remove all** removes it with the proxy pool.
+- `data/probe-state.json`: sanitized proxy probe results and the latest batch state.
 - `data/worker-stats.json`: usage and attempt statistics.
 - `data/free-models.json`: rebuildable free-model cache.
 
@@ -202,9 +210,10 @@ Older `worker-stats.json` files remain readable. Historical totals created befor
 
 Override paths with `OPENCODE_MANAGER_SETTINGS_PATH` and `OPENCODE_MANAGER_STATS_PATH`. Stop the service before copying `data/` for backup or migration.
 
-Stop the existing foreground process before upgrading so old and new builds do not compete for the same port:
+Stop the running service before upgrading so old and new builds do not compete for the same port:
 
 ```bash
+npm stop
 git pull --ff-only
 npm ci
 npm run build
@@ -214,7 +223,7 @@ npm start
 
 ## 12. Troubleshooting
 
-- Long batch: distinguish Screening from Verification. Shared Clash verification is intentionally serial and dead nodes wait for timeouts.
+- Long batch: distinguish Screening from Verification. Shared Clash verification is intentionally serial and dead nodes wait for timeouts. Refreshing the page restores progress display; a service restart marks an active batch interrupted and keeps completed results.
 - `503 no_workers_configured`: run Batch Test or add a signed-in Worker.
 - `503 no_enabled_workers`: enable and save at least one Worker.
 - Worker test failure: distinguish egress failure, 401/403 invalid key, 429 exhausted quota, and temporary 5xx.

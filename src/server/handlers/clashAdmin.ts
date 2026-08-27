@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { RequestContext } from "../context.js";
+import { persistProbeState } from "../context.js";
 import { importClashControllerNodes, probeClashBridge } from "../../proxy/clashBridge.js";
 import {
   replaceControllerProxies,
@@ -221,6 +222,7 @@ export async function handleClashAdmin(
         if (move.newId) ctx.probes.remap(move.oldId, move.newId);
         else ctx.probes.delete(move.oldId);
       }
+      await persistProbeState(ctx);
       upstream.updateSettings(saved);
       store.updateReadyCount(
         upstream.rotator.readyCount(),

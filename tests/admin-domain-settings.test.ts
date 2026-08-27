@@ -96,6 +96,23 @@ describe("admin domain settings and readiness", () => {
     expect(await invalid.json()).toMatchObject({ error: { type: "invalid_gateway_settings" } });
   });
 
+  it("removes stored keys from explicitly anonymous Workers", async () => {
+    const base = await boot();
+    const response = await fetch(`${base}/admin/api/settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...app?.store.get(),
+        accounts: [{ id: "anonymous", kind: "anonymous_zen", apiKey: "must-not-persist" }],
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect((await response.json()).accounts).toEqual([
+      expect.objectContaining({ id: "anonymous", kind: "anonymous_zen", apiKey: "" }),
+    ]);
+    expect(app?.store.get().accounts[0]?.apiKey).toBe("");
+  });
+
   it("persists normalized subscription response size diagnostics", async () => {
     const body = "http://user:pass@192.0.2.20:8080#test\n";
     const base = await boot(async () => new Response(body, { status: 200 }));

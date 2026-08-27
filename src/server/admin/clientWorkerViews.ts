@@ -10,6 +10,9 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
           : "anonymous_zen";
         const testing = workerTestingIds.has(a.id);
         const testResult = workerTestResults.get(a.id);
+        const selectedModel = workerTestModels.get(a.id) || (freeModelStatus?.ids || ["big-pickle"])[0] || "big-pickle";
+        const modelOptions = (Array.isArray(freeModelStatus?.ids) && freeModelStatus.ids.length ? freeModelStatus.ids : ["big-pickle"])
+          .map((model) => '<option value="' + escapeAttr(model) + '"' + (model === selectedModel ? " selected" : "") + '>' + escapeHtml(model) + '</option>').join("");
         const resultHtml = !testResult ? '' :
           '<div class="worker-test-result ' + (testResult.ok ? 'ok' : 'fail') + '">' +
           escapeHtml(testResult.ok ? t("workerTestOk") : t("workerTestFail")) +
@@ -28,6 +31,7 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
         return '<div class="worker-card' + (enabled ? '' : ' disabled-worker') + '" data-idx="' + idx + '" data-worker-key="' + escapeAttr(collapseKey) + '"' + (hidden ? ' hidden' : '') + '>' +
           '<div class="hd"><span class="worker-title" data-tooltip="' + escapeAttr(a.id || displayName) + '">' + escapeHtml(displayName) + (enabled ? '' : ' · ' + escapeHtml(t("disabledState"))) + '</span>' +
           '<div class="worker-actions"><label class="field" style="margin:0;display:flex;align-items:center;gap:6px"><span>' + escapeHtml(t("workerEnabled")) + '</span><span class="toggle"><input class="acc-enabled" type="checkbox"' + (enabled ? ' checked' : '') + ' /><span></span></span></label>' +
+          '<select class="select select-sm acc-model" data-tooltip="' + escapeAttr(t("workerTestModel")) + '" aria-label="' + escapeAttr(t("workerTestModel")) + '">' + modelOptions + '</select>' +
           '<button type="button" class="btn btn-sm btn-test-worker" data-idx="' + idx + '"' + (testing ? ' disabled' : '') + '>' + escapeHtml(testing ? t("testingWorker") : t("testWorker")) + '</button>' +
           '<button type="button" class="btn btn-sm btn-danger btn-remove-acc" data-idx="' + idx + '">' + escapeHtml(t("remove")) + '</button>' +
           '<button type="button" class="btn btn-sm collapse-toggle btn-toggle-worker" data-worker-key="' + escapeAttr(collapseKey) + '" aria-expanded="' + String(!collapsed) + '" data-tooltip="' + escapeAttr(t(collapsed ? "expand" : "collapse")) + '" aria-label="' + escapeAttr(t(collapsed ? "expand" : "collapse")) + '"><span aria-hidden="true">' + (collapsed ? "▾" : "▴") + '</span></button></div></div>' +
@@ -36,8 +40,8 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
           '<input class="input acc-id" type="text" value="' + escapeAttr(a.id || "") + '" /></div>' +
           '<div><label class="field">' + escapeHtml(t("workerKind")) + '</label>' +
           '<select class="select acc-kind"><option value="anonymous_zen"' + (kind === "anonymous_zen" ? " selected" : "") + '>' + escapeHtml(t("anonymousZen")) + '</option><option value="authenticated_zen"' + (kind === "authenticated_zen" ? " selected" : "") + '>' + escapeHtml(t("authenticatedZen")) + '</option></select></div></div>' +
-          '<div class="row"><div><label class="field">' + escapeHtml(t("apiKey")) + '</label>' +
-          '<input class="input acc-key" type="password" value="' + escapeAttr(kind === "authenticated_zen" ? (a.apiKey || "") : "") + '" autocomplete="off"' + (kind === "anonymous_zen" ? " disabled" : "") + ' /></div></div>' +
+          (kind === "authenticated_zen" ? '<div class="row"><div><label class="field">' + escapeHtml(t("apiKey")) + '</label>' +
+          '<input class="input acc-key" type="password" value="' + escapeAttr(a.apiKey || "") + '" autocomplete="off" required /></div></div>' : '') +
           '<div class="row"><div><label class="field">' + escapeHtml(t("bindProxy")) + '</label>' +
           '<select class="select acc-proxy-id">' + proxyOptions(a.proxyId || "") + '</select></div></div>' + resultHtml + '</div></div>';
       };
@@ -119,10 +123,17 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
       root.querySelectorAll(".acc-kind").forEach((select) => {
         select.onchange = () => {
           const input = select.closest(".worker-card").querySelector(".acc-key");
-          input.disabled = select.value === "anonymous_zen";
-          if (input.disabled) input.value = "";
+          if (input && select.value === "anonymous_zen") input.value = "";
           settings.accounts = collectAccounts();
           renderAccounts();
+        };
+      });
+      root.querySelectorAll(".acc-model").forEach((select) => {
+        select.onchange = () => {
+          const card = select.closest(".worker-card");
+          const idx = Number(card?.dataset.idx);
+          const account = settings.accounts[idx];
+          if (account?.id) workerTestModels.set(account.id, select.value);
         };
       });
       root.querySelectorAll(".btn-test-worker").forEach((btn) => {
@@ -133,9 +144,10 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
             id: card.querySelector(".acc-id").value.trim() || "account",
             enabled: card.querySelector(".acc-enabled").checked,
             kind: card.querySelector(".acc-kind").value,
-            apiKey: card.querySelector(".acc-kind").value === "anonymous_zen" ? "" : card.querySelector(".acc-key").value,
+            apiKey: card.querySelector(".acc-kind").value === "anonymous_zen" ? "" : (card.querySelector(".acc-key")?.value || ""),
             proxyId: card.querySelector(".acc-proxy-id").value || null,
           };
+          const model = card.querySelector(".acc-model")?.value || "big-pickle";
           const saved = settings.accounts[idx];
           if (!saved || draft.id !== saved.id || draft.enabled !== (saved.enabled !== false) || draft.kind !== saved.kind || draft.apiKey !== saved.apiKey || draft.proxyId !== (saved.proxyId || null)) {
             toast(t("saveBeforeWorkerTest"), false);
@@ -146,7 +158,9 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
           workerTestResults.delete(saved.id);
           renderAccounts();
           try {
-            const res = await fetch("/admin/api/workers/" + encodeURIComponent(saved.id) + "/test", { method: "POST" });
+            const res = await fetch("/admin/api/workers/" + encodeURIComponent(saved.id) + "/test", {
+              method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model }),
+            });
             const data = await res.json();
             workerTestResults.set(saved.id, data);
             if (data.egressIp && saved.proxyId && probeResults[saved.proxyId]) {
@@ -200,7 +214,7 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
           id: el.querySelector(".acc-id").value.trim() || "account",
           enabled: el.querySelector(".acc-enabled").checked,
           kind: el.querySelector(".acc-kind").value,
-          apiKey: el.querySelector(".acc-kind").value === "anonymous_zen" ? "" : el.querySelector(".acc-key").value,
+          apiKey: el.querySelector(".acc-kind").value === "anonymous_zen" ? "" : (el.querySelector(".acc-key")?.value || ""),
           proxyId: el.querySelector(".acc-proxy-id").value || null,
           proxy: null,
         }));
@@ -414,6 +428,7 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
       renderIsolation();
       renderSubs();
       renderNodes();
+      renderModels();
       renderActivity();
       renderUnassigned();
       renderAccounts();
@@ -491,7 +506,7 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
       syncWorkerCollapseControls();
     };
 
-    ["node-search", "flt-proto", "flt-source", "flt-health"].forEach((id) => {
+    ["node-search", "flt-proto", "flt-source", "flt-route-health", "flt-zen-health"].forEach((id) => {
       $(id).addEventListener("input", () => { nodePage = 1; renderNodes(); });
       $(id).addEventListener("change", () => { nodePage = 1; renderNodes(); });
     });

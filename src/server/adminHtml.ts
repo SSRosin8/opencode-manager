@@ -2,6 +2,7 @@ import { ADMIN_CLIENT_ACTIONS } from "./admin/clientActions.js";
 import { ADMIN_CLIENT_BATCH } from "./admin/clientBatch.js";
 import { ADMIN_CLIENT_CORE } from "./admin/clientCore.js";
 import { ADMIN_CLIENT_I18N } from "./admin/clientI18n.js";
+import { ADMIN_CLIENT_MODELS } from "./admin/clientModels.js";
 import { ADMIN_CLIENT_PROXY_VIEWS } from "./admin/clientProxyViews.js";
 import { ADMIN_CLIENT_TOOLTIPS } from "./admin/clientTooltips.js";
 import { ADMIN_CLIENT_WORKER_VIEWS } from "./admin/clientWorkerViews.js";
@@ -19,6 +20,7 @@ export const ADMIN_HTML = [
   ADMIN_CLIENT_TOOLTIPS,
   ADMIN_CLIENT_PROXY_VIEWS,
   ADMIN_CLIENT_WORKER_VIEWS,
+  ADMIN_CLIENT_MODELS,
   ADMIN_CLIENT_BATCH,
   ADMIN_CLIENT_ACTIONS,
 ].join("");

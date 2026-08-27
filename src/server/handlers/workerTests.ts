@@ -1,15 +1,23 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { RequestContext } from "../context.js";
+import { persistProbeState } from "../context.js";
 import { probeAnonymousZenProxy, probePoolProxy } from "../../proxy/probe.js";
 import { applyProbeEgressIps } from "../../proxy/pool.js";
 import { inferAccountKind } from "../../relay/index.js";
 import { attachAnonymousZenResult } from "../workerEgress.js";
-import { UpstreamResponseTooLargeError, readStreamFully, sendJson } from "../httpIO.js";
+import { UpstreamResponseTooLargeError, readBody, readStreamFully, sendJson } from "../httpIO.js";
+import { logProbeFailure } from "../probeDiagnostics.js";
+import { normalizeModelName } from "../../proxy/freeModels.js";
 
 const MAX_WORKER_TEST_RESPONSE_BYTES = 1024 * 1024;
 
+function safeUpstreamMessage(value: string | null, status: number): string {
+  const type = value?.split(":", 1)[0]?.replace(/[^A-Za-z0-9_.-]/g, "").slice(0, 80);
+  return type ? `${type}: upstream HTTP ${status}` : `upstream HTTP ${status}`;
+}
+
 export async function handleWorkerTests(
-  _req: IncomingMessage,
+  req: IncomingMessage,
   res: ServerResponse,
   method: string,
   path: string,
@@ -25,6 +33,57 @@ export async function handleWorkerTests(
       sendJson(res, 404, { error: { message: `Worker not found: ${id}` } });
       return true;
     }
+    const kind = inferAccountKind(account);
+    if (kind === "authenticated_zen" && !account.apiKey.trim()) {
+      sendJson(res, 400, {
+        error: {
+          message: `Signed-in Zen Worker "${id}" requires an API key before testing`,
+          type: "worker_api_key_required",
+        },
+      });
+      return true;
+    }
+    let requestedModel: string | null = null;
+    try {
+      const raw = await readBody(req);
+      if (raw.length) {
+        const parsed: unknown = JSON.parse(raw.toString("utf8"));
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          throw new Error("request body must be a JSON object");
+        }
+        const body = parsed as { model?: unknown };
+        if (body.model !== undefined &&
+            (typeof body.model !== "string" || !body.model.trim())) {
+          throw new Error("model must be a string");
+        }
+        requestedModel = typeof body.model === "string" ? body.model.trim() : null;
+      }
+    } catch (error) {
+      sendJson(res, 400, {
+        error: {
+          message: error instanceof Error ? error.message : "Invalid JSON",
+          type: "invalid_worker_test_request",
+        },
+      });
+      return true;
+    }
+    const normalizedRequestedModel = requestedModel
+      ? normalizeModelName(requestedModel.replace(/^opencode\//i, ""))
+      : null;
+    const model = normalizedRequestedModel
+      ? freeModels.ids().find((item) => item === normalizedRequestedModel)
+      : freeModels.has("big-pickle") ? "big-pickle" : freeModels.ids()[0];
+    if (!model) {
+      sendJson(res, 400, {
+        error: {
+          message: requestedModel
+            ? `Model "${requestedModel.slice(0, 120)}" is not an official free model`
+            : "No official free model is available for Worker testing",
+          type: requestedModel ? "model_not_allowed" : "no_free_model_available",
+        },
+      });
+      return true;
+    }
     if (!account.proxyId) {
       sendJson(res, 400, { error: { message: `Worker "${id}" has no proxy binding` } });
       return true;
@@ -36,7 +95,6 @@ export async function handleWorkerTests(
     }
     const started = performance.now();
     try {
-      const kind = inferAccountKind(account);
       const networkProbe = await probePoolProxy(proxy, s.clashBridge, {
         fetchImpl: ctx?.probeFetch,
         bridgeFetch: subscriptionFetch ?? globalThis.fetch,
@@ -47,7 +105,7 @@ export async function handleWorkerTests(
             networkProbe,
             await probeAnonymousZenProxy(proxy, s.clashBridge, {
               baseUrl: s.baseUrl,
-              model: freeModels.has("big-pickle") ? "big-pickle" : freeModels.ids()[0],
+              model,
               fetchImpl: ctx?.probeFetch,
               bridgeFetch: subscriptionFetch ?? globalThis.fetch,
               clashQueue: clashProbeQueue,
@@ -55,6 +113,10 @@ export async function handleWorkerTests(
           )
         : attachAnonymousZenResult(networkProbe, null);
       probes.set(probe);
+      if (!probe.ok || (kind === "anonymous_zen" && !probe.anonymousZen?.ok)) {
+        logProbeFailure("single", probe);
+      }
+      await persistProbeState(ctx);
       if (probe.ok && probe.egressIp) {
         const saved = await store.save({
           proxyPool: applyProbeEgressIps(store.get().proxyPool, [probe]),
@@ -88,8 +150,6 @@ export async function handleWorkerTests(
         });
         return true;
       }
-      const model = freeModels.has("big-pickle") ? "big-pickle" : freeModels.ids()[0];
-      if (!model) throw new Error("No free model available for worker test");
       if (kind === "anonymous_zen") {
         sendJson(res, 200, {
           ok: true,
@@ -142,13 +202,11 @@ export async function handleWorkerTests(
         upstreamStatus: result.status,
         latencyMs: Math.round(performance.now() - started),
         reply,
-        error: ok ? null : { message: upstreamError || `upstream HTTP ${result.status}` },
+        error: ok ? null : { message: safeUpstreamMessage(upstreamError, result.status) },
       });
     } catch (err) {
       const tooLarge = err instanceof UpstreamResponseTooLargeError;
-      const message = tooLarge
-        ? err.message
-        : err instanceof Error ? err.message : String(err);
+      const message = tooLarge ? err.message : "Worker test request failed";
       sendJson(res, 502, {
         ok: false,
         workerId: id,

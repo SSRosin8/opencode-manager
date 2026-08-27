@@ -9,6 +9,7 @@ import { ProbeResultCache } from "../proxy/probe.js";
 import { UpstreamClient } from "../proxy/upstream.js";
 import { SettingsStore } from "../settings/store.js";
 import { WorkerStatsStore } from "../settings/workerStats.js";
+import { ProbeStateStore } from "../settings/probeState.js";
 import { ADMIN_HTML } from "./adminHtml.js";
 import { newBatchProbeProgress, type RequestContext } from "./context.js";
 import { BatchProbeControl } from "./batchProbeControl.js";
@@ -50,6 +51,21 @@ export async function createApp(opts?: {
   const upstream = new UpstreamClient(settings, opts?.fetchImpl, undefined, clashProbeQueue);
   store.updateReadyCount(upstream.rotator.readyCount(), upstream.rotator.getAccounts().length);
   const probes = opts?.probes ?? new ProbeResultCache();
+  const probeState = new ProbeStateStore(store.path);
+  const batchProbeProgress = newBatchProbeProgress();
+  const restoredProbeState = await probeState.load(
+    new Set(settings.proxyPool.map((proxy) => proxy.id)),
+    batchProbeProgress
+  );
+  probes.setMany(restoredProbeState.probeResults);
+  Object.assign(batchProbeProgress, restoredProbeState.batchProbe);
+  if (restoredProbeState.interrupted) {
+    console.warn(
+      `[probe-state] interrupted batch restored (${batchProbeProgress.completed}/${batchProbeProgress.total})`
+    );
+  } else if (restoredProbeState.probeResults.length) {
+    console.log(`[probe-state] restored ${restoredProbeState.probeResults.length} probe results`);
+  }
   const workerStats =
     opts?.workerStats ??
     new WorkerStatsStore({
@@ -90,8 +106,9 @@ export async function createApp(opts?: {
     clashProbeQueue,
     workerStats,
     freeModels,
-    batchProbeProgress: newBatchProbeProgress(),
+    batchProbeProgress,
     batchProbeControl: new BatchProbeControl(),
+    probeState,
   };
   const port =
     opts?.port ??

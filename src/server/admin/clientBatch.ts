@@ -46,7 +46,7 @@ export const ADMIN_CLIENT_BATCH = `    async function loadSettings() {
       if (settings && document.querySelector("#accounts .worker-card")) {
         await reloadAfterBatchPreservingDrafts();
       } else {
-        await Promise.all([loadSettings(), loadStatus(), loadProbes()]);
+        await Promise.all([loadSettings(), loadStatus(), loadProbes(), loadFreeModels()]);
       }
       renderAll();
       syncBatchProgress(batchProgress);
@@ -146,7 +146,7 @@ export const ADMIN_CLIENT_BATCH = `    async function loadSettings() {
     async function reloadAfterBatchPreservingDrafts() {
       const drafts = settings ? collectAccounts() : [];
       const baseline = new Set(batchBaselineAccountIds);
-      await Promise.all([loadSettings(), loadStatus(), loadProbes()]);
+      await Promise.all([loadSettings(), loadStatus(), loadProbes(), loadFreeModels()]);
       const draftIds = new Set(drafts.map((account) => account.id));
       const draftAnonymousProxyIds = new Set(drafts
         .filter((account) => account.kind === "anonymous_zen" && account.proxyId)

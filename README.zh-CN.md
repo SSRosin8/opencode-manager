@@ -24,12 +24,10 @@
 git clone https://github.com/SSRosin8/opencode-manager.git
 cd opencode-manager
 npm ci
-npm run build
 npm start
-# 或: npm run dev
 ```
 
-`npm start` 在当前终端前台运行，关闭终端会停止服务；停止时按 `Ctrl+C`。它运行的是已经构建的 `dist/`，修改源码后需重新执行 `npm run build`。`npm run dev` 直接运行源码，适合开发调试。
+`npm start` 会构建源码、在后台启动服务、等待健康检查并输出管理后台地址。日常可使用 `npm run status`、`npm run restart` 和 `npm stop` 管理。运行状态与日志保存在 Git 已忽略的 `data/run/` 目录。需要前台运行时使用 `npm run build && npm run foreground`；开发调试可使用 `npm run dev`。
 
 默认仅监听 `127.0.0.1:9876`。完整的首次配置、Clash/Mihomo、OpenCode 接入、验证、备份和故障排查步骤请阅读：
 
@@ -48,11 +46,13 @@ npm start
 |--------|---------|
 | 管理后台 | 网关基础设置、代理来源与测试、Worker 调度、客户端接入和可选 CLI 兼容请求头 |
 | `data/settings.json` | 持久化设置（自动创建） |
+| `data/probe-state.json` | 脱敏的节点探测结果和最近一次批测状态 |
 | `PORT` | 监听端口 |
 | `OPENCODE_MANAGER_HOST` | 监听地址，默认 `127.0.0.1`；仅在已保护后台时改为 `0.0.0.0` |
 | `OPENCODE_MANAGER_SETTINGS_PATH` | 自定义设置文件路径 |
 | `OPENCODE_MANAGER_STATS_PATH` | 自定义 Worker 统计文件路径 |
 | `OPENCODE_MANAGER_MODELS_URL` | 覆盖用于刷新免费模型的 Zen 官方模型目录 URL |
+| `OPENCODE_MANAGER_ANONYMOUS_ZEN_TIMEOUT_MS` | 匿名 Zen 探测超时（毫秒，限制为 5000-120000） |
 | `OPENCODE_SYNTHESIZE_CLI_HEADERS` | 设为 `true` 时合成 CLI 身份请求头（也可在后台配置） |
 | `OPENCODE_USER_AGENT` / `OPENCODE_CLIENT` / `OPENCODE_PROJECT` | 合成 CLI 身份请求头时使用的默认值 |
 
@@ -119,7 +119,7 @@ OpenCode 免费账号经常受 **IP 限制**。将每个 Worker 绑定到不同�
 
 Clash 桥接包含两条独立链路：Controller URL/Secret 是切换节点和查询延迟的**控制面**；本地主机/mixed-port 是实际转发请求的**数据面**。这里的 `127.0.0.1` 始终指运行 opencode-manager 的机器，不是打开后台页面的浏览器所在机器。
 
-导入后先测试候选节点。测试会先记录并持久化公网出口 IP，再用 `Bearer public` 发起一次真实匿名 Zen 免费模型请求；服务重启后仍会显示上一次成功测得的出口，失败探测不会清除该记录。只有匿名 Zen 成功的出口才参与自动分配。节点按真实出口 IP 去重，同一出口最多承载一个匿名 Worker 和一个登录 Worker。单个 mixed-port 使用共享选择组，网关会串行完成“切换节点 + 建立连接”；运行期间不要在其他客户端中切换同一个选择组。需要多个节点永久并行独占端口时，应为每个 Worker 配置独立的 Mihomo 入站或实例。
+导入后先测试候选节点。测试会先记录并持久化公网出口 IP，再用 `Bearer public` 发起一次真实匿名 Zen 免费模型请求；服务重启后仍会显示上次探测状态。匿名 Zen 成功的唯一出口会自动创建匿名 Worker；登录 Worker 的“修复绑定”只要求出口实际可达并已验证 IP。节点按真实出口 IP 去重，同一出口最多承载一个匿名 Worker 和一个登录 Worker。单个 mixed-port 使用共享选择组，网关会串行完成“切换节点 + 建立连接”；运行期间不要在其他客户端中切换同一个选择组。需要多个节点永久并行独占端口时，应为每个 Worker 配置独立的 Mihomo 入站或实例。
 
 “批量测试”先通过 Mihomo 节点延迟接口筛选，再对每个不同公网出口执行匿名 Zen 验证。每个验证可用的唯一出口都会自动添加为匿名 Worker；你只需要手动添加登录 Zen 账号。重复或局部批测只会补充缺少的 Worker，不会重复创建或删除现有配置。普通代理筛选最多 12 路并发；Clash 节点的公网 IP 和 Zen 请求复用一次 selector 切换。单个共享 Clash selector 的不同节点仍需串行处理，以避免出口串线。
 
@@ -127,7 +127,7 @@ Worker 页面可以设置调度策略，并控制每个 Worker 是否参与流�
 
 总览页会区分客户端生成请求、Worker 上游尝试和 `/v1/models` 模型列表尝试；重试链只算一个客户端生成请求，Worker 行仍按实际路由尝试计数。全局模型分布按客户端请求链去重，各 Worker 则展示自己实际尝试过的模型。Token 仅累计上游成功响应中实际报告的 `usage`，界面会显示 usage 覆盖情况；缓存命中率按“缓存读取输入 Token / 总输入 Token”计算，并将缓存未命中与明确的缓存写入字段分开。Token 和缓存同时按模型聚合，切换模型后可在悬停详情中分别查看。路由前发生的失败会进入独立的网关拒绝列表，不归到任何 Worker。全局“重置统计”会同时清除 Worker 计数、上游尝试、最近错误和网关拒绝记录。
 
-Worker 列表可以保存为空；此时转发接口会返回明确的 `503`，直到手动添加 Worker 或通过批量测试重新生成。Worker、IP 隔离、代理节点、上游尝试和网关拒绝等密集列表统一每页显示 8 条。桌面导航将总览独立呈现，把网关、代理池和 Workers 归入“资源配置”，把客户端用法归入“客户端接入”；两个分组和整个侧边栏可分别折叠，浏览器会记住显示状态，移动端则保持所有入口可见的紧凑横向导航。
+Worker 列表可以保存为空；此时转发接口会返回明确的 `503`，直到手动添加 Worker 或通过批量测试重新生成。Worker、IP 隔离、代理节点、上游尝试和网关拒绝等密集列表统一每页显示 8 条。桌面导航将总览独立呈现，把网关、代理池、Workers 和模型归入“资源配置”，把客户端用法归入“客户端接入”；两个分组和整个侧边栏可分别折叠，浏览器会记住显示状态，移动端则保持所有入口可见的紧凑横向导航。
 
 后台详情提示统一使用支持键盘的浮层样式，悬浮或聚焦对应卡片、统计项或被截断的内容即可显示；浮层会自动上下翻转并限制在视口内，也会在按下 Escape、滚动或调整窗口时关闭。
 

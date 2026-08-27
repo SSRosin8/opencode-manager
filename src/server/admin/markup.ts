@@ -1,4 +1,6 @@
 import { ADMIN_GETTING_STARTED, ADMIN_GUIDE_MODAL } from "./guideMarkup.js";
+import { ADMIN_MODELS_MARKUP } from "./modelsMarkup.js";
+import { ADMIN_PROXY_NODES_MARKUP } from "./proxyNodesMarkup.js";
 
 /** Source fragment for the self-contained admin console. */
 export const ADMIN_MARKUP = `</head>
@@ -64,6 +66,10 @@ export const ADMIN_MARKUP = `</head>
           <button type="button" class="nav-item" data-page="workers">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="3"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a3 3 0 0 1 0 5.74"/></svg>
             <span data-i18n="navWorkers">Workers</span>
+          </button>
+          <button type="button" class="nav-item" data-page="models">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5.5 12 2l8 3.5-8 3.5-8-3.5Z"/><path d="m4 10 8 3.5 8-3.5M4 14.5 12 18l8-3.5"/></svg>
+            <span data-i18n="navModels">Models</span>
           </button>
           </div>
           <button type="button" class="nav-group-toggle" data-nav-group="monitor" aria-expanded="true"><span class="nav-group-icon" aria-hidden="true">◒</span><span data-i18n="navMonitorGroup">Client access</span><span class="nav-group-chevron" aria-hidden="true">⌃</span></button>
@@ -335,62 +341,7 @@ ${ADMIN_GETTING_STARTED}
                 <div class="panel-bd"><div class="sub-grid" id="sub-grid"></div></div>
               </div>
 
-              <!-- Nodes table -->
-              <div class="panel" data-proxy-section="nodes">
-                <div class="panel-hd">
-                  <h2 data-i18n="proxyNodes">Proxy Nodes</h2>
-                  <button type="button" class="btn btn-sm collapse-toggle" data-collapse-key="proxy-nodes" data-collapse-target="proxy-nodes-body" aria-expanded="true"><span aria-hidden="true">▴</span></button>
-                </div>
-                <div class="collapsible-body" id="proxy-nodes-body">
-                  <div class="table-tools">
-                  <div class="search">
-                    <input class="input" id="node-search" type="search" data-i18n-placeholder="searchNodes" placeholder="Search nodes..." />
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3-3"/></svg>
-                  </div>
-                  <select class="select" id="flt-proto">
-                    <option value="" data-i18n="allProtocols">All Protocols</option>
-                  </select>
-                  <select class="select" id="flt-source">
-                    <option value="" data-i18n="allSources">All Sources</option>
-                    <option value="manual" data-i18n="srcManual">Manual</option>
-                    <option value="subscription" data-i18n="srcSub">Subscription</option>
-                    <option value="controller" data-i18n="srcController">Controller</option>
-                  </select>
-                  <select class="select" id="flt-health">
-                    <option value="" data-i18n="allHealth">All Health</option>
-                    <option value="healthy" data-i18n="healthy">Healthy</option>
-                    <option value="warn" data-i18n="warning">Warning</option>
-                    <option value="bad" data-i18n="unreachable">Unreachable</option>
-                  </select>
-                  <button type="button" class="btn btn-sm" id="btn-batch-test" data-i18n="batchTest">Batch Test</button>
-                  <button type="button" class="btn btn-sm" id="btn-batch-pause" data-i18n="pauseBatch" hidden>Pause</button>
-                  <button type="button" class="btn btn-sm btn-danger" id="btn-batch-cancel" data-i18n="cancelBatch" hidden>Cancel</button>
-                  <button type="button" class="btn btn-sm" id="btn-nodes-refresh" data-i18n="refreshNodeStatus">Refresh node status</button>
-                </div>
-                  <div class="table-wrap">
-                    <table class="nodes">
-                    <thead>
-                      <tr>
-                        <th data-i18n="colName">Name</th>
-                        <th data-i18n="colType">Type</th>
-                        <th data-i18n="colAddress">Address</th>
-                        <th data-i18n="colSource">Source</th>
-                        <th data-i18n="colRoute">Route</th>
-                        <th data-i18n="colHealth">Health</th>
-                        <th data-i18n="colLatency">Latency</th>
-                        <th data-i18n="colWorker">Assigned Worker</th>
-                        <th data-i18n="colActions">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody id="nodes-body"></tbody>
-                    </table>
-                  </div>
-                  <div class="table-foot">
-                    <div class="sum" id="nodes-sum"></div>
-                    <div class="pager" id="nodes-pager"></div>
-                  </div>
-                </div>
-              </div>
+${ADMIN_PROXY_NODES_MARKUP}
             </div>
 
             <div class="pp-side">
@@ -495,7 +446,7 @@ ${ADMIN_GETTING_STARTED}
           <div class="stack workers-stack"><div id="accounts" class="worker-columns"></div></div>
         </div>
 
-        <!-- Client usage -->
+${ADMIN_MODELS_MARKUP}        <!-- Client usage -->
         <div class="page" id="page-usage" data-page="usage">
           <div class="page-head">
             <div>

@@ -285,14 +285,14 @@ describe("assignHealthyProxiesToWorkers", () => {
     const result = assignHealthyProxiesToWorkers({
       accounts: [
         { id: "w1", apiKey: "k1", proxyId: null, proxy: null },
-        { id: "w2", apiKey: "k2", proxyId: "old", proxy: null },
+        { id: "w2", apiKey: "k2", proxyId: "slow", proxy: null },
         { id: "w3", apiKey: "k3", proxyId: null, proxy: null },
       ],
       pool: [px("slow"), px("fast"), px("mid"), px("bad")],
       probeResults: {
-        slow: { ok: true, health: "healthy", latencyMs: 300, anonymousZen: { ok: true } },
-        fast: { ok: true, health: "healthy", latencyMs: 40, anonymousZen: { ok: true } },
-        mid: { ok: true, health: "healthy", latencyMs: 120, anonymousZen: { ok: true } },
+        slow: { ok: true, health: "healthy", latencyMs: 300, egressIp: "203.0.113.3", anonymousZen: { ok: true } },
+        fast: { ok: true, health: "healthy", latencyMs: 40, egressIp: "203.0.113.1", anonymousZen: { ok: true } },
+        mid: { ok: true, health: "healthy", latencyMs: 120, egressIp: "203.0.113.2", anonymousZen: { ok: true } },
         bad: { ok: false, health: "bad", latencyMs: null },
       },
     });
@@ -300,19 +300,20 @@ describe("assignHealthyProxiesToWorkers", () => {
     expect(result.healthyAvailable).toBe(3);
     expect(result.assigned).toBe(3);
     expect(result.unassigned).toBe(0);
-    expect(result.accounts.map((a) => a.proxyId)).toEqual(["fast", "mid", "slow"]);
+    expect(result.accounts.map((a) => a.proxyId)).toEqual(["fast", "slow", "mid"]);
+    expect(result.preserved).toBe(1);
     expect(new Set(result.accounts.map((a) => a.proxyId)).size).toBe(3);
   });
 
   it("leaves surplus workers unbound when healthy proxies run out", () => {
     const result = assignHealthyProxiesToWorkers({
       accounts: [
-        { id: "w1", apiKey: "", proxyId: "keep-me", proxy: null },
-        { id: "w2", apiKey: "", proxyId: null, proxy: null },
+        { id: "w1", apiKey: "key-1", proxyId: "keep-me", proxy: null },
+        { id: "w2", apiKey: "key-2", proxyId: null, proxy: null },
       ],
       pool: [px("only")],
       probeResults: {
-        only: { ok: true, health: "healthy", latencyMs: 10, anonymousZen: { ok: true } },
+        only: { ok: true, health: "healthy", latencyMs: 10, egressIp: "203.0.113.1", anonymousZen: { ok: true } },
       },
     });
     expect(result.assigned).toBe(1);
@@ -323,10 +324,10 @@ describe("assignHealthyProxiesToWorkers", () => {
 
   it("preserves disabled state while assigning proxies", () => {
     const result = assignHealthyProxiesToWorkers({
-      accounts: [{ id: "paused", apiKey: "", enabled: false, proxyId: null, proxy: null }],
+      accounts: [{ id: "paused", apiKey: "key", enabled: false, proxyId: null, proxy: null }],
       pool: [px("only")],
       probeResults: {
-        only: { ok: true, health: "healthy", latencyMs: 10, anonymousZen: { ok: true } },
+        only: { ok: true, health: "healthy", latencyMs: 10, egressIp: "203.0.113.1", anonymousZen: { ok: true } },
       },
     });
     expect(result.accounts[0]).toMatchObject({ id: "paused", enabled: false, proxyId: "only" });
@@ -335,8 +336,8 @@ describe("assignHealthyProxiesToWorkers", () => {
   it("does not assign two nodes with the same measured egress IP", () => {
     const result = assignHealthyProxiesToWorkers({
       accounts: [
-        { id: "w1", apiKey: "", proxyId: null, proxy: null },
-        { id: "w2", apiKey: "", proxyId: null, proxy: null },
+        { id: "w1", apiKey: "key-1", proxyId: null, proxy: null },
+        { id: "w2", apiKey: "key-2", proxyId: null, proxy: null },
       ],
       pool: [px("a"), px("b")],
       probeResults: {
@@ -351,7 +352,7 @@ describe("assignHealthyProxiesToWorkers", () => {
   it("allows one anonymous and one authenticated worker to share a verified egress", () => {
     const result = assignHealthyProxiesToWorkers({
       accounts: [
-        { id: "anonymous", kind: "anonymous_zen", apiKey: "", proxyId: null },
+        { id: "anonymous", kind: "anonymous_zen", apiKey: "", proxyId: "shared" },
         { id: "login", kind: "authenticated_zen", apiKey: "zen-key", proxyId: null },
       ],
       pool: [px("shared")],
@@ -365,7 +366,7 @@ describe("assignHealthyProxiesToWorkers", () => {
         },
       },
     });
-    expect(result.assigned).toBe(2);
+    expect(result.assigned).toBe(1);
     expect(result.accounts.map((account) => account.proxyId)).toEqual(["shared", "shared"]);
     expect(result.accounts.map((account) => account.kind)).toEqual([
       "anonymous_zen",
@@ -373,21 +374,25 @@ describe("assignHealthyProxiesToWorkers", () => {
     ]);
   });
 
-  it("does not assign a network-healthy proxy until anonymous Zen succeeds", () => {
+  it("uses a reachable egress for a signed-in worker even when anonymous Zen is limited", () => {
     const result = assignHealthyProxiesToWorkers({
-      accounts: [{ id: "anonymous", apiKey: "", proxyId: null }],
+      accounts: [{ id: "login", kind: "authenticated_zen", apiKey: "key", proxyId: null }],
       pool: [px("network-only")],
       probeResults: {
-        "network-only": { ok: true, health: "healthy", latencyMs: 10 },
+        "network-only": {
+          ok: true, health: "warn", latencyMs: 10, egressIp: "203.0.113.9",
+          anonymousZen: { ok: false },
+        },
       },
     });
-    expect(result.healthyAvailable).toBe(0);
-    expect(result.assigned).toBe(0);
+    expect(result.healthyAvailable).toBe(1);
+    expect(result.assigned).toBe(1);
+    expect(result.accounts[0].proxyId).toBe("network-only");
   });
 
   it("ignores structural-usable nodes that never probed healthy", () => {
     const result = assignHealthyProxiesToWorkers({
-      accounts: [{ id: "w1", apiKey: "", proxyId: null, proxy: null }],
+      accounts: [{ id: "w1", apiKey: "key", proxyId: null, proxy: null }],
       pool: [px("untested")],
       probeResults: {},
     });
@@ -398,7 +403,7 @@ describe("assignHealthyProxiesToWorkers", () => {
 
   it("skips bridge-only healthy nodes when Clash bridge is off", () => {
     const result = assignHealthyProxiesToWorkers({
-      accounts: [{ id: "w1", apiKey: "", proxyId: null, proxy: null }],
+      accounts: [{ id: "w1", apiKey: "key", proxyId: null, proxy: null }],
       pool: [
         px("vless", {
           type: "vless",
@@ -743,6 +748,7 @@ proxies:
         error: null,
         testedAt: new Date().toISOString(),
         health: "healthy",
+        egressIp: "203.0.113.10",
         anonymousZen: { id: "px-fast", status: "usable", ok: true, httpStatus: 200, latencyMs: 50, error: null, testedAt: new Date().toISOString() },
       },
       {
@@ -752,6 +758,7 @@ proxies:
         error: null,
         testedAt: new Date().toISOString(),
         health: "healthy",
+        egressIp: "203.0.113.11",
         anonymousZen: { id: "px-slow", status: "usable", ok: true, httpStatus: 200, latencyMs: 50, error: null, testedAt: new Date().toISOString() },
       },
       {
