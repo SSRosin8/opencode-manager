@@ -96,7 +96,7 @@ PORT=9988 npm start
 | 节点已加载在 Clash/0dcloud | 配置桥接并“导入 Controller 节点” | 是 |
 | Controller 密钥不可获取 | 使用独立、可控的 Mihomo 实例，或只使用 HTTP/SOCKS 代理 | 取决于所选路径 |
 
-拉取订阅时会尝试多个客户端 User-Agent，包括 `clash` 和 `0dcloud`，因为部分服务商只向特定客户端返回内容或允许访问。订阅拉取只解析**当前 HTTP 响应**里的顶层 Clash `proxies` 或多行分享链接；不会读取 Clash 客户端的本地缓存，也不会展开响应中的远程 `proxy-providers`。
+拉取订阅时会协商多个客户端 User-Agent，包括 `clash`、`0dcloud` 和 Clash Verge Rev，因为部分服务商只有在收到精确客户端身份时才返回正文，否则可能返回 `504` 或不同内容。解析器支持 Clash YAML/JSON、SIP008 JSON、常见 VMess/SS/SSR 等分享链接，以及最多三层 Base64 包装。订阅拉取只解析**当前 HTTP 响应**里的顶层节点；不会读取 Clash 客户端的本地缓存，也不会展开响应中的远程 `proxy-providers`。
 
 “导入 Controller 节点”读取的是 Mihomo 当前运行时 Selector 中已经加载的叶子节点。Mihomo 可能已经使用缓存、展开 provider 或合并其他来源。因此，即使订阅 URL 看起来相同，直接拉取的节点数和 Controller 导入数也不要求一致。
 

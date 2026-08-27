@@ -50,15 +50,26 @@ describe("normalizeProxyPool", () => {
 
   it("normalizes, updates, and preserves a measured exit IP", () => {
     const pool = normalizeProxyPool([
-      { id: "known", host: "192.0.2.1", port: 80, type: "http", egressIp: " 203.0.113.9 " },
+      {
+        id: "known",
+        host: "192.0.2.1",
+        port: 80,
+        type: "http",
+        egressIp: " 203.0.113.9 ",
+      },
     ]);
     expect(pool[0].egressIp).toBe("203.0.113.9");
-    expect(applyProbeEgressIps(pool, [{ id: "known", ok: false, egressIp: null }])[0].egressIp).toBe("203.0.113.9");
-    const updated = applyProbeEgressIps(pool, [{ id: "known", ok: true, egressIp: "198.51.100.7" }]);
+    expect(
+      applyProbeEgressIps(pool, [{ id: "known", ok: false, egressIp: null }])[0]
+        .egressIp,
+    ).toBe("203.0.113.9");
+    const updated = applyProbeEgressIps(pool, [
+      { id: "known", ok: true, egressIp: "198.51.100.7" },
+    ]);
     const merged = mergeSubscriptionProxies(
       [{ ...updated[0], source: "subscription", subscriptionId: "sub" }],
       "sub",
-      [{ ...updated[0], egressIp: undefined }]
+      [{ ...updated[0], egressIp: undefined }],
     );
     expect(merged[0].egressIp).toBe("198.51.100.7");
   });
@@ -66,23 +77,25 @@ describe("normalizeProxyPool", () => {
 
 describe("Controller import resilience", () => {
   it("replaces the previous Controller view without duplicating stable nodes", () => {
-    const imported = [{
-      id: "controller_a",
-      name: "Mexico",
-      type: "anytls",
-      host: "127.0.0.1",
-      port: 17891,
-      enabled: true,
-      source: "controller" as const,
-      controllerGroup: "Proxy",
-      usable: false,
-      bridgeable: true,
-      clashNodeName: "Mexico",
-    }];
+    const imported = [
+      {
+        id: "controller_a",
+        name: "Mexico",
+        type: "anytls",
+        host: "127.0.0.1",
+        port: 17891,
+        enabled: true,
+        source: "controller" as const,
+        controllerGroup: "Proxy",
+        usable: false,
+        bridgeable: true,
+        clashNodeName: "Mexico",
+      },
+    ];
     const once = replaceControllerProxies([], imported);
     const twice = replaceControllerProxies(
       [{ ...once[0], egressIp: "203.0.113.12" }],
-      imported
+      imported,
     );
     expect(twice).toHaveLength(1);
     expect(twice[0].id).toBe("controller_a");
@@ -95,18 +108,24 @@ describe("Controller import resilience", () => {
       enabled: true,
       selectorGroup: "GLOBAL",
     };
-    const fetchImpl = async () => new Response(JSON.stringify({
-      proxies: {
-        GLOBAL: { type: "Selector", all: ["Proxy", "DIRECT"] },
-        Proxy: { type: "Selector", all: ["Mexico"] },
-        Mexico: { type: "AnyTLS" },
-        DIRECT: { type: "Direct" },
-      },
-    }), { status: 200, headers: { "Content-Type": "application/json" } });
+    const fetchImpl = async () =>
+      new Response(
+        JSON.stringify({
+          proxies: {
+            GLOBAL: { type: "Selector", all: ["Proxy", "DIRECT"] },
+            Proxy: { type: "Selector", all: ["Mexico"] },
+            Mexico: { type: "AnyTLS" },
+            DIRECT: { type: "Direct" },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
 
     await expect(
-      importClashControllerNodes(bridge, fetchImpl as typeof fetch)
-    ).rejects.toThrow('selector group "GLOBAL" contains no importable leaf nodes');
+      importClashControllerNodes(bridge, fetchImpl as typeof fetch),
+    ).rejects.toThrow(
+      'selector group "GLOBAL" contains no importable leaf nodes',
+    );
   });
 });
 
@@ -119,13 +138,16 @@ describe("listModels resilience", () => {
     });
     const upstreamFetch = vi.fn(async (url: string, init?: RequestInit) => {
       // direct (no dispatcher) path
-      if (String(url).includes("/models") && !(init as { dispatcher?: unknown })?.dispatcher) {
+      if (
+        String(url).includes("/models") &&
+        !(init as { dispatcher?: unknown })?.dispatcher
+      ) {
         return new Response(
           JSON.stringify({
             object: "list",
             data: [{ id: "big-pickle", object: "model" }],
           }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
+          { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
       throw new Error("should not use proxy path successfully");
@@ -158,7 +180,7 @@ describe("listModels resilience", () => {
         accounts: [{ id: "w1", apiKey: "", proxyId: "px_jp", proxy: null }],
       }),
       upstreamFetch as unknown as import("../src/proxy/upstream.js").ProxyFetch,
-      bridgeFetch as unknown as typeof fetch
+      bridgeFetch as unknown as typeof fetch,
     );
 
     await expect(client.listModels()).rejects.toThrow("Clash switch failed");
@@ -186,11 +208,13 @@ proxy-groups:
 `;
     const b64 = Buffer.from(
       "vless://u@a.example.com:1#OnlyOne\n",
-      "utf8"
+      "utf8",
     ).toString("base64");
 
     const fetchImpl = async (_url: string, init?: RequestInit) => {
-      const ua = String((init?.headers as Record<string, string>)?.["User-Agent"] || "");
+      const ua = String(
+        (init?.headers as Record<string, string>)?.["User-Agent"] || "",
+      );
       if (ua === "clash") return new Response(yaml, { status: 200 });
       return new Response(b64, { status: 200 });
     };
@@ -210,7 +234,9 @@ proxy-groups:
     const body = "http://user:pass@192.0.2.10:8080#0dcloud-only\n";
     const seen: string[] = [];
     const fetchImpl = async (_url: string, init?: RequestInit) => {
-      const ua = String((init?.headers as Record<string, string>)?.["User-Agent"] || "");
+      const ua = String(
+        (init?.headers as Record<string, string>)?.["User-Agent"] || "",
+      );
       seen.push(ua);
       return ua === "0dcloud"
         ? new Response(body, { status: 200 })
@@ -226,5 +252,32 @@ proxy-groups:
     expect(result.usedUserAgent).toBe("0dcloud");
     expect(result.proxies).toHaveLength(1);
     expect(seen).toContain("0dcloud");
+  });
+
+  it("supports providers that require the Clash Verge Rev User-Agent", async () => {
+    const body = `proxies:\n  - name: Verge\n    type: http\n    server: 192.0.2.20\n    port: 8080\n`;
+    const seen: string[] = [];
+    const fetchImpl = async (_url: string, init?: RequestInit) => {
+      const ua = String(
+        (init?.headers as Record<string, string>)?.["User-Agent"] || "",
+      );
+      seen.push(ua);
+      return ua === "clash-verge/v2.5.2"
+        ? new Response(body, { status: 200 })
+        : new Response("gateway timeout", {
+            status: 504,
+            statusText: "Gateway Time-out",
+          });
+    };
+
+    const result = await fetchClashSubscription({
+      url: "https://example.invalid/clash-verge-subscription",
+      subscriptionId: "clash-verge",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    expect(result.usedUserAgent).toBe("clash-verge/v2.5.2");
+    expect(result.proxies).toHaveLength(1);
+    expect(seen).toContain("clash-verge/v2.5.2");
   });
 });

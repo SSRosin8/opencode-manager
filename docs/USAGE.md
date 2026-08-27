@@ -92,7 +92,7 @@ Choose a path based on the proxy source you already have:
 | Nodes already loaded in Clash/0dcloud | Configure the bridge and Import Controller Nodes | Yes |
 | Controller secret is unavailable | Use an independent Mihomo instance you control, or use HTTP/SOCKS only | Depends on the chosen path |
 
-Subscription pulls try several client User-Agents, including `clash` and `0dcloud`, because some providers only serve or authorize specific clients. A subscription fetch parses only the **current HTTP response's** top-level Clash `proxies` or share-link lines. It does not read a Clash client's cache or expand remote `proxy-providers` in that response.
+Subscription pulls negotiate several client User-Agents, including `clash`, `0dcloud`, and Clash Verge Rev, because some providers return `504` or different content unless the exact client identity is used. The parser accepts Clash YAML/JSON, SIP008 JSON, common VMess/SS/SSR and other share links, and up to three Base64 wrapping layers. It parses only the **current HTTP response's** top-level nodes; it does not read a Clash client's cache or expand remote `proxy-providers` in that response.
 
 Import Controller Nodes reads leaf nodes already loaded into Mihomo's runtime Selector. Mihomo may have used cache, expanded providers, or merged other sources. Direct-fetch and Controller-import counts therefore need not match even when the subscription URL appears to be the same.
 
