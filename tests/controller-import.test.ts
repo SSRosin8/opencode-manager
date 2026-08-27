@@ -210,7 +210,8 @@ describe("Controller import API binding migration", () => {
       settings: GatewaySettings;
     };
     expect(first.imported).toBe(2);
-    expect(first.settings.clashBridge).toEqual(bridge);
+    expect(first.settings.clashBridge).toMatchObject(bridge);
+    expect(first.settings.clashBridge.bridges[0]).toMatchObject(bridge);
     expect(first.settings.proxyPool.every((proxy) => proxy.source === "controller")).toBe(true);
     const ids = first.settings.proxyPool.map((proxy) => proxy.id);
     const legacyIds = ["legacy-proxy-mexico", "legacy-proxy-spain"];

@@ -1,6 +1,11 @@
 /** Source fragment for the self-contained admin console. */
 export const ADMIN_CLIENT_ACTIONS = `    $("btn-top-refresh").onclick = () => refreshAll();
     $("btn-nodes-refresh").onclick = () => refreshAll();
+    $("btn-add-bridge-profile").onclick = () => {
+      const existing = collectBridge().bridges;
+      existing.push({ id: "bridge-" + Date.now(), name: "Core " + (existing.length + 1), enabled: true, priority: existing.length, apiBase: "", apiSecret: "", localProxyHost: "127.0.0.1", localProxyPort: 7890, selectorGroup: "GLOBAL" });
+      renderBridgeProfiles(existing);
+    };
     $("btn-batch-test").onclick = () => batchTestProxies();
     $("btn-batch-pause").onclick = () => controlBatchTest(batchProgress?.paused ? "resume" : "pause");
     $("btn-batch-cancel").onclick = () => controlBatchTest("cancel");
@@ -14,8 +19,10 @@ export const ADMIN_CLIENT_ACTIONS = `    $("btn-top-refresh").onclick = () => re
     };
 
     $("btn-save-bridge").onclick = async () => {
+      let bridge;
+      try { bridge = collectBridge(); } catch (error) { toast(error.message || String(error), false); return; }
       const res = await fetch("/admin/api/clash-bridge", {
-        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(collectBridge()),
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(bridge),
       });
       if (!res.ok) { toast(t("toastSaveFail"), false); return; }
       settings = (await res.json()).settings;
@@ -27,9 +34,11 @@ export const ADMIN_CLIENT_ACTIONS = `    $("btn-top-refresh").onclick = () => re
       const msg = $("bridge-probe-msg");
       msg.className = "probe-ok show";
       msg.textContent = t("toastProbing");
+      let bridge;
+      try { bridge = collectBridge(); } catch (error) { msg.className = "probe-ok show fail"; msg.textContent = error.message || String(error); return; }
       const res = await fetch("/admin/api/clash-bridge/probe", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(collectBridge()),
+        body: JSON.stringify(bridge),
       });
       const data = await res.json();
       bridgeProbeOk = !!data.ok;

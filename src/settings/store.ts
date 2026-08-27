@@ -118,7 +118,7 @@ const DEFAULT_SETTINGS: GatewaySettings = {
   routingStrategy: "anonymous_first",
   proxyPool: [],
   proxySubscriptions: [],
-  clashBridge: { ...DEFAULT_CLASH_BRIDGE },
+  clashBridge: { ...DEFAULT_CLASH_BRIDGE, bridges: [] },
   port: 9876,
 };
 
@@ -180,8 +180,8 @@ function normalizeAccounts(raw: unknown): AccountConfig[] {
   });
 }
 
-export function normalizeSettings(raw: Partial<GatewaySettings> | null | undefined): GatewaySettings {
-  const s = raw ?? {};
+export function normalizeSettings(raw: unknown): GatewaySettings {
+  const s = (raw && typeof raw === "object" ? raw : {}) as Partial<GatewaySettings>;
   return {
     baseUrl:
       typeof s.baseUrl === "string" && s.baseUrl.trim()

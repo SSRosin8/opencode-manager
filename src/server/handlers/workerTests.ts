@@ -7,6 +7,7 @@ import { inferAccountKind } from "../../relay/index.js";
 import { attachAnonymousZenResult } from "../workerEgress.js";
 import { UpstreamResponseTooLargeError, readBody, readStreamFully, sendJson } from "../httpIO.js";
 import { logProbeFailure } from "../probeDiagnostics.js";
+import { resolveBridge } from "../../proxy/bridgeRuntime.js";
 import { normalizeModelName } from "../../proxy/freeModels.js";
 
 const MAX_WORKER_TEST_RESPONSE_BYTES = 1024 * 1024;
@@ -95,7 +96,10 @@ export async function handleWorkerTests(
     }
     const started = performance.now();
     try {
-      const networkProbe = await probePoolProxy(proxy, s.clashBridge, {
+      const resolved = proxy.usable
+        ? { bridge: s.clashBridge }
+        : await resolveBridge(s.clashBridge, proxy.clashNodeName || proxy.name, subscriptionFetch ?? globalThis.fetch);
+      const networkProbe = await probePoolProxy(proxy, resolved.bridge, {
         fetchImpl: ctx?.probeFetch,
         bridgeFetch: subscriptionFetch ?? globalThis.fetch,
         clashQueue: clashProbeQueue,
@@ -103,7 +107,7 @@ export async function handleWorkerTests(
       const probe = kind === "anonymous_zen" && networkProbe.ok
         ? attachAnonymousZenResult(
             networkProbe,
-            await probeAnonymousZenProxy(proxy, s.clashBridge, {
+            await probeAnonymousZenProxy(proxy, resolved.bridge, {
               baseUrl: s.baseUrl,
               model,
               fetchImpl: ctx?.probeFetch,

@@ -61,7 +61,25 @@ export type ProxySubscription = {
   lastUserAgent?: string;
 };
 
-/** Local Clash / Mihomo bridge for vless/hy2/tuic nodes. */
+/** A locally reachable Clash/Mihomo-compatible proxy core. */
+export type ClashBridgeProfile = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  /** Lower values are preferred when automatic selection has multiple healthy cores. */
+  priority: number;
+  /** External controller base, e.g. http://127.0.0.1:9090 */
+  apiBase: string;
+  /** Bearer/API secret if set in the core. */
+  apiSecret: string;
+  /** Local HTTP mixed-port used as undici ProxyAgent target. */
+  localProxyHost: string;
+  localProxyPort: number;
+  /** Select-type group to switch before each request. */
+  selectorGroup: string;
+};
+
+/** Local Clash / Mihomo bridges for vless/hy2/tuic nodes. */
 export type ClashBridgeConfig = {
   enabled: boolean;
   /** External controller base, e.g. http://127.0.0.1:9090 */
@@ -76,6 +94,12 @@ export type ClashBridgeConfig = {
    * mitce default group is often `主代理` or `GLOBAL`.
    */
   selectorGroup: string;
+  /** Whether requests use the configured bridge or probe enabled bridges. */
+  selectionMode: "manual" | "auto";
+  /** Additional bridge cores. The legacy fields above remain canonical for compatibility. */
+  bridges: ClashBridgeProfile[];
+  /** Selected profile in manual mode, or the last healthy profile in auto mode. */
+  activeBridgeId: string | null;
 };
 
 export const DEFAULT_CLASH_BRIDGE: ClashBridgeConfig = {
@@ -85,6 +109,9 @@ export const DEFAULT_CLASH_BRIDGE: ClashBridgeConfig = {
   localProxyHost: "127.0.0.1",
   localProxyPort: 7890,
   selectorGroup: "GLOBAL",
+  selectionMode: "auto",
+  bridges: [],
+  activeBridgeId: null,
 };
 
 export function newProxyId(prefix = "px"): string {
@@ -250,9 +277,9 @@ export function normalizeSubscriptions(raw: unknown): ProxySubscription[] {
 
 export function normalizeClashBridge(raw: unknown): ClashBridgeConfig {
   const d = DEFAULT_CLASH_BRIDGE;
-  if (!raw || typeof raw !== "object") return { ...d };
+  if (!raw || typeof raw !== "object") return { ...d, bridges: [] };
   const b = raw as Record<string, unknown>;
-  return {
+  const legacy = {
     enabled: Boolean(b.enabled),
     apiBase:
       typeof b.apiBase === "string" && b.apiBase.trim()
@@ -271,6 +298,49 @@ export function normalizeClashBridge(raw: unknown): ClashBridgeConfig {
       typeof b.selectorGroup === "string" && b.selectorGroup.trim()
         ? b.selectorGroup.trim()
         : d.selectorGroup,
+  };
+  const normalizeProfile = (value: unknown, index: number): ClashBridgeProfile | null => {
+    if (!value || typeof value !== "object") return null;
+    const p = value as Record<string, unknown>;
+    const apiBase = typeof p.apiBase === "string" && p.apiBase.trim()
+      ? p.apiBase.trim().replace(/\/+$/, "")
+      : "";
+    const host = typeof p.localProxyHost === "string" && p.localProxyHost.trim()
+      ? p.localProxyHost.trim()
+      : "127.0.0.1";
+    const port = typeof p.localProxyPort === "number" ? Math.floor(p.localProxyPort) : Number(p.localProxyPort);
+    if (!apiBase || !Number.isFinite(port) || port <= 0 || port > 65535) return null;
+    return {
+      id: typeof p.id === "string" && p.id.trim() ? p.id.trim() : `bridge-${index + 1}`,
+      name: typeof p.name === "string" && p.name.trim() ? p.name.trim() : `Bridge ${index + 1}`,
+      enabled: p.enabled !== false,
+      priority: typeof p.priority === "number" && Number.isFinite(p.priority)
+        ? Math.max(0, Math.floor(p.priority))
+        : index,
+      apiBase,
+      apiSecret: typeof p.apiSecret === "string" ? p.apiSecret : "",
+      localProxyHost: host,
+      localProxyPort: port,
+      selectorGroup: typeof p.selectorGroup === "string" && p.selectorGroup.trim() ? p.selectorGroup.trim() : "GLOBAL",
+    };
+  };
+  const rawProfiles = Array.isArray(b.bridges) ? b.bridges : [];
+  const profiles = rawProfiles.map(normalizeProfile).filter((p): p is ClashBridgeProfile => p !== null);
+  // Migrate the former single bridge into a profile only when no profiles exist.
+  const hasLegacyFields = [
+    "enabled", "apiBase", "apiSecret", "localProxyHost", "localProxyPort", "selectorGroup",
+  ].some((key) => key in b);
+  if (!profiles.length && (hasLegacyFields || b.bridges !== undefined)) {
+    profiles.push({ id: "legacy-clash", name: "Clash bridge", priority: 0, ...legacy });
+  }
+  const active = typeof b.activeBridgeId === "string" && b.activeBridgeId.trim()
+    ? b.activeBridgeId.trim()
+    : null;
+  return {
+    ...legacy,
+    selectionMode: b.selectionMode === "manual" ? "manual" : "auto",
+    bridges: profiles,
+    activeBridgeId: active && profiles.some((p) => p.id === active) ? active : null,
   };
 }
 

@@ -108,6 +108,8 @@ HTTP/SOCKS5 代理可直接添加，不需要 Clash 桥接。VLESS、Hysteria2�
 4. 在“代理池 → Clash 桥接”填写 Controller URL、Secret、本地主机、端口和选择组，开启桥接并保存。
 5. 点击测试连接。成功后可点击“导入 Controller 节点”。
 
+“桥接内核”可以添加多个兼容内核。“自动”模式会依次探测已启用内核，确认配置的 Selector 包含当前节点，优先沿用最近成功的内核，并在其不可用时故障转移。一次批测会固定使用同一个已选内核，避免多个内核之间的 Selector 切换互相干扰。每个内核分别保存 Controller Secret、mixed-port 和选择组；候选内核必须加载同名节点才能互相切换。
+
 桥接有两条独立链路：
 
 - **控制面**：Controller URL 和 Secret，用于读取节点、查询延迟和切换 Selector；常见端口是 `9090`。

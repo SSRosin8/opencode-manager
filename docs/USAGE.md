@@ -104,6 +104,8 @@ HTTP and SOCKS5 proxies work directly. VLESS, Hysteria2, TUIC, AnyTLS, and simil
 4. In Proxy Pool, configure Controller URL, secret, host, port, and Selector group; enable and save the bridge.
 5. Test the bridge, then click Import Controller Nodes.
 
+Multiple compatible cores can be added under **Bridge cores**. In **Automatic** mode the gateway probes enabled cores, verifies that the configured Selector contains the requested node, prefers the last successful core, and fails over when it becomes unavailable. A batch pins one selected core for the whole run so Selector changes cannot race across cores. Each core keeps its own Controller secret, mixed-port, and Selector; failover requires the candidates to have loaded nodes with the same names.
+
 The bridge has two independent paths:
 
 - **Control plane**: Controller URL and secret, used to enumerate nodes, query delay, and switch the Selector; commonly port `9090`.

@@ -415,6 +415,9 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
       $("bridgeHost").value = b.localProxyHost || "127.0.0.1";
       $("bridgePort").value = b.localProxyPort || 7890;
       $("bridgeGroup").value = b.selectorGroup || "GLOBAL";
+      $("bridgeMode").value = b.selectionMode || "auto";
+      renderBridgeProfiles(b.bridges || []);
+      $("bridgeActive").value = b.activeBridgeId || b.bridges?.[0]?.id || "";
       const tag = $("bridge-conn-tag");
       if (!b.enabled) {
         tag.className = "tag";
@@ -431,7 +434,39 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
       }
     }
 
+    function renderBridgeProfiles(profiles) {
+      const root = $("bridge-profiles-list");
+      const selected = $("bridgeActive").value || settings?.clashBridge?.activeBridgeId || "";
+      root.innerHTML = profiles.map((profile, index) => '<div class="bridge-profile-row" data-index="' + index + '" style="border-top:1px solid var(--border);padding:8px 0">' +
+        '<div class="row two"><input class="input bridge-profile-name" value="' + escapeAttr(profile.name || ("Core " + (index + 1))) + '" placeholder="Name" />' +
+        '<input class="input bridge-profile-api" value="' + escapeAttr(profile.apiBase || "") + '" placeholder="http://127.0.0.1:9090" /></div>' +
+        '<div class="row two"><input class="input bridge-profile-secret" type="password" value="' + escapeAttr(profile.apiSecret || "") + '" placeholder="Secret" />' +
+        '<input class="input bridge-profile-host" value="' + escapeAttr(profile.localProxyHost || "127.0.0.1") + '" placeholder="127.0.0.1" /></div>' +
+        '<div class="row two"><input class="input bridge-profile-port" type="number" value="' + escapeAttr(profile.localProxyPort || 7890) + '" placeholder="7890" />' +
+        '<span></span></div>' +
+        '<div class="row two"><input class="input bridge-profile-group" value="' + escapeAttr(profile.selectorGroup || "GLOBAL") + '" placeholder="GLOBAL" />' +
+        '<div style="display:flex;gap:8px;align-items:center"><label class="toggle"><input class="bridge-profile-enabled" type="checkbox"' + (profile.enabled === false ? "" : " checked") + ' /><span></span></label>' +
+        '<button type="button" class="btn btn-sm bridge-profile-remove">' + escapeHtml(t("removeBridgeCore")) + '</button></div></div>' +
+        '<input type="hidden" class="bridge-profile-id" value="' + escapeAttr(profile.id || ("bridge-" + (index + 1))) + '" /></div>').join("");
+      root.querySelectorAll(".bridge-profile-remove").forEach((button) => {
+        button.onclick = () => button.closest(".bridge-profile-row").remove();
+      });
+      $("bridgeActive").innerHTML = profiles.map((profile) => '<option value="' + escapeAttr(profile.id) + '">' + escapeHtml(profile.name) + '</option>').join("");
+      $("bridgeActive").value = profiles.some((profile) => profile.id === selected) ? selected : profiles[0]?.id || "";
+    }
+
     function collectBridge() {
+      const bridges = Array.from($("bridge-profiles-list").querySelectorAll(".bridge-profile-row")).map((row, index) => ({
+        id: row.querySelector(".bridge-profile-id").value || ("bridge-" + (index + 1)),
+        name: row.querySelector(".bridge-profile-name").value.trim() || ("Core " + (index + 1)),
+        enabled: row.querySelector(".bridge-profile-enabled").checked,
+        priority: index,
+        apiBase: row.querySelector(".bridge-profile-api").value.trim(),
+        apiSecret: row.querySelector(".bridge-profile-secret").value,
+        localProxyHost: row.querySelector(".bridge-profile-host").value.trim() || "127.0.0.1",
+        localProxyPort: Number(row.querySelector(".bridge-profile-port").value) || 7890,
+        selectorGroup: row.querySelector(".bridge-profile-group").value.trim() || "GLOBAL",
+      })).filter((profile) => profile.apiBase);
       return {
         enabled: $("bridgeEnabled").checked,
         apiBase: $("bridgeApi").value.trim() || "http://127.0.0.1:9090",
@@ -439,6 +474,9 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
         localProxyHost: $("bridgeHost").value.trim() || "127.0.0.1",
         localProxyPort: Number($("bridgePort").value) || 7890,
         selectorGroup: $("bridgeGroup").value.trim() || "GLOBAL",
+        selectionMode: $("bridgeMode").value === "manual" ? "manual" : "auto",
+        bridges,
+        activeBridgeId: $("bridgeActive").value || bridges[0]?.id || null,
       };
     }
 

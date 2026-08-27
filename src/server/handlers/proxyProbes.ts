@@ -8,6 +8,7 @@ import { batchProbeSnapshot, persistProbeState } from "../context.js";
 import { anonymousZenSummary, attachAnonymousZenResult, syncAnonymousWorkers } from "../workerEgress.js";
 import { readBody, sendJson } from "../httpIO.js";
 import { logBatchSummary, logProbeFailure } from "../probeDiagnostics.js";
+import { resolveBridge } from "../../proxy/bridgeRuntime.js";
 
 export async function handleProxyProbes(
   req: IncomingMessage,
@@ -153,11 +154,16 @@ export async function handleProxyProbes(
         workerSyncError ??= err;
       });
     };
+    const bridgeTarget = targets.find((target) => !target.usable)?.clashNodeName;
+    const resolvedBridge = bridgeTarget
+      ? await resolveBridge(s.clashBridge, bridgeTarget, bridgeFetch)
+      : { bridge: s.clashBridge };
+    const activeBridge = resolvedBridge.bridge;
     const shouldRestore = Boolean(
-      s.clashBridge.enabled && targets.some((target) => target.source === "controller")
+      activeBridge.enabled && targets.some((target) => target.source === "controller")
     );
     const previousNode = shouldRestore
-      ? await getClashSelectorCurrent(s.clashBridge, bridgeFetch).catch(() => null)
+      ? await getClashSelectorCurrent(activeBridge, bridgeFetch).catch(() => null)
       : null;
     let results: ProbeResult[] = [];
     let probeError: unknown = null;
@@ -169,7 +175,7 @@ export async function handleProxyProbes(
       const fallbackAnonymousModel = freeModels.ids().find((model) => model !== anonymousModel);
       let previousProviderFailureEgress: string | null = null;
       let crossCheckClaimed = false;
-      results = await probePoolProxies(targets, s.clashBridge, {
+      results = await probePoolProxies(targets, activeBridge, {
         fetchImpl: ctx?.probeFetch,
         bridgeFetch,
         clashQueue: clashProbeQueue,
@@ -188,7 +194,7 @@ export async function handleProxyProbes(
           }
           let check = anonymousByIp.get(result.egressIp);
           if (!check) {
-            check = probeAnonymousZenProxy(proxy, s.clashBridge, {
+            check = probeAnonymousZenProxy(proxy, activeBridge, {
               baseUrl: s.baseUrl,
               model: anonymousModel,
               // Match the single-node Zen probe timeout. The previous 8s
@@ -213,7 +219,7 @@ export async function handleProxyProbes(
           else previousProviderFailureEgress = null;
           if (shouldCrossCheck && fallbackAnonymousModel) {
             crossCheckClaimed = true;
-            const fallback = await probeAnonymousZenProxy(proxy, s.clashBridge, {
+            const fallback = await probeAnonymousZenProxy(proxy, activeBridge, {
               baseUrl: s.baseUrl,
               model: fallbackAnonymousModel,
               timeoutMs: DEFAULT_ANONYMOUS_ZEN_TIMEOUT_MS,
@@ -286,7 +292,7 @@ export async function handleProxyProbes(
     } finally {
       if (previousNode) {
         await clashProbeQueue
-          .run(() => selectClashProxy(s.clashBridge, previousNode, bridgeFetch))
+          .run(() => selectClashProxy(activeBridge, previousNode, bridgeFetch))
           .catch(() => undefined);
       }
     }

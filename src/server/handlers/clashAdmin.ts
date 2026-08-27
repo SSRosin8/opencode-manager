@@ -3,16 +3,19 @@ import type { RequestContext } from "../context.js";
 import { persistProbeState } from "../context.js";
 import { importClashControllerNodes, probeClashBridge } from "../../proxy/clashBridge.js";
 import {
+  normalizeClashBridge,
   replaceControllerProxies,
   type ClashBridgeConfig,
   type PoolProxy,
 } from "../../proxy/pool.js";
+import { resolveBridge } from "../../proxy/bridgeRuntime.js";
 import { inferAccountKind, type AccountConfig } from "../../relay/index.js";
 import type { GatewaySettings } from "../../settings/store.js";
 import { readBody, sendJson } from "../httpIO.js";
 
 const CLASH_BRIDGE_KEYS = new Set([
   "enabled", "apiBase", "apiSecret", "localProxyHost", "localProxyPort", "selectorGroup",
+  "selectionMode", "bridges", "activeBridgeId",
 ]);
 
 type CacheMove = { oldId: string; newId: string | null };
@@ -160,9 +163,25 @@ export async function handleClashAdmin(
         /* ignore */
       }
     }
-    const bridge = { ...s.clashBridge, ...override };
-    const result = await probeClashBridge(bridge, subscriptionFetch ?? globalThis.fetch);
-    sendJson(res, result.ok ? 200 : 502, { ...result, bridge });
+    const submittedProfiles = Array.isArray(override.bridges);
+    const config = normalizeClashBridge(
+      submittedProfiles ? { ...s.clashBridge, ...override } : { ...override, selectionMode: "manual" }
+    );
+    const fetchImpl = subscriptionFetch ?? globalThis.fetch;
+    const resolved = submittedProfiles
+      ? await resolveBridge(config, undefined, fetchImpl)
+      : { bridge: config, profile: null, diagnostics: [] };
+    const result = resolved.profile
+      ? await probeClashBridge(resolved.bridge, fetchImpl)
+      : submittedProfiles
+        ? { ok: false, message: "No healthy bridge core is available" }
+        : await probeClashBridge(config, fetchImpl);
+    sendJson(res, result.ok ? 200 : 502, {
+      ...result,
+      bridge: resolved.bridge,
+      selectedBridgeId: resolved.profile?.id ?? null,
+      diagnostics: resolved.diagnostics,
+    });
     return true;
   }
 
@@ -191,8 +210,18 @@ export async function handleClashAdmin(
         return true;
       }
     }
-    const bridge = { ...s.clashBridge, ...override };
+    const submittedProfiles = Array.isArray(override.bridges);
+    const config = normalizeClashBridge(
+      submittedProfiles ? { ...s.clashBridge, ...override } : { ...override, selectionMode: "manual" }
+    );
     try {
+      const resolved = submittedProfiles
+        ? await resolveBridge(config, undefined, subscriptionFetch ?? globalThis.fetch)
+        : { bridge: config, profile: null, diagnostics: [] };
+      if (submittedProfiles && !resolved.profile && config.selectionMode === "auto") {
+        throw new Error("No healthy bridge core is available");
+      }
+      const bridge = resolved.profile ? resolved.bridge : config;
       const result = await importClashControllerNodes(
         bridge,
         subscriptionFetch ?? globalThis.fetch
@@ -213,7 +242,7 @@ export async function handleClashAdmin(
         cacheMoves = plan.cacheMoves;
         bindingConflicts = plan.bindingConflicts;
         return {
-          clashBridge: bridge,
+          clashBridge: { ...config, activeBridgeId: resolved.profile?.id ?? config.activeBridgeId },
           proxyPool: plan.proxyPool,
           accounts: plan.accounts,
         };

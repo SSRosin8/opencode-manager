@@ -360,6 +360,20 @@ ${ADMIN_PROXY_NODES_MARKUP}
                 <div class="panel-bd bridge-form">
                   <div class="row">
                     <div>
+                      <label class="field" for="bridgeMode" data-i18n="bridgeSelectionMode">Bridge selection</label>
+                      <select class="input" id="bridgeMode"><option value="auto">Automatic</option><option value="manual">Manual</option></select>
+                      <select class="input" id="bridgeActive" style="margin-top:6px"></select>
+                    </div>
+                  </div>
+                  <div class="row">
+                    <div>
+                      <label class="field" data-i18n="bridgeProfiles">Bridge cores</label>
+                      <div id="bridge-profiles-list"></div>
+                      <button type="button" class="btn btn-sm" id="btn-add-bridge-profile" data-i18n="addBridgeCore">Add core</button>
+                    </div>
+                  </div>
+                  <div class="row">
+                    <div>
                       <label class="field" for="bridgeApi" data-i18n="controllerUrl">Controller URL</label>
                       <input class="input" id="bridgeApi" type="text" placeholder="http://127.0.0.1:9090" />
                     </div>

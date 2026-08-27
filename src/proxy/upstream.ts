@@ -21,6 +21,7 @@ import type { GatewaySettings } from "../settings/store.js";
 import { resolveAccountEgress } from "./pool.js";
 import { createProxyDispatcher } from "./dispatcher.js";
 import { ClashSwitchQueue, selectClashProxy } from "./clashBridge.js";
+import { resolveBridge } from "./bridgeRuntime.js";
 
 export type UpstreamResult = {
   status: number;
@@ -284,14 +285,27 @@ export class UpstreamClient {
     clashNodeName: string | null,
     opts?: { skipClashSwitch?: boolean }
   ): Promise<Response> {
+    let bridge = this.settings.clashBridge;
+    if (clashNodeName && bridge.enabled) {
+      const resolved = await resolveBridge(bridge, clashNodeName, this.bridgeFetch);
+      bridge = resolved.bridge;
+      proxy = {
+        type: "http",
+        host: bridge.localProxyHost,
+        port: bridge.localProxyPort,
+      };
+      if (!resolved.profile) {
+        throw new Error(`No healthy Clash bridge contains node "${clashNodeName}"`);
+      }
+    }
     const needSwitch =
       !opts?.skipClashSwitch &&
-      Boolean(clashNodeName && this.settings.clashBridge?.enabled);
+      Boolean(clashNodeName && bridge.enabled);
 
     const run = async () => {
       if (needSwitch && clashNodeName) {
         await selectClashProxy(
-          this.settings.clashBridge,
+          bridge,
           clashNodeName,
           this.bridgeFetch
         );
