@@ -254,13 +254,17 @@ export async function handleProxyProbes(
         onResult: async (result, completed) => {
           logProbeFailure("batch", result);
           probes.set(result);
+          // Publish completion only after the per-result Worker sync has been
+          // persisted, so progress readers never observe a completed node
+          // with stale settings.
+          enqueueResultWorkerSync(result);
+          await workerSyncChain;
           batchProbeProgress.completed = completed;
           batchProbeProgress.completedIds.push(result.id);
           batchProbeProgress.stage = "verifying";
           batchProbeProgress.stageCompleted = completed;
           batchProbeProgress.stageTotal = targets.length;
           batchProbeProgress.updatedAt = new Date().toISOString();
-          enqueueResultWorkerSync(result);
           void persistProbeState(ctx).catch((error) => {
             console.warn(`[probe-state] save failed: ${error instanceof Error ? error.message : String(error)}`);
           });
