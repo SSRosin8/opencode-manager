@@ -38,7 +38,7 @@ OpenCode / OpenAI-compatible client
 | `src/proxy/` | 代理协议、订阅、Clash、探测和上游连接 | 页面渲染、配置文件持久化 |
 | `src/settings/` | 设置归一化、持久化、统计 | HTTP 路由和 DOM 逻辑 |
 | `tests/` | 与源码领域对应的单元/集成测试 | 真实凭证、真实网络依赖 |
-| `scripts/` | 可重复的本地与 CI 工程检查 | 应用运行时业务逻辑 |
+| `scripts/` | 可重复的本地工程检查 | 应用运行时业务逻辑 |
 
 ## 依赖方向
 
@@ -91,11 +91,11 @@ HTTP 层应由一个小型装配模块和多个领域路由组成：
 - 写入应保持原子性或可恢复性，加载损坏文件时不得泄漏内容。
 - 修改配置格式时需要兼容旧数据的测试，并在使用指南中说明迁移影响。
 
-## 自动检查
+## 本地检查
 
-`npm run check:structure` 扫描 `src/`、`tests/` 和 `scripts/` 中的手写代码文件，拒绝超过 1000 行的文件，并提示超过 600 行的拆分目标。`npm run validate` 汇总结构检查、TypeScript 严格检查、构建和测试，作为本地提交与 CI 的统一入口。
+`npm run check:structure` 扫描 `src/`、`tests/` 和 `scripts/` 中的手写代码文件，拒绝超过 1000 行的文件，并提示超过 600 行的拆分目标。`npm run validate` 汇总结构检查、TypeScript 严格检查、构建和测试，作为本地提交前的统一验证入口。
 
-推荐 CI 在 Node.js 20.18.1 或更高版本执行：
+提交前应在 Node.js 20.18.1 或更高版本执行：
 
 ```bash
 npm ci
