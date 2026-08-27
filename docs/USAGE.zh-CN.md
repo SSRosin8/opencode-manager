@@ -49,6 +49,8 @@ PORT=9988 npm start
 | `OPENCODE_MANAGER_ANONYMOUS_ZEN_TIMEOUT_MS` | 匿名 Zen 探测超时，单位毫秒，范围 5000-120000 |
 | `OPENCODE_SYNTHESIZE_CLI_HEADERS` | 开启 OpenCode CLI 身份请求头合成 |
 | `OPENCODE_USER_AGENT` / `OPENCODE_CLIENT` / `OPENCODE_PROJECT` | 合成 CLI 身份请求头时使用的默认值 |
+| `OPENCODE_MANAGER_SERVICE_RUNTIME_DIR` | 覆盖 `npm start` 等服务命令使用的 PID/日志目录 |
+| `OPENCODE_MANAGER_SERVICE_ENTRY` | 覆盖服务脚本启动的构建入口路径，仅用于高级运维 |
 
 ## 2. 安全边界
 
@@ -154,7 +156,7 @@ Worker 卡片可从当前检测到的免费模型集合中选择测试模型。�
 
 批量测试的主模型按验证完成顺序，在两个不同出口连续返回相同的 `503` 上游故障时，系统会仅选择第二个失败出口，用另一个官方免费模型交叉验证一次。备用模型成功表示主模型对该出口不可用；备用模型也返回同类 `503` 表示该出口的 Provider 路由不可用。每批最多增加一次交叉请求，不会因此停止整批测试。
 
-“修复登录 Worker 绑定”会保留所有仍可达且出口 IP 不冲突的现有登录 Worker 绑定，只为未绑定、节点已删除、禁用、不可达或与另一个登录 Worker 共用出口的项补充分配。它不会修改匿名 Worker；同一个出口允许分别承载一个匿名 Worker 和一个登录 Worker。
+“修复登录 Worker 绑定”会保留所有仍可达且出口 IP 不冲突的现有登录 Worker 绑定，只为未绑定、节点已删除、不可达或与另一个登录 Worker 共用出口的项补充分配；已有健康绑定会保留，禁用 Worker 也不会删除其绑定。它不会修改匿名 Worker；同一个出口允许分别承载一个匿名 Worker 和一个登录 Worker。
 
 ## 7. 选择调度策略
 
@@ -236,7 +238,7 @@ curl -sS http://127.0.0.1:9876/v1/responses \
 
 旧版 `worker-stats.json` 仍可读取。升级前产生的历史累计值不会补出 usage 覆盖率和按模型 Token 明细；只有升级后的新响应会增加这些细分。旧版曾用缓存字段表示未缓存输入，加载时会迁移为缓存未命中，不会继续显示为明确的缓存写入。
 
-可通过 `OPENCODE_MANAGER_SETTINGS_PATH` 和 `OPENCODE_MANAGER_STATS_PATH` 修改前两项路径。备份或迁移前先停止服务，然后复制 `data/`。升级前先停止正在运行的服务，避免新旧进程争用同一端口：
+`OPENCODE_MANAGER_SETTINGS_PATH` 用于覆盖 `settings.json`，`probe-state.json` 和 `free-models.json` 会跟随它保存到同一目录；`OPENCODE_MANAGER_STATS_PATH` 单独覆盖 `worker-stats.json`。备份或迁移前先停止服务，然后复制实际使用的数据文件。升级前先停止正在运行的服务，避免新旧进程争用同一端口：
 
 ```bash
 npm stop

@@ -45,6 +45,8 @@ The default bind address is `127.0.0.1`. Set `OPENCODE_MANAGER_HOST=0.0.0.0` onl
 | `OPENCODE_MANAGER_ANONYMOUS_ZEN_TIMEOUT_MS` | Anonymous Zen probe timeout in milliseconds, bounded to 5,000-120,000 |
 | `OPENCODE_SYNTHESIZE_CLI_HEADERS` | Enable OpenCode CLI identity-header synthesis |
 | `OPENCODE_USER_AGENT` / `OPENCODE_CLIENT` / `OPENCODE_PROJECT` | Defaults for synthesized CLI identity headers |
+| `OPENCODE_MANAGER_SERVICE_RUNTIME_DIR` | Override the service PID/log directory used by `npm start` and related commands |
+| `OPENCODE_MANAGER_SERVICE_ENTRY` | Override the built entry path used by the service script; advanced operation only |
 
 ## 2. Security Boundary
 
@@ -221,7 +223,7 @@ Skip step 3 when Clash is not used. HTTP/SOCKS proxies still need the real-egres
 
 Older `worker-stats.json` files remain readable. Historical totals created before usage coverage and per-model token tracking do not gain those details retroactively; only new responses add them. A legacy cache value that represented uncached input is migrated to cache misses rather than being reported as an explicit cache write.
 
-Override paths with `OPENCODE_MANAGER_SETTINGS_PATH` and `OPENCODE_MANAGER_STATS_PATH`. Stop the service before copying `data/` for backup or migration.
+`OPENCODE_MANAGER_SETTINGS_PATH` overrides `settings.json`; `probe-state.json` and `free-models.json` follow it into the same directory. `OPENCODE_MANAGER_STATS_PATH` independently overrides `worker-stats.json`. Stop the service before copying the resulting data files for backup or migration.
 
 Stop the running service before upgrading so old and new builds do not compete for the same port:
 
