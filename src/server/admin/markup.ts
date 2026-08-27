@@ -362,7 +362,8 @@ ${ADMIN_PROXY_NODES_MARKUP}
                     <div>
                       <label class="field" for="bridgeMode" data-i18n="bridgeSelectionMode">Bridge selection</label>
                       <select class="input" id="bridgeMode"><option value="auto">Automatic</option><option value="manual">Manual</option></select>
-                      <select class="input" id="bridgeActive" style="margin-top:6px"></select>
+                      <label class="field bridge-active-label" for="bridgeActive" data-i18n="activeBridge">Active core</label>
+                      <select class="input" id="bridgeActive"></select>
                     </div>
                   </div>
                   <div class="row">
@@ -370,37 +371,6 @@ ${ADMIN_PROXY_NODES_MARKUP}
                       <label class="field" data-i18n="bridgeProfiles">Bridge cores</label>
                       <div id="bridge-profiles-list"></div>
                       <button type="button" class="btn btn-sm" id="btn-add-bridge-profile" data-i18n="addBridgeCore">Add core</button>
-                    </div>
-                  </div>
-                  <div class="row">
-                    <div>
-                      <label class="field" for="bridgeApi" data-i18n="controllerUrl">Controller URL</label>
-                      <input class="input" id="bridgeApi" type="text" placeholder="http://127.0.0.1:9090" />
-                    </div>
-                  </div>
-                  <div class="row">
-                    <div>
-                      <label class="field" for="bridgeSecret" data-i18n="secret">Secret</label>
-                      <div class="input-wrap">
-                        <input class="input" id="bridgeSecret" type="password" autocomplete="off" style="padding-right:34px" />
-                        <button type="button" class="eye" id="btn-toggle-secret" aria-label="Show">👁</button>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="row two">
-                    <div>
-                      <label class="field" for="bridgeHost" data-i18n="localHost">Local Host</label>
-                      <input class="input" id="bridgeHost" type="text" placeholder="127.0.0.1" />
-                    </div>
-                    <div>
-                      <label class="field" for="bridgePort" data-i18n="localPort">Local Port</label>
-                      <input class="input" id="bridgePort" type="number" placeholder="7890" />
-                    </div>
-                  </div>
-                  <div class="row">
-                    <div>
-                      <label class="field" for="bridgeGroup" data-i18n="selectorGroup">Selector Group</label>
-                      <input class="input" id="bridgeGroup" type="text" placeholder="GLOBAL" />
                     </div>
                   </div>
                   <div class="bridge-actions">

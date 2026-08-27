@@ -410,11 +410,6 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
     function renderBridge() {
       const b = settings.clashBridge || {};
       $("bridgeEnabled").checked = !!b.enabled;
-      $("bridgeApi").value = b.apiBase || "http://127.0.0.1:9090";
-      $("bridgeSecret").value = b.apiSecret || "";
-      $("bridgeHost").value = b.localProxyHost || "127.0.0.1";
-      $("bridgePort").value = b.localProxyPort || 7890;
-      $("bridgeGroup").value = b.selectorGroup || "GLOBAL";
       $("bridgeMode").value = b.selectionMode || "auto";
       renderBridgeProfiles(b.bridges || []);
       $("bridgeActive").value = b.activeBridgeId || b.bridges?.[0]?.id || "";
@@ -438,14 +433,14 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
       const root = $("bridge-profiles-list");
       const selected = $("bridgeActive").value || settings?.clashBridge?.activeBridgeId || "";
       root.innerHTML = profiles.map((profile, index) => '<div class="bridge-profile-row" data-index="' + index + '" style="border-top:1px solid var(--border);padding:8px 0">' +
-        '<div class="row two"><input class="input bridge-profile-name" value="' + escapeAttr(profile.name || ("Core " + (index + 1))) + '" placeholder="Name" />' +
-        '<input class="input bridge-profile-api" value="' + escapeAttr(profile.apiBase || "") + '" placeholder="http://127.0.0.1:9090" /></div>' +
-        '<div class="row two"><input class="input bridge-profile-secret" type="password" value="' + escapeAttr(profile.apiSecret || "") + '" placeholder="Secret" />' +
-        '<input class="input bridge-profile-host" value="' + escapeAttr(profile.localProxyHost || "127.0.0.1") + '" placeholder="127.0.0.1" /></div>' +
-        '<div class="row two"><input class="input bridge-profile-port" type="number" value="' + escapeAttr(profile.localProxyPort || 7890) + '" placeholder="7890" />' +
+        '<div class="row two"><div><label class="field">' + escapeHtml(t("coreName")) + '</label><input class="input bridge-profile-name" value="' + escapeAttr(profile.name || ("Core " + (index + 1))) + '" placeholder="Name" /></div>' +
+        '<div><label class="field">' + escapeHtml(t("controllerUrl")) + '</label><input class="input bridge-profile-api" value="' + escapeAttr(profile.apiBase || "") + '" placeholder="http://127.0.0.1:9090" /></div></div>' +
+        '<div class="row two"><div><label class="field">' + escapeHtml(t("secret")) + '</label><input class="input bridge-profile-secret" type="password" value="' + escapeAttr(profile.apiSecret || "") + '" placeholder="Secret" /></div>' +
+        '<div><label class="field">' + escapeHtml(t("localHost")) + '</label><input class="input bridge-profile-host" value="' + escapeAttr(profile.localProxyHost || "127.0.0.1") + '" placeholder="127.0.0.1" /></div></div>' +
+        '<div class="row two"><div><label class="field">' + escapeHtml(t("localPort")) + '</label><input class="input bridge-profile-port" type="number" value="' + escapeAttr(profile.localProxyPort || 7890) + '" placeholder="7890" /></div>' +
         '<span></span></div>' +
-        '<div class="row two"><input class="input bridge-profile-group" value="' + escapeAttr(profile.selectorGroup || "GLOBAL") + '" placeholder="GLOBAL" />' +
-        '<div style="display:flex;gap:8px;align-items:center"><label class="toggle"><input class="bridge-profile-enabled" type="checkbox"' + (profile.enabled === false ? "" : " checked") + ' /><span></span></label>' +
+        '<div class="row two"><div><label class="field">' + escapeHtml(t("selectorGroup")) + '</label><input class="input bridge-profile-group" value="' + escapeAttr(profile.selectorGroup || "GLOBAL") + '" placeholder="GLOBAL" /></div>' +
+        '<div><label class="field">' + escapeHtml(t("coreEnabled")) + '</label><div style="display:flex;gap:8px;align-items:center"><label class="toggle"><input class="bridge-profile-enabled" type="checkbox"' + (profile.enabled === false ? "" : " checked") + ' /><span></span></label>' +
         '<button type="button" class="btn btn-sm bridge-profile-remove">' + escapeHtml(t("removeBridgeCore")) + '</button></div></div>' +
         '<input type="hidden" class="bridge-profile-id" value="' + escapeAttr(profile.id || ("bridge-" + (index + 1))) + '" /></div>').join("");
       root.querySelectorAll(".bridge-profile-remove").forEach((button) => {
@@ -469,11 +464,11 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
       })).filter((profile) => profile.apiBase);
       return {
         enabled: $("bridgeEnabled").checked,
-        apiBase: $("bridgeApi").value.trim() || "http://127.0.0.1:9090",
-        apiSecret: $("bridgeSecret").value,
-        localProxyHost: $("bridgeHost").value.trim() || "127.0.0.1",
-        localProxyPort: Number($("bridgePort").value) || 7890,
-        selectorGroup: $("bridgeGroup").value.trim() || "GLOBAL",
+        apiBase: bridges[0]?.apiBase || "http://127.0.0.1:9090",
+        apiSecret: bridges[0]?.apiSecret || "",
+        localProxyHost: bridges[0]?.localProxyHost || "127.0.0.1",
+        localProxyPort: bridges[0]?.localProxyPort || 7890,
+        selectorGroup: bridges[0]?.selectorGroup || "GLOBAL",
         selectionMode: $("bridgeMode").value === "manual" ? "manual" : "auto",
         bridges,
         activeBridgeId: $("bridgeActive").value || bridges[0]?.id || null,

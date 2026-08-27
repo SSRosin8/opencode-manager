@@ -484,8 +484,10 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
       button.onclick = () => showProxyTab(button.dataset.proxyTab);
     });
 
-    $("btn-toggle-secret").onclick = () => {
+    const bridgeSecretToggle = $("btn-toggle-secret");
+    if (bridgeSecretToggle) bridgeSecretToggle.onclick = () => {
       const el = $("bridgeSecret");
+      if (!el) return;
       el.type = el.type === "password" ? "text" : "password";
     };
 

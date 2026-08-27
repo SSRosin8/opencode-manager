@@ -237,6 +237,13 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
 
     /* Side cards */
     .bridge-form .row { margin-bottom: 8px; }
+    .bridge-profile-row { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; margin-bottom: 10px; background: var(--bg); }
+    .bridge-profile-row .row:last-of-type { margin-bottom: 0; }
+    .bridge-active-label { margin-top: 8px; }
+    @media (max-width: 600px) {
+      .bridge-profile-row { padding: 10px; }
+      .bridge-profile-row .row.two { grid-template-columns: 1fr; }
+    }
     .bridge-actions { display: flex; gap: 8px; margin-top: 4px; }
     .bridge-actions .btn { flex: 1; }
     .probe-ok {
