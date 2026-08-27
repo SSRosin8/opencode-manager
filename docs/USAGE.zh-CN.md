@@ -37,6 +37,19 @@ PORT=9988 npm start
 
 默认只监听 `127.0.0.1`。如确需监听其他网卡，可设置 `OPENCODE_MANAGER_HOST=0.0.0.0`，但必须通过防火墙或反向代理单独保护管理后台。
 
+### 环境变量
+
+| 变量 | 用途 |
+|------|------|
+| `PORT` | 覆盖管理后台和网关监听端口 |
+| `OPENCODE_MANAGER_HOST` | 监听地址，默认 `127.0.0.1` |
+| `OPENCODE_MANAGER_SETTINGS_PATH` | 覆盖设置文件路径 |
+| `OPENCODE_MANAGER_STATS_PATH` | 覆盖 Worker 统计文件路径 |
+| `OPENCODE_MANAGER_MODELS_URL` | 覆盖 Zen 官方模型目录 URL |
+| `OPENCODE_MANAGER_ANONYMOUS_ZEN_TIMEOUT_MS` | 匿名 Zen 探测超时，单位毫秒，范围 5000-120000 |
+| `OPENCODE_SYNTHESIZE_CLI_HEADERS` | 开启 OpenCode CLI 身份请求头合成 |
+| `OPENCODE_USER_AGENT` / `OPENCODE_CLIENT` / `OPENCODE_PROJECT` | 合成 CLI 身份请求头时使用的默认值 |
+
 ## 2. 安全边界
 
 - `X-OC-Relay-Key` 只保护 `/v1/*` 以及兼容别名 `/models`、`/chat/completions` 和 `/responses`。

@@ -33,6 +33,19 @@ An Admin port change requires a restart. The project does not load `.env` automa
 
 The default bind address is `127.0.0.1`. Set `OPENCODE_MANAGER_HOST=0.0.0.0` only when Admin is separately protected by a firewall or reverse proxy.
 
+### Environment Variables
+
+| Variable | Purpose |
+|----------|---------|
+| `PORT` | Override the Admin and gateway listen port |
+| `OPENCODE_MANAGER_HOST` | Bind address; defaults to `127.0.0.1` |
+| `OPENCODE_MANAGER_SETTINGS_PATH` | Override the settings file path |
+| `OPENCODE_MANAGER_STATS_PATH` | Override the Worker statistics file path |
+| `OPENCODE_MANAGER_MODELS_URL` | Override the official Zen model catalog URL |
+| `OPENCODE_MANAGER_ANONYMOUS_ZEN_TIMEOUT_MS` | Anonymous Zen probe timeout in milliseconds, bounded to 5,000-120,000 |
+| `OPENCODE_SYNTHESIZE_CLI_HEADERS` | Enable OpenCode CLI identity-header synthesis |
+| `OPENCODE_USER_AGENT` / `OPENCODE_CLIENT` / `OPENCODE_PROJECT` | Defaults for synthesized CLI identity headers |
+
 ## 2. Security Boundary
 
 - `X-OC-Relay-Key` protects `/v1/*` and the compatibility aliases `/models`, `/chat/completions`, and `/responses` only.
