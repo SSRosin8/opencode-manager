@@ -228,6 +228,38 @@ export async function selectClashProxy(
   );
 }
 
+/** List Selector groups from a Clash Controller without validating the configured selector. */
+export async function listClashSelectorGroups(
+  bridge: Pick<ClashBridgeConfig, "apiBase" | "apiSecret">,
+  fetchImpl: typeof fetch = globalThis.fetch,
+  timeoutMs = DEFAULT_CONTROLLER_TIMEOUT_MS
+): Promise<{ ok: boolean; groups: string[]; message: string }> {
+  const base = bridge.apiBase.replace(/\/+$/, "");
+  if (!base) return { ok: false, groups: [], message: "apiBase is required" };
+  const headers: Record<string, string> = {};
+  if (bridge.apiSecret) headers.Authorization = `Bearer ${bridge.apiSecret}`;
+  try {
+    const res = await fetchController(fetchImpl, `${base}/proxies`, { headers }, timeoutMs);
+    if (!res.ok) {
+      await res.text().catch(() => "");
+      return { ok: false, groups: [], message: `controller HTTP ${res.status} on /proxies` };
+    }
+    const body = (await res.json().catch(() => null)) as { proxies?: Record<string, { type?: string }> } | null;
+    const proxies = body?.proxies;
+    if (!proxies || typeof proxies !== "object") {
+      return { ok: false, groups: [], message: "invalid /proxies response" };
+    }
+    const groups = Object.entries(proxies)
+      .filter(([, v]) => v?.type === "Selector")
+      .map(([k]) => k)
+      .sort((a, b) => a.localeCompare(b));
+    if (!groups.length) return { ok: false, groups: [], message: "no Selector groups found" };
+    return { ok: true, groups, message: `found ${groups.length} Selector group(s)` };
+  } catch (err) {
+    return { ok: false, groups: [], message: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 /** Probe controller: GET /version or /proxies */
 export async function probeClashBridge(
   bridge: ClashBridgeConfig,
