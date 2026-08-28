@@ -8,7 +8,8 @@ import { batchProbeSnapshot, persistProbeState } from "../context.js";
 import { anonymousZenSummary, attachAnonymousZenResult, syncAnonymousWorkers } from "../workerEgress.js";
 import { readBody, sendJson } from "../httpIO.js";
 import { logBatchSummary, logProbeFailure } from "../probeDiagnostics.js";
-import { resolveBridge } from "../../proxy/bridgeRuntime.js";
+import { activateBridge, resolveBridge } from "../../proxy/bridgeRuntime.js";
+import type { ClashBridgeConfig, PoolProxy } from "../../proxy/pool.js";
 
 export async function handleProxyProbes(
   req: IncomingMessage,
@@ -154,17 +155,61 @@ export async function handleProxyProbes(
         workerSyncError ??= err;
       });
     };
-    const bridgeTarget = targets.find((target) => !target.usable)?.clashNodeName;
-    const resolvedBridge = bridgeTarget
-      ? await resolveBridge(s.clashBridge, bridgeTarget, bridgeFetch)
-      : { bridge: s.clashBridge };
-    const activeBridge = resolvedBridge.bridge;
-    const shouldRestore = Boolean(
-      activeBridge.enabled && targets.some((target) => target.source === "controller")
-    );
-    const previousNode = shouldRestore
-      ? await getClashSelectorCurrent(activeBridge, bridgeFetch).catch(() => null)
-      : null;
+    // Multi-bridge grouping: controller nodes are routed via owning bridge.
+    const controllerGroups = new Map<string, { bridge: ClashBridgeConfig; proxies: PoolProxy[]; indexes: number[] }>();
+    const genericProxies: PoolProxy[] = [];
+    const genericIndexes: number[] = [];
+    for (let i = 0; i < targets.length; i++) {
+      const proxy = targets[i] as PoolProxy;
+      if (proxy.source === "controller" && proxy.bridgeId) {
+        const profile = (s.clashBridge.bridges ?? []).find((item) => item.id === proxy.bridgeId);
+        if (profile && profile.enabled && s.clashBridge.enabled) {
+          const bridge = activateBridge(s.clashBridge, profile);
+          let entry = controllerGroups.get(proxy.bridgeId);
+          if (!entry) entry = { bridge, proxies: [], indexes: [] };
+          else entry.bridge = bridge;
+          entry.proxies.push(proxy);
+          entry.indexes.push(i);
+          controllerGroups.set(proxy.bridgeId, entry);
+          continue;
+        }
+      }
+      genericProxies.push(proxy);
+      genericIndexes.push(i);
+    }
+    const previousNodes = new Map<string, string | null>();
+    for (const [bridgeId, entry] of controllerGroups) {
+      if (entry.proxies.some((proxy) => proxy.source === "controller")) {
+        try {
+          const cur = await getClashSelectorCurrent(entry.bridge, bridgeFetch).catch(() => null);
+          previousNodes.set(bridgeId, cur);
+        } catch {
+          previousNodes.set(bridgeId, null);
+        }
+      }
+    }
+    // Fallback bridge for generic (including legacy controller without bridgeId)
+    let genericBridge: ClashBridgeConfig = s.clashBridge;
+    let genericPreviousNode: string | null = null;
+    if (genericProxies.length) {
+      const genericTarget = genericProxies.find((proxy) => !proxy.usable)?.clashNodeName;
+      if (genericTarget) {
+        try {
+          const resolved = await resolveBridge(s.clashBridge, genericTarget, bridgeFetch);
+          genericBridge = resolved.bridge;
+        } catch {
+          genericBridge = s.clashBridge;
+        }
+      }
+      const needRestore = genericBridge.enabled && genericProxies.some((proxy) => proxy.source === "controller");
+      if (needRestore) {
+        try {
+          genericPreviousNode = await getClashSelectorCurrent(genericBridge, bridgeFetch).catch(() => null);
+        } catch {
+          genericPreviousNode = null;
+        }
+      }
+    }
     let results: ProbeResult[] = [];
     let probeError: unknown = null;
     try {
@@ -175,36 +220,19 @@ export async function handleProxyProbes(
       const fallbackAnonymousModel = freeModels.ids().find((model) => model !== anonymousModel);
       let previousProviderFailureEgress: string | null = null;
       let crossCheckClaimed = false;
-      results = await probePoolProxies(targets, activeBridge, {
-        fetchImpl: ctx?.probeFetch,
-        bridgeFetch,
-        clashQueue: clashProbeQueue,
-        concurrency: 12,
-        fastController: true,
-        // Anonymous quotas are IP-sensitive, so every candidate needs a verified egress IP.
-        verifyEgressCount: Math.max(1, targets.length),
-        verifyProxyIds: s.accounts
-          .map((account) => account.proxyId)
-          .filter((id): id is string => Boolean(id)),
-        checkpoint: () => batchProbeControl.checkpoint(),
-        signal: batchProbeControl.signal(),
-        afterProbe: async (proxy, result) => {
+      const createAfterProbe = (bridge: ClashBridgeConfig) => async (proxy: PoolProxy, result: ProbeResult) => {
           if (!result.ok || !result.egressIp) {
             return attachAnonymousZenResult(result, null);
           }
           let check = anonymousByIp.get(result.egressIp);
           if (!check) {
-            check = probeAnonymousZenProxy(proxy, activeBridge, {
+            check = probeAnonymousZenProxy(proxy, bridge, {
               baseUrl: s.baseUrl,
               model: anonymousModel,
-              // Match the single-node Zen probe timeout. The previous 8s
-              // override classified slower but reachable Zen routes as dead.
               timeoutMs: DEFAULT_ANONYMOUS_ZEN_TIMEOUT_MS,
               fetchImpl: ctx?.probeFetch,
               bridgeFetch,
               clashQueue: clashProbeQueue,
-              // afterProbe executes while probePoolProxy still owns the Clash
-              // queue, so switching or queueing again would add latency/deadlock.
               skipClashSwitch: true,
               signal: batchProbeControl.signal(),
             });
@@ -219,7 +247,7 @@ export async function handleProxyProbes(
           else previousProviderFailureEgress = null;
           if (shouldCrossCheck && fallbackAnonymousModel) {
             crossCheckClaimed = true;
-            const fallback = await probeAnonymousZenProxy(proxy, activeBridge, {
+            const fallback = await probeAnonymousZenProxy(proxy, bridge, {
               baseUrl: s.baseUrl,
               model: fallbackAnonymousModel,
               timeoutMs: DEFAULT_ANONYMOUS_ZEN_TIMEOUT_MS,
@@ -256,43 +284,87 @@ export async function handleProxyProbes(
             });
           }
           return attachAnonymousZenResult(result, { ...anonymous, id: result.id });
-        },
-        onResult: async (result, completed) => {
+        };
+      const indexedResults: Array<ProbeResult | undefined> = new Array(targets.length);
+      let globalCompleted = 0;
+      const handleGroupResult = async (result: ProbeResult) => {
           logProbeFailure("batch", result);
           probes.set(result);
-          // Publish completion only after the per-result Worker sync has been
-          // persisted, so progress readers never observe a completed node
-          // with stale settings.
           enqueueResultWorkerSync(result);
           await workerSyncChain;
-          batchProbeProgress.completed = completed;
+          globalCompleted += 1;
+          batchProbeProgress.completed = globalCompleted;
           batchProbeProgress.completedIds.push(result.id);
           batchProbeProgress.stage = "verifying";
-          batchProbeProgress.stageCompleted = completed;
+          batchProbeProgress.stageCompleted = globalCompleted;
           batchProbeProgress.stageTotal = targets.length;
           batchProbeProgress.updatedAt = new Date().toISOString();
           void persistProbeState(ctx).catch((error) => {
             console.warn(`[probe-state] save failed: ${error instanceof Error ? error.message : String(error)}`);
           });
-        },
-        onStageProgress: (stage, completed, total) => {
-          batchProbeProgress.stage = stage;
-          batchProbeProgress.stageCompleted = completed;
-          batchProbeProgress.stageTotal = total;
-          batchProbeProgress.updatedAt = new Date().toISOString();
-        },
-      });
-      results = results.map((result) => {
-        return result.anonymousZen === undefined
-          ? attachAnonymousZenResult(result, null)
-          : result;
-      });
+        };
+      const bridgeGroupsInOrder: Array<{ bridge: ClashBridgeConfig; proxies: PoolProxy[]; indexes: number[] }> = [];
+      for (const entry of controllerGroups.values()) bridgeGroupsInOrder.push(entry);
+      if (genericProxies.length) bridgeGroupsInOrder.push({ bridge: genericBridge, proxies: genericProxies, indexes: genericIndexes });
+      // If there are no controller groups, ensure generic is still probed (already added). If targets were empty, skip.
+      try {
+        for (const group of bridgeGroupsInOrder) {
+          if (!group.proxies.length) continue;
+          const afterProbe = createAfterProbe(group.bridge);
+          const groupResults = await probePoolProxies(group.proxies, group.bridge, {
+            fetchImpl: ctx?.probeFetch,
+            bridgeFetch,
+            clashQueue: clashProbeQueue,
+            concurrency: 12,
+            fastController: true,
+            verifyEgressCount: Math.max(1, group.proxies.length),
+            verifyProxyIds: s.accounts
+              .map((account) => account.proxyId)
+              .filter((id): id is string => Boolean(id)),
+            checkpoint: () => batchProbeControl.checkpoint(),
+            signal: batchProbeControl.signal(),
+            afterProbe,
+            onResult: async (result) => { await handleGroupResult(result); },
+            onStageProgress: (stage, completed, total) => {
+              batchProbeProgress.stage = stage;
+              batchProbeProgress.stageCompleted = completed;
+              batchProbeProgress.stageTotal = total;
+              batchProbeProgress.updatedAt = new Date().toISOString();
+            },
+          });
+          for (let gi = 0; gi < groupResults.length; gi++) {
+            const targetIndex = group.indexes[gi];
+            // probePoolProxies returns in input order; align by position, but fallback to id lookup if order shifted due to filtering
+            const res = groupResults[gi];
+            if (res) indexedResults[targetIndex] = res.anonymousZen === undefined ? attachAnonymousZenResult(res, null) : res;
+          }
+          // Handle any fast-screened controller nodes that kept delay-only results but were not yet reported via onResult (they are still in groupResults)
+          // Our handleGroupResult already covered all via onResult, so no extra handling needed.
+          if (batchProbeControl.isCancelled()) break;
+        }
+        // Any groups not yet filled (e.g., filtered controller delay nodes) — ensure they appear in indexedResults
+        // probePoolProxies already called onResult for each completed, but ensure indexedResults is complete
+        results = indexedResults.filter((result): result is ProbeResult => Boolean(result));
+        // Fallback: if for some reason results length mismatches targets, ensure anonymousZen field present
+        results = results.map((result) => result.anonymousZen === undefined ? attachAnonymousZenResult(result, null) : result);
+      } catch (err) {
+        probeError = err;
+        throw err;
+      }
     } catch (err) {
       probeError = err;
     } finally {
-      if (previousNode) {
+      for (const [bridgeId, entry] of controllerGroups) {
+        const node = previousNodes.get(bridgeId);
+        if (node) {
+          await clashProbeQueue
+            .run(() => selectClashProxy(entry.bridge, node, bridgeFetch))
+            .catch(() => undefined);
+        }
+      }
+      if (genericPreviousNode) {
         await clashProbeQueue
-          .run(() => selectClashProxy(activeBridge, previousNode, bridgeFetch))
+          .run(() => selectClashProxy(genericBridge, genericPreviousNode, bridgeFetch))
           .catch(() => undefined);
       }
     }

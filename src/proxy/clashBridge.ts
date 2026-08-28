@@ -97,6 +97,7 @@ export async function importClashControllerNodes(
   const reserved = new Set(["DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE"]);
   const seen = new Set<string>();
   const proxies: PoolProxy[] = [];
+  const bridgeId = bridge.activeBridgeId ?? null;
   for (const name of selector.all) {
     if (!name || seen.has(name) || reserved.has(name.toUpperCase())) continue;
     seen.add(name);
@@ -117,6 +118,7 @@ export async function importClashControllerNodes(
       usable: false,
       bridgeable: true,
       clashNodeName: name,
+      ...(bridgeId ? { bridgeId } : {}),
     });
   }
   if (!proxies.length) {
@@ -315,5 +317,25 @@ export class ClashSwitchQueue {
       () => undefined
     );
     return next;
+  }
+}
+
+/** Per-bridge queues: switches for different cores can run in parallel, same core stays serialized. */
+export class ClashSwitchQueues {
+  private byBridge = new Map<string, ClashSwitchQueue>();
+  private fallback = new ClashSwitchQueue();
+
+  queueFor(bridgeId?: string | null): ClashSwitchQueue {
+    if (!bridgeId) return this.fallback;
+    let queue = this.byBridge.get(bridgeId);
+    if (!queue) {
+      queue = new ClashSwitchQueue();
+      this.byBridge.set(bridgeId, queue);
+    }
+    return queue;
+  }
+
+  runFor<T>(bridgeId: string | undefined | null, fn: () => Promise<T>): Promise<T> {
+    return this.queueFor(bridgeId ?? null).run(fn);
   }
 }

@@ -41,6 +41,8 @@ export type PoolProxy = {
   clashNodeName?: string;
   /** Last successfully measured public exit IP. Persists across process restarts. */
   egressIp?: string;
+  /** Owning Clash bridge profile id (source=controller). */
+  bridgeId?: string;
 };
 
 export type ProxySubscription = {
@@ -205,6 +207,10 @@ export function normalizePoolProxy(raw: unknown, index = 0): PoolProxy | null {
       typeof p.egressIp === "string" && p.egressIp.trim()
         ? p.egressIp.trim().slice(0, 64)
         : undefined,
+    bridgeId:
+      typeof p.bridgeId === "string" && p.bridgeId.trim()
+        ? p.bridgeId.trim()
+        : undefined,
   };
 }
 
@@ -366,11 +372,20 @@ export type ResolvedEgress = {
   poolId: string | null;
 };
 
+function bridgeProfileForProxy(
+  proxy: PoolProxy,
+  bridge: ClashBridgeConfig | null | undefined
+): ClashBridgeProfile | null {
+  if (!proxy.bridgeId || !bridge?.bridges?.length) return null;
+  return bridge.bridges.find((profile) => profile.id === proxy.bridgeId) ?? null;
+}
+
 /**
  * Resolve effective egress for a worker:
  * 1) proxyId → pool entry
  *    - direct http/socks if usable
- *    - else Clash bridge local proxy + node name if bridge enabled & bridgeable
+ *    - controller nodes use owning bridge's mixed-port (bridgeId)
+ *    - else generic bridgeable via active/Global bridge
  * 2) legacy inline account.proxy
  * 3) direct
  */
@@ -388,6 +403,28 @@ export function resolveAccountEgress(
           clashNodeName: null,
           poolId: found.id,
         };
+      }
+      // Controller nodes carry explicit owning bridge.
+      if (found.source === "controller" && found.bridgeId) {
+        const profile = bridgeProfileForProxy(found, bridge);
+        // Legacy pool entries without matching profile fall back to global logic.
+        if (profile) {
+          const canUse = Boolean(
+            bridge?.enabled && profile.enabled && (found.bridgeable || isClashProtocol(found.type))
+          );
+          if (canUse) {
+            return {
+              proxy: {
+                type: "http",
+                host: profile.localProxyHost,
+                port: profile.localProxyPort,
+              },
+              clashNodeName: found.clashNodeName || found.name,
+              poolId: found.id,
+            };
+          }
+          return { proxy: null, clashNodeName: null, poolId: found.id };
+        }
       }
       if (bridge?.enabled && (found.bridgeable || isClashProtocol(found.type))) {
         return {
@@ -451,6 +488,52 @@ export function replaceControllerProxies(
   ];
 }
 
+/** Replace only controller nodes that belong to `bridgeId`, keeping other bridges intact. */
+export function replaceControllerProxiesForBridge(
+  pool: PoolProxy[],
+  bridgeId: string,
+  imported: PoolProxy[]
+): PoolProxy[] {
+  const previousById = new Map(pool.map((proxy) => [proxy.id, proxy] as const));
+  const kept = pool.filter((proxy) => !(proxy.source === "controller" && proxy.bridgeId === bridgeId));
+  return [
+    ...kept,
+    ...imported.map((proxy) => ({
+      ...proxy,
+      bridgeId,
+      egressIp: proxy.egressIp ?? previousById.get(proxy.id)?.egressIp,
+    })),
+  ];
+}
+
+/** Merge a map of bridgeId → imported nodes, preserving non-controller and untouched bridges. */
+export function mergeControllerProxiesByBridge(
+  pool: PoolProxy[],
+  byBridge: Map<string, PoolProxy[]>
+): PoolProxy[] {
+  if (!byBridge.size) return pool;
+  const previousById = new Map(pool.map((proxy) => [proxy.id, proxy] as const));
+  const incomingIds = new Set<string>();
+  for (const list of byBridge.values()) for (const proxy of list) incomingIds.add(proxy.id);
+  // Keep all non-controller plus controller nodes whose bridgeId is not being refreshed
+  const kept = pool.filter((proxy) => {
+    if (proxy.source !== "controller") return true;
+    if (!proxy.bridgeId) return true; // legacy without bridgeId — keep to avoid accidental deletion
+    return !byBridge.has(proxy.bridgeId);
+  });
+  const appended: PoolProxy[] = [];
+  for (const [bridgeId, list] of byBridge.entries()) {
+    for (const proxy of list) {
+      appended.push({
+        ...proxy,
+        bridgeId,
+        egressIp: proxy.egressIp ?? previousById.get(proxy.id)?.egressIp,
+      });
+    }
+  }
+  return [...kept, ...appended];
+}
+
 /** Build undici/socks proxy URI. */
 export function proxyToUri(proxy: NonNullable<AccountProxy>): string {
   const auth =
@@ -470,6 +553,13 @@ export function isBindablePoolProxy(
 ): boolean {
   if (!p.enabled) return false;
   if (p.usable) return true;
+  // Controller nodes with explicit ownership respect that bridge's enabled flag.
+  if (p.source === "controller" && p.bridgeId && bridge?.bridges?.length) {
+    const profile = bridgeProfileForProxy(p, bridge);
+    if (profile) {
+      return Boolean(bridge.enabled && profile.enabled && (p.bridgeable || isClashProtocol(p.type)));
+    }
+  }
   if (bridge?.enabled && (p.bridgeable || isClashProtocol(p.type))) return true;
   return false;
 }

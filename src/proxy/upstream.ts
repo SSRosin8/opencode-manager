@@ -21,7 +21,7 @@ import type { GatewaySettings } from "../settings/store.js";
 import { resolveAccountEgress } from "./pool.js";
 import { createProxyDispatcher } from "./dispatcher.js";
 import { ClashSwitchQueue, selectClashProxy } from "./clashBridge.js";
-import { resolveBridge } from "./bridgeRuntime.js";
+import { activateBridge, resolveBridge } from "./bridgeRuntime.js";
 
 export type UpstreamResult = {
   status: number;
@@ -277,6 +277,10 @@ export class UpstreamClient {
   /**
    * Fetch via worker egress. Clash switch failures throw so callers can rotate.
    * When `skipClashSwitch` is true, only the local HTTP proxy is used (if any).
+   * Multi-bridge: controller nodes are routed via their owning bridge's
+   * mixed-port/selector. We first try to identify the owning bridge via the
+   * egress proxy's host:port (which is per-bridge) or via pool's bridgeId,
+   * then fall back to the legacy auto-selection.
    */
   private async doFetch(
     url: string,
@@ -287,15 +291,45 @@ export class UpstreamClient {
   ): Promise<Response> {
     let bridge = this.settings.clashBridge;
     if (clashNodeName && bridge.enabled) {
-      const resolved = await resolveBridge(bridge, clashNodeName, this.bridgeFetch);
-      bridge = resolved.bridge;
-      proxy = {
-        type: "http",
-        host: bridge.localProxyHost,
-        port: bridge.localProxyPort,
-      };
-      if (!resolved.profile) {
-        throw new Error(`No healthy Clash bridge contains node "${clashNodeName}"`);
+      let targetBridge: typeof bridge | null = null;
+      // Prefer proxy host:port to identify owning bridge (controller nodes).
+      if (proxy) {
+        const currentProxy = proxy;
+        const bridges = (bridge as { bridges?: typeof bridge.bridges }).bridges ?? [];
+        const matched = bridges.find(
+          (profile) => profile.localProxyHost === currentProxy.host && profile.localProxyPort === currentProxy.port
+        );
+        if (matched && matched.enabled) {
+          targetBridge = activateBridge(bridge, matched);
+        }
+      }
+      // Fallback: search pool for the node to obtain its bridgeId
+      if (!targetBridge) {
+        const poolEntry = this.settings.proxyPool.find(
+          (entry) => (entry.clashNodeName === clashNodeName || entry.name === clashNodeName) && entry.bridgeId
+        );
+        if (poolEntry?.bridgeId) {
+          const bridges = (bridge as { bridges?: typeof bridge.bridges }).bridges ?? [];
+          const profile = bridges.find((item) => item.id === poolEntry.bridgeId);
+          if (profile && profile.enabled) {
+            targetBridge = activateBridge(bridge, profile);
+          }
+        }
+      }
+      if (targetBridge) {
+        bridge = targetBridge;
+        // Keep the original proxy (already per-bridge); do not rewrite.
+      } else {
+        const resolved = await resolveBridge(bridge, clashNodeName, this.bridgeFetch);
+        bridge = resolved.bridge;
+        proxy = {
+          type: "http",
+          host: bridge.localProxyHost,
+          port: bridge.localProxyPort,
+        };
+        if (!resolved.profile) {
+          throw new Error(`No healthy Clash bridge contains node "${clashNodeName}"`);
+        }
       }
     }
     const needSwitch =

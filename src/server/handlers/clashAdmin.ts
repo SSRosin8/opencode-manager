@@ -3,11 +3,13 @@ import type { RequestContext } from "../context.js";
 import { persistProbeState } from "../context.js";
 import { importClashControllerNodes, listClashSelectorGroups, probeClashBridge } from "../../proxy/clashBridge.js";
 import {
+  mergeControllerProxiesByBridge,
   normalizeClashBridge,
   replaceControllerProxies,
   type ClashBridgeConfig,
   type PoolProxy,
 } from "../../proxy/pool.js";
+import { activateBridge, bridgeProfiles } from "../../proxy/bridgeRuntime.js";
 import { resolveBridge } from "../../proxy/bridgeRuntime.js";
 import { inferAccountKind, type AccountConfig } from "../../relay/index.js";
 import type { GatewaySettings } from "../../settings/store.js";
@@ -96,6 +98,100 @@ function planControllerReplacement(
       proxyId: account.proxyId,
       accountIds: [firstId],
       unboundAccountIds: [],
+    };
+    conflict.accountIds.push(account.id);
+    conflict.unboundAccountIds.push(account.id);
+    conflictsByKey.set(key, conflict);
+    return { ...account, proxyId: null };
+  });
+
+  return {
+    proxyPool,
+    accounts,
+    cacheMoves,
+    bindingConflicts: [...conflictsByKey.values()],
+  };
+}
+
+function planMultiControllerReplacement(
+  current: GatewaySettings,
+  byBridge: Map<string, PoolProxy[]>
+): {
+  proxyPool: PoolProxy[];
+  accounts: AccountConfig[];
+  cacheMoves: CacheMove[];
+  bindingConflicts: BindingConflict[];
+} {
+  const previousById = new Map(
+    current.proxyPool
+      .filter((proxy) => proxy.source === "controller")
+      .map((proxy) => [proxy.id, proxy] as const)
+  );
+  const previousByBridgeAndName = new Map<string, Map<string, PoolProxy>>();
+  for (const proxy of previousById.values()) {
+    if (!proxy.bridgeId) continue;
+    let map = previousByBridgeAndName.get(proxy.bridgeId);
+    if (!map) {
+      map = new Map<string, PoolProxy>();
+      previousByBridgeAndName.set(proxy.bridgeId, map);
+    }
+    map.set(proxy.clashNodeName || proxy.name, proxy);
+  }
+
+  const byBridgeWithPreserved = new Map<string, PoolProxy[]>();
+  for (const [bridgeId, list] of byBridge.entries()) {
+    const prevMap = previousByBridgeAndName.get(bridgeId);
+    const preserved = list.map((proxy) => {
+      const prev = prevMap?.get(proxy.clashNodeName || proxy.name);
+      if (prev?.egressIp && !proxy.egressIp) {
+        return { ...proxy, egressIp: prev.egressIp };
+      }
+      return proxy;
+    });
+    byBridgeWithPreserved.set(bridgeId, preserved);
+  }
+
+  const cacheMoves: CacheMove[] = [];
+  for (const previous of previousById.values()) {
+    if (!previous.bridgeId) continue;
+    const newList = byBridgeWithPreserved.get(previous.bridgeId);
+    if (!newList) continue; // bridge not refreshed → keep as is, no move
+    const newMap = new Map(newList.map((proxy) => [proxy.clashNodeName || proxy.name, proxy] as const));
+    const replacement = newMap.get(previous.clashNodeName || previous.name);
+    cacheMoves.push({ oldId: previous.id, newId: replacement?.id ?? null });
+  }
+
+  const proxyPool = mergeControllerProxiesByBridge(current.proxyPool, byBridgeWithPreserved);
+  const liveIds = new Set(proxyPool.map((proxy) => proxy.id));
+  let accounts: AccountConfig[] = current.accounts.map((account) => {
+    if (!account.proxyId || liveIds.has(account.proxyId)) return account;
+    const previous = previousById.get(account.proxyId);
+    if (!previous?.bridgeId) return { ...account, proxyId: null };
+    const newMap = new Map(
+      (byBridgeWithPreserved.get(previous.bridgeId) ?? []).map((proxy) => [proxy.clashNodeName || proxy.name, proxy] as const)
+    );
+    const replacement = newMap.get(previous.clashNodeName || previous.name);
+    return { ...account, proxyId: replacement?.id ?? null };
+  });
+
+  const importedIds = new Set<string>();
+  for (const list of byBridgeWithPreserved.values()) for (const proxy of list) importedIds.add(proxy.id);
+  const firstBinding = new Map<string, string>();
+  const conflictsByKey = new Map<string, BindingConflict>();
+  accounts = accounts.map((account) => {
+    if (account.enabled === false || !account.proxyId || !importedIds.has(account.proxyId)) return account;
+    const kind = inferAccountKind(account);
+    const key = `${kind}\0${account.proxyId}`;
+    const firstId = firstBinding.get(key);
+    if (!firstId) {
+      firstBinding.set(key, account.id);
+      return account;
+    }
+    const conflict = conflictsByKey.get(key) ?? {
+      kind,
+      proxyId: account.proxyId,
+      accountIds: [firstId],
+      unboundAccountIds: [] as string[],
     };
     conflict.accountIds.push(account.id);
     conflict.unboundAccountIds.push(account.id);
@@ -255,13 +351,88 @@ export async function handleClashAdmin(
       submittedProfiles ? { ...s.clashBridge, ...override } : { ...override, selectionMode: "manual" }
     );
     try {
-      const resolved = submittedProfiles
-        ? await resolveBridge(config, undefined, subscriptionFetch ?? globalThis.fetch)
-        : { bridge: config, profile: null, diagnostics: [] };
-      if (submittedProfiles && !resolved.profile) {
-        throw new Error("No healthy bridge core is available");
+      // Multi-bridge: import every enabled profile, keep other bridges untouched.
+      if (submittedProfiles) {
+        const enabledProfiles = bridgeProfiles(config).filter((profile) => profile.enabled);
+        if (!enabledProfiles.length) throw new Error("No enabled bridge cores");
+        const fetchImpl = subscriptionFetch ?? globalThis.fetch;
+        const byBridge = new Map<string, PoolProxy[]>();
+        const perBridge: Array<{
+          bridgeId: string;
+          name: string;
+          ok: boolean;
+          imported?: number;
+          group?: string;
+          current?: string | null;
+          groups?: string[];
+          error?: string;
+        }> = [];
+        for (const profile of enabledProfiles) {
+          const activated = activateBridge(config, profile);
+          try {
+            const result = await importClashControllerNodes(activated, fetchImpl);
+            byBridge.set(profile.id, result.proxies);
+            perBridge.push({
+              bridgeId: profile.id,
+              name: profile.name,
+              ok: true,
+              imported: result.proxies.length,
+              group: result.group,
+              current: result.current,
+              groups: result.groups,
+            });
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            perBridge.push({ bridgeId: profile.id, name: profile.name, ok: false, error: message });
+          }
+        }
+        if (!byBridge.size) {
+          const firstError = perBridge.find((item) => !item.ok)?.error ?? "No healthy bridge core is available";
+          throw new Error(firstError);
+        }
+        if (ctx.batchProbeProgress.running) {
+          sendJson(res, 409, {
+            error: {
+              message: "Cannot import Controller nodes while a batch proxy test is running",
+              type: "batch_probe_running",
+            },
+          });
+          return true;
+        }
+        let cacheMoves: CacheMove[] = [];
+        let bindingConflicts: BindingConflict[] = [];
+        const saved = await store.update((current) => {
+          const plan = planMultiControllerReplacement(current, byBridge);
+          cacheMoves = plan.cacheMoves;
+          bindingConflicts = plan.bindingConflicts;
+          return {
+            clashBridge: config,
+            proxyPool: plan.proxyPool,
+            accounts: plan.accounts,
+          };
+        });
+        for (const move of cacheMoves) {
+          if (move.newId) ctx.probes.remap(move.oldId, move.newId);
+          else ctx.probes.delete(move.oldId);
+        }
+        await persistProbeState(ctx);
+        upstream.updateSettings(saved);
+        store.updateReadyCount(upstream.rotator.readyCount(), upstream.rotator.getAccounts().length);
+        const total = [...byBridge.values()].reduce((sum, list) => sum + list.length, 0);
+        const firstOk = perBridge.find((item) => item.ok);
+        sendJson(res, 200, {
+          imported: total,
+          group: firstOk?.group ?? null,
+          current: firstOk?.current ?? null,
+          groups: firstOk?.groups ?? [],
+          perBridge,
+          bindingConflicts,
+          settings: saved,
+          probeResults: ctx.probes.getAll(),
+        });
+        return true;
       }
-      const bridge = resolved.profile ? resolved.bridge : config;
+      const bridge = config;
       const result = await importClashControllerNodes(
         bridge,
         subscriptionFetch ?? globalThis.fetch
@@ -282,7 +453,7 @@ export async function handleClashAdmin(
         cacheMoves = plan.cacheMoves;
         bindingConflicts = plan.bindingConflicts;
         return {
-          clashBridge: { ...config, activeBridgeId: resolved.profile?.id ?? config.activeBridgeId },
+          clashBridge: config,
           proxyPool: plan.proxyPool,
           accounts: plan.accounts,
         };
