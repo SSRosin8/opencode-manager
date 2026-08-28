@@ -5,6 +5,11 @@ export const ADMIN_CLIENT_ACTIONS = `    $("btn-top-refresh").onclick = () => re
       const existing = collectBridge().bridges;
       existing.push({ id: "bridge-" + Date.now(), name: "Core " + (existing.length + 1), enabled: true, priority: existing.length, apiBase: "", apiSecret: "", localProxyHost: "127.0.0.1", localProxyPort: 7890, selectorGroup: "GLOBAL" });
       renderBridgeProfiles(existing);
+      bridgeProbeOk = null;
+      renderBridgeStatus();
+    };
+    $("bridgeMode").onchange = () => {
+      $("bridgeActive").disabled = $("bridgeMode").value !== "manual";
     };
     $("btn-batch-test").onclick = () => batchTestProxies();
     $("btn-batch-pause").onclick = () => controlBatchTest(batchProgress?.paused ? "resume" : "pause");
@@ -42,9 +47,11 @@ export const ADMIN_CLIENT_ACTIONS = `    $("btn-top-refresh").onclick = () => re
       });
       const data = await res.json();
       bridgeProbeOk = !!data.ok;
+      if (data.ok && data.selectedBridgeId) $("bridgeActive").value = data.selectedBridgeId;
+      const coreName = data.ok && data.selectedBridgeId ? ($("bridgeActive").selectedOptions[0]?.textContent || "") : "";
       msg.className = "probe-ok show" + (data.ok ? "" : " fail");
-      msg.textContent = (data.ok ? "✓ " : "! ") + (data.message || "") + (data.groups ? " · " + data.groups.slice(0, 6).join(", ") : "");
-      renderBridge();
+      msg.textContent = (data.ok ? "✓ " : "! ") + (coreName ? "[" + coreName + "] " : "") + (data.message || "") + (data.groups ? " · " + data.groups.slice(0, 6).join(", ") : "");
+      renderBridgeStatus();
       toast(data.ok ? t("toastClashOk") : t("toastClashFail"), data.ok);
     };
 

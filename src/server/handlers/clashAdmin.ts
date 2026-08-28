@@ -218,7 +218,7 @@ export async function handleClashAdmin(
       const resolved = submittedProfiles
         ? await resolveBridge(config, undefined, subscriptionFetch ?? globalThis.fetch)
         : { bridge: config, profile: null, diagnostics: [] };
-      if (submittedProfiles && !resolved.profile && config.selectionMode === "auto") {
+      if (submittedProfiles && !resolved.profile) {
         throw new Error("No healthy bridge core is available");
       }
       const bridge = resolved.profile ? resolved.bridge : config;

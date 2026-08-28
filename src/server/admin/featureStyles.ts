@@ -238,9 +238,21 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
     /* Side cards */
     .bridge-form .row { margin-bottom: 8px; }
     .bridge-profile-row { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; margin-bottom: 10px; background: var(--bg); }
+    .bridge-profile-row > summary { cursor: pointer; display: flex; justify-content: space-between; align-items: center; font-weight: 600; list-style: none; }
+    .bridge-profile-row > summary::-webkit-details-marker { display: none; }
+    .bridge-profile-row > summary::before { content: "+"; display: inline-block; width: 18px; color: var(--muted); }
+    .bridge-profile-row[open] > summary::before { content: "−"; }
+    .bridge-profile-summary-action { color: var(--muted); font-size: 12px; font-weight: 400; }
+    .bridge-profile-body { margin-top: 12px; }
+    .bridge-profile-topbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+    .bridge-profile-enabled-label { font-size: 12px; font-weight: 500; margin-right: auto; }
+    .bridge-profile-actions { margin-top: 8px; }
+    .btn-danger { color: var(--err); border-color: var(--err-border); }
+    .btn-danger:hover { background: var(--err-dim); }
+    .bridge-global-controls { display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; align-items: end; margin-bottom: 12px; }
     .bridge-profile-row .row:last-of-type { margin-bottom: 0; }
-    .bridge-active-label { margin-top: 8px; }
     @media (max-width: 600px) {
+      .bridge-global-controls { grid-template-columns: 1fr; }
       .bridge-profile-row { padding: 10px; }
       .bridge-profile-row .row.two { grid-template-columns: 1fr; }
     }

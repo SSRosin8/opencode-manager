@@ -358,19 +358,21 @@ ${ADMIN_PROXY_NODES_MARKUP}
                   </div>
                 </div>
                 <div class="panel-bd bridge-form">
-                  <div class="row">
+                  <div class="bridge-global-controls">
                     <div>
                       <label class="field" for="bridgeMode" data-i18n="bridgeSelectionMode">Bridge selection</label>
                       <select class="input" id="bridgeMode"><option value="auto">Automatic</option><option value="manual">Manual</option></select>
-                      <label class="field bridge-active-label" for="bridgeActive" data-i18n="activeBridge">Active core</label>
+                    </div>
+                    <div>
+                      <label class="field" for="bridgeActive" data-i18n="activeBridge">Active core</label>
                       <select class="input" id="bridgeActive"></select>
                     </div>
+                    <button type="button" class="btn btn-sm bridge-add-inline" id="btn-add-bridge-profile" data-i18n="addBridgeCore">Add core</button>
                   </div>
                   <div class="row">
                     <div>
                       <label class="field" data-i18n="bridgeProfiles">Bridge cores</label>
-                      <div id="bridge-profiles-list"></div>
-                      <button type="button" class="btn btn-sm" id="btn-add-bridge-profile" data-i18n="addBridgeCore">Add core</button>
+                      <datalist id="bridge-controller-presets"><option value="http://127.0.0.1:9090"></option><option value="http://127.0.0.1:9097"></option><option value="http://127.0.0.1:9098"></option></datalist><div id="bridge-profiles-list"></div>
                     </div>
                   </div>
                   <div class="bridge-actions">

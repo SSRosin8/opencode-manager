@@ -413,13 +413,22 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
       $("bridgeMode").value = b.selectionMode || "auto";
       renderBridgeProfiles(b.bridges || []);
       $("bridgeActive").value = b.activeBridgeId || b.bridges?.[0]?.id || "";
+      $("bridgeActive").disabled = $("bridgeMode").value !== "manual";
+      renderBridgeStatus();
+    }
+
+    function renderBridgeStatus() {
+      const b = settings.clashBridge || {};
       const tag = $("bridge-conn-tag");
-      if (!b.enabled) {
+      const hasProfiles = $("bridge-profiles-list").querySelectorAll(".bridge-profile-row").length > 0;
+      if (!b.enabled || !hasProfiles) {
         tag.className = "tag";
         tag.textContent = t("disabled");
       } else if (bridgeProbeOk === true) {
+        const activeId = $("bridgeActive").value;
+        const activeName = activeId ? ($("bridgeActive").selectedOptions[0]?.textContent || "") : "";
         tag.className = "tag ok";
-        tag.textContent = t("connected");
+        tag.textContent = t("connected") + (activeName ? " · " + activeName : "");
       } else if (bridgeProbeOk === false) {
         tag.className = "tag err";
         tag.textContent = t("disconnected");
@@ -432,19 +441,54 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
     function renderBridgeProfiles(profiles) {
       const root = $("bridge-profiles-list");
       const selected = $("bridgeActive").value || settings?.clashBridge?.activeBridgeId || "";
-      root.innerHTML = profiles.map((profile, index) => '<div class="bridge-profile-row" data-index="' + index + '" style="border-top:1px solid var(--border);padding:8px 0">' +
+      const openIds = new Set(Array.from(root.querySelectorAll(".bridge-profile-row[open]")).map((row) => row.dataset.bridgeId));
+      root.innerHTML = profiles.map((profile, index) => {
+        const id = profile.id || ("bridge-" + (index + 1));
+        const open = openIds.has(id) ? " open" : "";
+        return '<details class="bridge-profile-row" data-index="' + index + '" data-bridge-id="' + escapeAttr(id) + '"' + open + '><summary><span>' + escapeHtml(profile.name || ("Core " + (index + 1))) + '</span><span class="bridge-profile-summary-action">' + escapeHtml(t("coreSettings")) + '</span></summary><div class="bridge-profile-body">' +
+        '<div class="bridge-profile-topbar"><label class="toggle"><input class="bridge-profile-enabled" type="checkbox"' + (profile.enabled === false ? "" : " checked") + ' /><span></span></label><span class="bridge-profile-enabled-label">' + escapeHtml(t("coreEnabled")) + '</span><button type="button" class="btn btn-sm btn-danger bridge-profile-remove">' + escapeHtml(t("removeBridgeCore")) + '</button></div>' +
         '<div class="row two"><div><label class="field">' + escapeHtml(t("coreName")) + '</label><input class="input bridge-profile-name" value="' + escapeAttr(profile.name || ("Core " + (index + 1))) + '" placeholder="Name" /></div>' +
-        '<div><label class="field">' + escapeHtml(t("controllerUrl")) + '</label><input class="input bridge-profile-api" value="' + escapeAttr(profile.apiBase || "") + '" placeholder="http://127.0.0.1:9090" /></div></div>' +
+        '<div><label class="field">' + escapeHtml(t("controllerUrl")) + '</label><input class="input bridge-profile-api" list="bridge-controller-presets" value="' + escapeAttr(profile.apiBase || "") + '" placeholder="http://127.0.0.1:9090" /></div></div>' +
         '<div class="row two"><div><label class="field">' + escapeHtml(t("secret")) + '</label><input class="input bridge-profile-secret" type="password" value="' + escapeAttr(profile.apiSecret || "") + '" placeholder="Secret" /></div>' +
         '<div><label class="field">' + escapeHtml(t("localHost")) + '</label><input class="input bridge-profile-host" value="' + escapeAttr(profile.localProxyHost || "127.0.0.1") + '" placeholder="127.0.0.1" /></div></div>' +
         '<div class="row two"><div><label class="field">' + escapeHtml(t("localPort")) + '</label><input class="input bridge-profile-port" type="number" value="' + escapeAttr(profile.localProxyPort || 7890) + '" placeholder="7890" /></div>' +
-        '<span></span></div>' +
-        '<div class="row two"><div><label class="field">' + escapeHtml(t("selectorGroup")) + '</label><input class="input bridge-profile-group" value="' + escapeAttr(profile.selectorGroup || "GLOBAL") + '" placeholder="GLOBAL" /></div>' +
-        '<div><label class="field">' + escapeHtml(t("coreEnabled")) + '</label><div style="display:flex;gap:8px;align-items:center"><label class="toggle"><input class="bridge-profile-enabled" type="checkbox"' + (profile.enabled === false ? "" : " checked") + ' /><span></span></label>' +
-        '<button type="button" class="btn btn-sm bridge-profile-remove">' + escapeHtml(t("removeBridgeCore")) + '</button></div></div>' +
-        '<input type="hidden" class="bridge-profile-id" value="' + escapeAttr(profile.id || ("bridge-" + (index + 1))) + '" /></div>').join("");
+        '<div><label class="field">' + escapeHtml(t("selectorGroup")) + '</label><input class="input bridge-profile-group" value="' + escapeAttr(profile.selectorGroup || "GLOBAL") + '" placeholder="GLOBAL" /></div></div>' +
+        '<div class="bridge-profile-actions"><button type="button" class="btn btn-sm bridge-profile-test">' + escapeHtml(t("testConnection")) + '</button></div>' +
+        '<input type="hidden" class="bridge-profile-id" value="' + escapeAttr(id) + '" /></div></details>';
+      }).join("");
       root.querySelectorAll(".bridge-profile-remove").forEach((button) => {
-        button.onclick = () => button.closest(".bridge-profile-row").remove();
+        button.onclick = () => {
+          const row = button.closest(".bridge-profile-row");
+          if (!row) return;
+          const name = row.querySelector(".bridge-profile-name")?.value || row.querySelector("summary span")?.textContent || "";
+          openConfirm(t("confirmRemoveCore"), t("confirmRemoveCoreBody")(name), () => {
+            row.remove();
+            bridgeProbeOk = null;
+            renderBridgeStatus();
+          });
+        };
+      });
+      root.querySelectorAll(".bridge-profile-test").forEach((button) => {
+        button.onclick = async (event) => {
+          event.preventDefault();
+          const row = button.closest(".bridge-profile-row");
+          if (!row) return;
+          button.disabled = true;
+          try {
+            const bridge = collectBridge();
+            const id = row.querySelector(".bridge-profile-id").value;
+            const selected = bridge.bridges.find((item) => item.id === id);
+            if (!selected) return;
+            const res = await fetch("/admin/api/clash-bridge/probe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...bridge, bridges: [selected], activeBridgeId: id, selectionMode: "manual" }) });
+            const data = await res.json();
+            bridgeProbeOk = !!data.ok;
+            const group = data.groups || [];
+            if (data.ok && group.length) row.querySelector(".bridge-profile-group").value = group.includes(selected.selectorGroup) ? selected.selectorGroup : group[0];
+            if (data.ok) $("bridgeActive").value = id;
+            renderBridgeStatus();
+            toast(data.ok ? t("toastClashOk") : t("toastClashFail"), data.ok);
+          } catch (error) { toast(error.message || String(error), false); } finally { button.disabled = false; }
+        };
       });
       $("bridgeActive").innerHTML = profiles.map((profile) => '<option value="' + escapeAttr(profile.id) + '">' + escapeHtml(profile.name) + '</option>').join("");
       $("bridgeActive").value = profiles.some((profile) => profile.id === selected) ? selected : profiles[0]?.id || "";
@@ -461,7 +505,10 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
         localProxyHost: row.querySelector(".bridge-profile-host").value.trim() || "127.0.0.1",
         localProxyPort: Number(row.querySelector(".bridge-profile-port").value) || 7890,
         selectorGroup: row.querySelector(".bridge-profile-group").value.trim() || "GLOBAL",
-      })).filter((profile) => profile.apiBase);
+      }));
+      bridges.forEach((profile, index) => {
+        if (!profile.apiBase) throw new Error(t("bridgeCoreUrlRequired")(index + 1));
+      });
       return {
         enabled: $("bridgeEnabled").checked,
         apiBase: bridges[0]?.apiBase || "http://127.0.0.1:9090",

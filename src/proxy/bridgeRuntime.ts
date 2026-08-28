@@ -7,22 +7,14 @@ export type ResolvedBridge = {
   diagnostics: BridgeProbeDiagnostic[];
 };
 
-function legacyProfile(config: ClashBridgeConfig): ClashBridgeProfile {
-  return {
-    id: "legacy-clash",
-    name: "Clash bridge",
-    enabled: config.enabled,
-    priority: 0,
-    apiBase: config.apiBase,
-    apiSecret: config.apiSecret,
-    localProxyHost: config.localProxyHost,
-    localProxyPort: config.localProxyPort,
-    selectorGroup: config.selectorGroup,
-  };
-}
-
 export function bridgeProfiles(config: ClashBridgeConfig): ClashBridgeProfile[] {
   return config.bridges?.length ? config.bridges : [legacyProfile(config)];
+}
+
+function legacyProfile(config: ClashBridgeConfig): ClashBridgeProfile {
+  return { id: "legacy-clash", name: "Clash bridge", enabled: config.enabled, priority: 0,
+    apiBase: config.apiBase, apiSecret: config.apiSecret, localProxyHost: config.localProxyHost,
+    localProxyPort: config.localProxyPort, selectorGroup: config.selectorGroup };
 }
 
 export function activateBridge(
@@ -47,8 +39,9 @@ export async function resolveBridge(
   fetchImpl: typeof fetch = globalThis.fetch
 ): Promise<ResolvedBridge> {
   if (!config.enabled) return { bridge: config, profile: null, diagnostics: [] };
-  // Keep legacy single-core configurations on the established switch path.
-  // Automatic probing is meaningful only after explicit multiple-core setup.
+  if (config.bridges && config.bridges.length === 0) {
+    return { bridge: { ...config, enabled: false }, profile: null, diagnostics: [] };
+  }
   if (!config.bridges?.length) {
     return { bridge: config, profile: legacyProfile(config), diagnostics: [] };
   }

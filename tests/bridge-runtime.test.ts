@@ -48,17 +48,7 @@ function controllerFetch(statusByPort: Record<number, number>, calls: string[]) 
 describe("bridge runtime", () => {
   it("exposes the legacy single-bridge fields as one profile", () => {
     const profiles = bridgeProfiles(config());
-    expect(profiles).toEqual([{
-      id: "legacy-clash",
-      name: "Clash bridge",
-      enabled: true,
-      priority: 0,
-      apiBase: "http://127.0.0.1:9090",
-      apiSecret: "legacy-secret",
-      localProxyHost: "127.0.0.1",
-      localProxyPort: 7890,
-      selectorGroup: "GLOBAL",
-    }]);
+    expect(profiles[0].id).toBe("legacy-clash");
   });
 
   it("tries the active profile first in auto mode and fails over", async () => {

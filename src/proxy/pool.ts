@@ -330,7 +330,10 @@ export function normalizeClashBridge(raw: unknown): ClashBridgeConfig {
   const hasLegacyFields = [
     "enabled", "apiBase", "apiSecret", "localProxyHost", "localProxyPort", "selectorGroup",
   ].some((key) => key in b);
-  if (!profiles.length && (hasLegacyFields || b.bridges !== undefined)) {
+  // An explicitly empty bridges array means the user removed every profile.
+  // Only migrate legacy fields when the new profile field is absent; otherwise
+  // saving an empty list would unexpectedly recreate the legacy core.
+  if (!profiles.length && hasLegacyFields && b.bridges === undefined) {
     profiles.push({ id: "legacy-clash", name: "Clash bridge", priority: 0, ...legacy });
   }
   const active = typeof b.activeBridgeId === "string" && b.activeBridgeId.trim()

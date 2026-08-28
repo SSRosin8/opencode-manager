@@ -65,6 +65,18 @@ describe("admin proxy-pool UX contracts", () => {
     expect(ADMIN_CLIENT_ACTIONS).toMatch(/clash-bridge"[\s\S]*method: "PATCH"/);
   });
 
+  it("keeps blank bridge rows so more than two cores can be added before saving", () => {
+    expect(ADMIN_CLIENT_ACTIONS).toContain('existing.push({ id: "bridge-" + Date.now()');
+    expect(ADMIN_CLIENT_PROXY_VIEWS).toContain("bridges.forEach((profile, index) => {");
+    expect(ADMIN_CLIENT_PROXY_VIEWS).not.toContain("})).filter((profile) => profile.apiBase)");
+    expect(ADMIN_CLIENT_PROXY_VIEWS).toContain('throw new Error(t("bridgeCoreUrlRequired")(index + 1))');
+    expect(ADMIN_CLIENT_ACTIONS).toContain("renderBridgeStatus();");
+    expect(ADMIN_CLIENT_PROXY_VIEWS).toContain('<details class="bridge-profile-row"');
+    expect(ADMIN_FEATURE_STYLES).toContain(".bridge-profile-row > summary");
+    expect(ADMIN_CLIENT_PROXY_VIEWS).toContain('$("bridgeActive").disabled = $("bridgeMode").value !== "manual"');
+    expect(ADMIN_CLIENT_PROXY_VIEWS).toContain('querySelectorAll(".bridge-profile-row[open]")');
+  });
+
   it("frames gateway around the local request path and keeps CLI compatibility secondary", () => {
     expect(ADMIN_MARKUP).toContain('class="gateway-flow"');
     expect(ADMIN_MARKUP).toContain('data-i18n="gatewayFlowNote"');

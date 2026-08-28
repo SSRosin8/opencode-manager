@@ -83,4 +83,16 @@ describe("normalizeClashBridge", () => {
       },
     ]);
   });
+
+  it("preserves an explicitly empty profile list after deleting all cores", () => {
+    const result = normalizeClashBridge({
+      enabled: true,
+      apiBase: "http://127.0.0.1:9090",
+      localProxyPort: 7890,
+      bridges: [],
+      activeBridgeId: "legacy-clash",
+    });
+    expect(result.bridges).toEqual([]);
+    expect(result.activeBridgeId).toBeNull();
+  });
 });
