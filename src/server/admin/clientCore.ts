@@ -47,6 +47,8 @@ export const ADMIN_CLIENT_CORE = `    function storageGet(key) {
     let batchBaselineAccountIds = new Set();
     let recentProbeEvents = [];
     const subscriptionDiagnostics = new Map();
+    /** @type {Map<string, string[]>} */
+    const bridgeGroupCache = new Map();
 
     function t(key) {
       const pack = I18N[lang] || I18N.en;

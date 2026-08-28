@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { RequestContext } from "../context.js";
 import { persistProbeState } from "../context.js";
-import { importClashControllerNodes, probeClashBridge } from "../../proxy/clashBridge.js";
+import { importClashControllerNodes, listClashSelectorGroups, probeClashBridge } from "../../proxy/clashBridge.js";
 import {
   normalizeClashBridge,
   replaceControllerProxies,
@@ -182,6 +182,46 @@ export async function handleClashAdmin(
       selectedBridgeId: resolved.profile?.id ?? null,
       diagnostics: resolved.diagnostics,
     });
+    return true;
+  }
+
+  // POST /admin/api/clash-bridge/selector-groups
+  if (method === "POST" && path === "/admin/api/clash-bridge/selector-groups") {
+    const raw = await readBody(req);
+    let body: Record<string, unknown> = {};
+    if (raw.length) {
+      try {
+        body = JSON.parse(raw.toString("utf8") || "{}") as Record<string, unknown>;
+      } catch {
+        sendJson(res, 400, { error: { message: "Invalid JSON" } });
+        return true;
+      }
+    }
+    const fetchImpl = subscriptionFetch ?? globalThis.fetch;
+    // Single bridge: { apiBase, apiSecret }
+    if (typeof body.apiBase === "string") {
+      const apiBase = body.apiBase.trim();
+      const apiSecret = typeof body.apiSecret === "string" ? body.apiSecret : "";
+      const result = await listClashSelectorGroups({ apiBase, apiSecret }, fetchImpl);
+      sendJson(res, result.ok ? 200 : 502, result);
+      return true;
+    }
+    // Batch: { bridges: [{ id, name, apiBase, apiSecret }...] }
+    if (Array.isArray(body.bridges)) {
+      const inputs = (body.bridges as unknown[]).filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"));
+      const results = await Promise.all(inputs.map(async (item) => {
+        const id = typeof item.id === "string" ? item.id : "";
+        const name = typeof item.name === "string" ? item.name : id;
+        const apiBase = typeof item.apiBase === "string" ? item.apiBase.trim() : "";
+        const apiSecret = typeof item.apiSecret === "string" ? item.apiSecret : "";
+        if (!apiBase) return { id, name, ok: false, groups: [] as string[], message: "apiBase is required" };
+        const result = await listClashSelectorGroups({ apiBase, apiSecret }, fetchImpl);
+        return { id, name, ...result };
+      }));
+      sendJson(res, 200, { results });
+      return true;
+    }
+    sendJson(res, 400, { error: { message: "Provide apiBase or bridges[]" } });
     return true;
   }
 

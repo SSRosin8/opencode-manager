@@ -438,6 +438,85 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
       }
     }
 
+    function populateGroupSelect(select, currentValue, groups) {
+      const normalized = (currentValue || "").trim() || "GLOBAL";
+      const set = new Set(Array.isArray(groups) ? groups : []);
+      if (normalized) set.add(normalized);
+      const list = [...set].sort((a, b) => a.localeCompare(b));
+      if (!list.length) list.push(normalized);
+      const cur = select.value || normalized;
+      select.innerHTML = list.map((name) => '<option value="' + escapeAttr(name) + '">' + escapeHtml(name) + '</option>').join("");
+      if (list.includes(cur)) select.value = cur;
+      else if (list.includes(normalized)) select.value = normalized;
+      else select.value = list[0];
+      const row = select.closest(".bridge-profile-row");
+      if (row && row.dataset.bridgeId) bridgeGroupCache.set(row.dataset.bridgeId, [...set]);
+    }
+
+    async function detectGroupsForRow(row, button) {
+      const apiInput = row.querySelector(".bridge-profile-api");
+      const secretInput = row.querySelector(".bridge-profile-secret");
+      const select = row.querySelector(".bridge-profile-group");
+      const hint = row.querySelector(".bridge-group-hint");
+      const apiBase = apiInput ? apiInput.value.trim() : "";
+      if (!apiBase) {
+        hint.style.display = "block";
+        hint.textContent = t("bridgeCoreUrlRequired")(1);
+        hint.style.color = "var(--err)";
+        return;
+      }
+      const apiSecret = secretInput ? secretInput.value : "";
+      button.disabled = true;
+      const originalText = button.textContent;
+      button.textContent = t("detectingGroups");
+      hint.style.display = "none";
+      try {
+        const res = await fetch("/admin/api/clash-bridge/selector-groups", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ apiBase, apiSecret }) });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || data.error?.message || ("HTTP " + res.status));
+        const groups = data.groups || [];
+        bridgeGroupCache.set(row.dataset.bridgeId, groups);
+        populateGroupSelect(select, select.value, groups);
+        hint.style.display = "block";
+        hint.textContent = groups.length ? t("groupsDetected")(groups.length) + ": " + groups.slice(0, 6).join(", ") : t("noGroupsFound");
+        hint.style.color = groups.length ? "" : "var(--err)";
+      } catch (e) {
+        hint.style.display = "block";
+        hint.textContent = String(e.message || e);
+        hint.style.color = "var(--err)";
+        const cached = bridgeGroupCache.get(row.dataset.bridgeId) || [];
+        populateGroupSelect(select, select.value, cached);
+      } finally {
+        button.disabled = false;
+        button.textContent = originalText;
+      }
+    }
+
+    async function refreshAllBridgeGroups(profiles) {
+      const enabled = profiles.filter((p) => p.enabled !== false && p.apiBase);
+      if (!enabled.length) return;
+      try {
+        const payload = { bridges: enabled.map((p) => ({ id: p.id, name: p.name, apiBase: p.apiBase, apiSecret: p.apiSecret })) };
+        const res = await fetch("/admin/api/clash-bridge/selector-groups", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+        const data = await res.json();
+        if (!res.ok || !Array.isArray(data.results)) return;
+        for (const item of data.results) {
+          const groups = item.groups || [];
+          if (groups.length) bridgeGroupCache.set(item.id, groups);
+          const row = document.querySelector('.bridge-profile-row[data-bridge-id="' + String(item.id).replace(/"/g, '\\"') + '"]');
+          if (!row) continue;
+          const select = row.querySelector(".bridge-profile-group");
+          const hint = row.querySelector(".bridge-group-hint");
+          populateGroupSelect(select, select.value, groups);
+          if (groups.length) {
+            hint.style.display = "block";
+            hint.textContent = t("groupsDetected")(groups.length);
+            hint.style.color = "";
+          }
+        }
+      } catch { /* silent background */ }
+    }
+
     function renderBridgeProfiles(profiles) {
       const root = $("bridge-profiles-list");
       const selected = $("bridgeActive").value || settings?.clashBridge?.activeBridgeId || "";
@@ -452,20 +531,51 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
         '<div class="row two"><div><label class="field">' + escapeHtml(t("secret")) + '</label><input class="input bridge-profile-secret" type="password" value="' + escapeAttr(profile.apiSecret || "") + '" placeholder="Secret" /></div>' +
         '<div><label class="field">' + escapeHtml(t("localHost")) + '</label><input class="input bridge-profile-host" value="' + escapeAttr(profile.localProxyHost || "127.0.0.1") + '" placeholder="127.0.0.1" /></div></div>' +
         '<div class="row two"><div><label class="field">' + escapeHtml(t("localPort")) + '</label><input class="input bridge-profile-port" type="number" value="' + escapeAttr(profile.localProxyPort || 7890) + '" placeholder="7890" /></div>' +
-        '<div><label class="field">' + escapeHtml(t("selectorGroup")) + '</label><input class="input bridge-profile-group" value="' + escapeAttr(profile.selectorGroup || "GLOBAL") + '" placeholder="GLOBAL" /></div></div>' +
+        '<div><label class="field">' + escapeHtml(t("selectorGroup")) + '</label><div style="display:flex;gap:6px;align-items:center"><select class="input bridge-profile-group" style="flex:1"></select><button type="button" class="btn btn-sm bridge-profile-detect" title="' + escapeAttr(t("detectGroups")) + '">' + escapeHtml(t("detectGroups")) + '</button></div><div class="bridge-group-hint muted" style="font-size:12px;margin-top:4px;display:none"></div></div></div>' +
         '<div class="bridge-profile-actions"><button type="button" class="btn btn-sm bridge-profile-test">' + escapeHtml(t("testConnection")) + '</button></div>' +
         '<input type="hidden" class="bridge-profile-id" value="' + escapeAttr(id) + '" /></div></details>';
       }).join("");
+      root.querySelectorAll(".bridge-profile-row").forEach((row) => {
+        const id = row.dataset.bridgeId;
+        const idx = Number(row.dataset.index);
+        const profile = profiles.find((p) => p.id === id) || profiles[idx];
+        if (!profile) return;
+        const select = row.querySelector(".bridge-profile-group");
+        const hint = row.querySelector(".bridge-group-hint");
+        const cached = bridgeGroupCache.get(id);
+        if (cached && cached.length) {
+          populateGroupSelect(select, profile.selectorGroup, cached);
+          hint.style.display = "block";
+          hint.textContent = t("groupsDetected")(cached.length);
+          hint.style.color = "";
+        } else {
+          populateGroupSelect(select, profile.selectorGroup, cached || []);
+          hint.style.display = "block";
+          hint.textContent = t("selectorGroupHint");
+          hint.style.color = "var(--muted)";
+        }
+      });
+      const needsProbe = profiles.filter((p) => p.enabled !== false && p.apiBase && !bridgeGroupCache.has(p.id));
+      if (needsProbe.length) void refreshAllBridgeGroups(needsProbe);
       root.querySelectorAll(".bridge-profile-remove").forEach((button) => {
         button.onclick = () => {
           const row = button.closest(".bridge-profile-row");
           if (!row) return;
           const name = row.querySelector(".bridge-profile-name")?.value || row.querySelector("summary span")?.textContent || "";
           openConfirm(t("confirmRemoveCore"), t("confirmRemoveCoreBody")(name), () => {
+            bridgeGroupCache.delete(row.dataset.bridgeId);
             row.remove();
             bridgeProbeOk = null;
             renderBridgeStatus();
           });
+        };
+      });
+      root.querySelectorAll(".bridge-profile-detect").forEach((button) => {
+        button.onclick = async (event) => {
+          event.preventDefault();
+          const row = button.closest(".bridge-profile-row");
+          if (!row) return;
+          await detectGroupsForRow(row, button);
         };
       });
       root.querySelectorAll(".bridge-profile-test").forEach((button) => {
@@ -483,7 +593,15 @@ export const ADMIN_CLIENT_PROXY_VIEWS = `    function renderMetrics(targetId) {
             const data = await res.json();
             bridgeProbeOk = !!data.ok;
             const group = data.groups || [];
-            if (data.ok && group.length) row.querySelector(".bridge-profile-group").value = group.includes(selected.selectorGroup) ? selected.selectorGroup : group[0];
+            if (group.length) {
+              bridgeGroupCache.set(id, group);
+              const select = row.querySelector(".bridge-profile-group");
+              const hint = row.querySelector(".bridge-group-hint");
+              populateGroupSelect(select, selected.selectorGroup, group);
+              hint.style.display = "block";
+              hint.textContent = t("groupsDetected")(group.length) + ": " + group.slice(0, 6).join(", ");
+              hint.style.color = "";
+            }
             if (data.ok) $("bridgeActive").value = id;
             renderBridgeStatus();
             toast(data.ok ? t("toastClashOk") : t("toastClashFail"), data.ok);
