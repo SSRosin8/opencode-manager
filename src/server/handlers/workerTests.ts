@@ -7,7 +7,7 @@ import { inferAccountKind } from "../../relay/index.js";
 import { attachAnonymousZenResult } from "../workerEgress.js";
 import { UpstreamResponseTooLargeError, readBody, readStreamFully, sendJson } from "../httpIO.js";
 import { logProbeFailure } from "../probeDiagnostics.js";
-import { resolveBridge } from "../../proxy/bridgeRuntime.js";
+import { activateBridge, resolveBridge } from "../../proxy/bridgeRuntime.js";
 import { normalizeModelName } from "../../proxy/freeModels.js";
 
 const MAX_WORKER_TEST_RESPONSE_BYTES = 1024 * 1024;
@@ -96,10 +96,22 @@ export async function handleWorkerTests(
     }
     const started = performance.now();
     try {
-      const resolved = proxy.usable
-        ? { bridge: s.clashBridge }
-        : await resolveBridge(s.clashBridge, proxy.clashNodeName || proxy.name, subscriptionFetch ?? globalThis.fetch);
-      const networkProbe = await probePoolProxy(proxy, resolved.bridge, {
+      let resolvedBridge = s.clashBridge;
+      if (!proxy.usable) {
+        if (proxy.bridgeId) {
+          const profile = (s.clashBridge.bridges ?? []).find((item) => item.id === proxy.bridgeId);
+          if (profile && profile.enabled && s.clashBridge.enabled) {
+            resolvedBridge = activateBridge(s.clashBridge, profile);
+          } else {
+            const fallback = await resolveBridge(s.clashBridge, proxy.clashNodeName || proxy.name, subscriptionFetch ?? globalThis.fetch);
+            resolvedBridge = fallback.bridge;
+          }
+        } else {
+          const fallback = await resolveBridge(s.clashBridge, proxy.clashNodeName || proxy.name, subscriptionFetch ?? globalThis.fetch);
+          resolvedBridge = fallback.bridge;
+        }
+      }
+      const networkProbe = await probePoolProxy(proxy, resolvedBridge, {
         fetchImpl: ctx?.probeFetch,
         bridgeFetch: subscriptionFetch ?? globalThis.fetch,
         clashQueue: clashProbeQueue,
@@ -107,7 +119,7 @@ export async function handleWorkerTests(
       const probe = kind === "anonymous_zen" && networkProbe.ok
         ? attachAnonymousZenResult(
             networkProbe,
-            await probeAnonymousZenProxy(proxy, resolved.bridge, {
+            await probeAnonymousZenProxy(proxy, resolvedBridge, {
               baseUrl: s.baseUrl,
               model,
               fetchImpl: ctx?.probeFetch,

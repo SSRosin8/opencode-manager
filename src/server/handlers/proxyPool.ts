@@ -6,7 +6,7 @@ import { attachAnonymousZenResult, syncAnonymousWorkers } from "../workerEgress.
 import { readBody, sendJson } from "../httpIO.js";
 import { persistProbeState } from "../context.js";
 import { logProbeFailure } from "../probeDiagnostics.js";
-import { resolveBridge } from "../../proxy/bridgeRuntime.js";
+import { activateBridge, resolveBridge } from "../../proxy/bridgeRuntime.js";
 
 export async function handleProxyPool(
   req: IncomingMessage,
@@ -27,10 +27,27 @@ export async function handleProxyPool(
       sendJson(res, 404, { error: { message: `Proxy not found: ${id}` } });
       return true;
     }
-    const resolved = proxy.usable
-      ? { bridge: s.clashBridge }
-      : await resolveBridge(s.clashBridge, proxy.clashNodeName || proxy.name, subscriptionFetch ?? globalThis.fetch);
-    const networkProbe: ProbeResult = await probePoolProxy(proxy, resolved.bridge, {
+    let resolvedBridge = s.clashBridge;
+    if (!proxy.usable) {
+      if (proxy.bridgeId) {
+        const profile = (s.clashBridge.bridges ?? []).find((item) => item.id === proxy.bridgeId);
+        if (profile && profile.enabled && s.clashBridge.enabled) {
+          resolvedBridge = activateBridge(s.clashBridge, profile);
+        } else {
+          const fallback = await resolveBridge(s.clashBridge, proxy.clashNodeName || proxy.name, subscriptionFetch ?? globalThis.fetch);
+          if (!fallback.profile) {
+            // Keep disabled bridge to produce proper skip result via probePoolProxy
+            resolvedBridge = fallback.bridge;
+          } else {
+            resolvedBridge = fallback.bridge;
+          }
+        }
+      } else {
+        const fallback = await resolveBridge(s.clashBridge, proxy.clashNodeName || proxy.name, subscriptionFetch ?? globalThis.fetch);
+        resolvedBridge = fallback.bridge;
+      }
+    }
+    const networkProbe: ProbeResult = await probePoolProxy(proxy, resolvedBridge, {
       fetchImpl: ctx?.probeFetch,
       bridgeFetch: subscriptionFetch ?? globalThis.fetch,
       clashQueue: clashProbeQueue,
@@ -38,7 +55,7 @@ export async function handleProxyPool(
     const result = networkProbe.ok
       ? attachAnonymousZenResult(
           networkProbe,
-          await probeAnonymousZenProxy(proxy, resolved.bridge, {
+          await probeAnonymousZenProxy(proxy, resolvedBridge, {
             baseUrl: s.baseUrl,
             model: freeModels.has("big-pickle") ? "big-pickle" : freeModels.ids()[0],
             fetchImpl: ctx?.probeFetch,
