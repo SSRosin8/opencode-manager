@@ -543,11 +543,6 @@ export function assignHealthyProxiesToWorkers(
       const nb = typeof lb === "number" && Number.isFinite(lb) ? lb : Number.POSITIVE_INFINITY;
       if (na !== nb) return na - nb;
       return a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
-    })
-    .filter((p, index, list) => {
-      const ip = input.probeResults[p.id]?.egressIp;
-      if (!ip) return true;
-      return list.findIndex((candidate) => input.probeResults[candidate.id]?.egressIp === ip) === index;
     });
 
   const healthyById = new Map(healthy.map((proxy) => [proxy.id, proxy]));

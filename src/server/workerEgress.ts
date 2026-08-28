@@ -46,8 +46,7 @@ function autoAnonymousWorkerId(proxyId: string, occupiedIds: Set<string>): strin
 
 export function syncAnonymousWorkers(
   settings: GatewaySettings,
-  results: ProbeResult[],
-  probes: ProbeResultCache
+  results: ProbeResult[]
 ): { accounts: GatewaySettings["accounts"]; addedIds: string[] } {
   const accounts = [...settings.accounts];
   const occupiedIds = new Set(accounts.map((account) => account.id));
@@ -57,16 +56,10 @@ export function syncAnonymousWorkers(
       .map((account) => account.proxyId)
       .filter((proxyId): proxyId is string => Boolean(proxyId))
   );
-  const usedEgressIps = new Set<string>();
-  for (const proxyId of boundProxyIds) {
-    const egressIp = probes.get(proxyId)?.egressIp;
-    if (egressIp) usedEgressIps.add(egressIp);
-  }
-
   const addedIds: string[] = [];
   for (const result of results) {
     if (!result.ok || !result.anonymousZen?.ok || !result.egressIp) continue;
-    if (boundProxyIds.has(result.id) || usedEgressIps.has(result.egressIp)) continue;
+    if (boundProxyIds.has(result.id)) continue;
     const id = autoAnonymousWorkerId(result.id, occupiedIds);
     accounts.push({
       id,
@@ -77,7 +70,6 @@ export function syncAnonymousWorkers(
     });
     occupiedIds.add(id);
     boundProxyIds.add(result.id);
-    usedEgressIps.add(result.egressIp);
     addedIds.push(id);
   }
   return { accounts, addedIds };
@@ -85,12 +77,12 @@ export function syncAnonymousWorkers(
 
 export function duplicateWorkerEgress(
   accounts: GatewaySettings["accounts"],
-  probes: ProbeResultCache
+  _probes: ProbeResultCache
 ): { kind: string; route: string; accountIds: string[] } | null {
   const groups = new Map<string, string[]>();
   for (const account of accounts) {
     if (account.enabled === false || !account.proxyId) continue;
-    const route = probes.get(account.proxyId)?.egressIp || `proxy:${account.proxyId}`;
+    const route = `proxy:${account.proxyId}`;
     const kind = inferAccountKind(account);
     const key = `${kind}\0${route}`;
     const ids = groups.get(key) ?? [];

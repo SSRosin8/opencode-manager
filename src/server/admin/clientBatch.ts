@@ -110,6 +110,149 @@ export const ADMIN_CLIENT_BATCH = `    async function loadSettings() {
       }
     }
 
+    let idlePollTimer = null;
+    let idlePollAbort = null;
+    const IDLE_POLL_INTERVAL = 5000;
+    let idlePollTick = 0;
+
+    function stopIdlePolling() {
+      if (idlePollTimer) clearTimeout(idlePollTimer);
+      idlePollTimer = null;
+      if (idlePollAbort) idlePollAbort.abort();
+      idlePollAbort = null;
+    }
+
+    function scheduleIdlePoll(delay = IDLE_POLL_INTERVAL) {
+      stopIdlePolling();
+      if (batchTesting) return;
+      if (document.hidden) return;
+      idlePollTimer = setTimeout(async () => {
+        idlePollTimer = null;
+        await pollIdle();
+        if (!batchTesting && !document.hidden) scheduleIdlePoll();
+      }, delay);
+    }
+
+    async function pollIdle() {
+      if (batchTesting || document.hidden) return;
+      const controller = new AbortController();
+      idlePollAbort = controller;
+      try {
+        const isEditing = !!document.activeElement?.closest?.("#accounts .worker-card");
+        const prevStatus = JSON.stringify(status);
+        const prevProbe = JSON.stringify(probeResults);
+        const prevAccounts = JSON.stringify((settings && settings.accounts) || []);
+        const prevPool = JSON.stringify((settings && settings.proxyPool) || []);
+        const [statusRes, poolRes] = await Promise.all([
+          fetch("/admin/api/status", { cache: "no-store", signal: controller.signal }),
+          fetch("/admin/api/proxy-pool", { cache: "no-store", signal: controller.signal })
+        ]);
+        if (controller.signal.aborted) return;
+        let statusUpdated = false;
+        let poolUpdated = false;
+        if (statusRes.ok) {
+          const newStatus = await statusRes.json();
+          statusUpdated = JSON.stringify(newStatus) !== prevStatus;
+          status = newStatus;
+        }
+        let batchProbeFromPool = null;
+        if (poolRes.ok) {
+          const data = await poolRes.json();
+          if (data.probeResults) {
+            const nextProbeJson = JSON.stringify(data.probeResults);
+            if (nextProbeJson !== prevProbe) poolUpdated = true;
+            probeResults = data.probeResults;
+          }
+          batchProbeFromPool = data.batchProbe || null;
+          if (batchProbeFromPool) {
+            const hadRunning = !!batchProgress?.running;
+            acceptBatchProgress(batchProbeFromPool);
+            if (batchProbeFromPool.running && !hadRunning) {
+              syncBatchProgress(batchProbeFromPool);
+              return;
+            }
+          }
+          if (data.proxyPool && settings) {
+            const nextPoolJson = JSON.stringify(data.proxyPool);
+            if (nextPoolJson !== prevPool) poolUpdated = true;
+            settings.proxyPool = data.proxyPool;
+          }
+          if (data.proxySubscriptions && settings) {
+            settings.proxySubscriptions = data.proxySubscriptions;
+          }
+        }
+        const serverAccountCount = status && (status.accountCount ?? (status.workers ? status.workers.length : 0));
+        const localAccountCount = settings && settings.accounts ? settings.accounts.length : 0;
+        let accountsUpdated = false;
+        if (serverAccountCount != null && serverAccountCount !== localAccountCount) {
+          if (isEditing) {
+            const drafts = collectAccounts();
+            const draftIds = new Set(drafts.map((a) => a.id));
+            const settingsRes = await fetch("/admin/api/settings", { cache: "no-store", signal: controller.signal });
+            if (controller.signal.aborted) return;
+            if (settingsRes.ok) {
+              const newSettings = await settingsRes.json();
+              const autoAdded = (newSettings.accounts || []).filter((a) => !draftIds.has(a.id));
+              const mergedPool = settings.proxyPool;
+              settings = newSettings;
+              if (mergedPool) settings.proxyPool = mergedPool;
+              const mergedAccounts = [...drafts, ...autoAdded];
+              const seen = new Set();
+              settings.accounts = mergedAccounts.filter((a) => {
+                if (seen.has(a.id)) return false;
+                seen.add(a.id);
+                return true;
+              });
+              serverAccountIds = new Set((settings.accounts || []).map((a) => a.id));
+              accountsUpdated = JSON.stringify(settings.accounts) !== prevAccounts;
+              if (accountsUpdated) poolUpdated = true;
+            }
+          } else {
+            const settingsRes = await fetch("/admin/api/settings", { cache: "no-store", signal: controller.signal });
+            if (controller.signal.aborted) return;
+            if (settingsRes.ok) {
+              settings = await settingsRes.json();
+              serverAccountIds = new Set((settings.accounts || []).map((a) => a.id));
+              accountsUpdated = JSON.stringify(settings.accounts) !== prevAccounts;
+              if (accountsUpdated) poolUpdated = true;
+            }
+          }
+        }
+        // Periodically refresh model catalog (every ~60s, 12 ticks)
+        idlePollTick += 1;
+        if (idlePollTick % 12 === 0 && !isEditing) {
+          try {
+            const modelRes = await fetch("/admin/api/free-models", { cache: "no-store", signal: controller.signal });
+            if (modelRes.ok) {
+              const newModels = await modelRes.json();
+              if (JSON.stringify(newModels) !== JSON.stringify(freeModelStatus)) {
+                freeModelStatus = newModels;
+                poolUpdated = true;
+              }
+            }
+          } catch {}
+        }
+        const shouldRender = statusUpdated || poolUpdated || accountsUpdated;
+        if (!shouldRender) return;
+        if (isEditing) {
+          renderBatchDerivedViews();
+          renderNodes();
+          renderActivity();
+          renderReadiness();
+          renderUnassigned();
+          renderWorkerStats();
+          renderMetrics("pp-metrics");
+          renderMetrics("ov-metrics");
+        } else {
+          renderAll();
+        }
+        if (batchProgress) updateBatchProgress(batchProgress, false);
+      } catch {}
+      finally {
+        if (idlePollAbort === controller) idlePollAbort = null;
+      }
+    }
+
     function stopBatchProgressPolling() {
       if (batchProgressTimer) clearTimeout(batchProgressTimer);
       batchProgressTimer = null;
@@ -119,6 +262,7 @@ export const ADMIN_CLIENT_BATCH = `    async function loadSettings() {
 
     function scheduleBatchProgressPoll(delay = 500) {
       stopBatchProgressPolling();
+      stopIdlePolling();
       const generation = batchPollGeneration;
       batchProgressTimer = setTimeout(async () => {
         batchProgressTimer = null;
@@ -138,12 +282,13 @@ export const ADMIN_CLIENT_BATCH = `    async function loadSettings() {
         batchTesting = true;
         batchProgressSeenRunning = true;
         for (const proxy of settings?.proxyPool || []) testingIds.add(proxy.id);
+        stopIdlePolling();
         scheduleBatchProgressPoll();
       }
       updateBatchProgress(progress);
     }
 
-    async function reloadAfterBatchPreservingDrafts() {
+     async function reloadAfterBatchPreservingDrafts() {
       const drafts = settings ? collectAccounts() : [];
       const baseline = new Set(batchBaselineAccountIds);
       await Promise.all([loadSettings(), loadStatus(), loadProbes(), loadFreeModels()]);
@@ -151,17 +296,9 @@ export const ADMIN_CLIENT_BATCH = `    async function loadSettings() {
       const draftAnonymousProxyIds = new Set(drafts
         .filter((account) => account.kind === "anonymous_zen" && account.proxyId)
         .map((account) => account.proxyId));
-      const draftAnonymousEgressIps = new Set(drafts
-        .filter((account) => account.kind === "anonymous_zen" && account.proxyId)
-        .map((account) => probeResults[account.proxyId]?.egressIp)
-        .filter(Boolean));
       const autoAdded = (settings.accounts || []).filter((account) =>
         !baseline.has(account.id) && !draftIds.has(account.id) &&
-        !(account.kind === "anonymous_zen" && account.proxyId && (
-          draftAnonymousProxyIds.has(account.proxyId) ||
-          (probeResults[account.proxyId]?.egressIp &&
-            draftAnonymousEgressIps.has(probeResults[account.proxyId].egressIp))
-        ))
+        !(account.kind === "anonymous_zen" && account.proxyId && draftAnonymousProxyIds.has(account.proxyId))
       );
       settings.accounts = [...drafts, ...autoAdded];
       for (const account of autoAdded) batchBaselineAccountIds.add(account.id);
@@ -231,6 +368,7 @@ export const ADMIN_CLIENT_BATCH = `    async function loadSettings() {
           await reloadAfterBatchPreservingDrafts();
           renderAll();
           updateBatchProgress(batchProgress);
+          scheduleIdlePoll();
         }
       } catch {
         // The original POST remains authoritative; the next poll retries.
@@ -341,6 +479,7 @@ export const ADMIN_CLIENT_BATCH = `    async function loadSettings() {
           if (btn) btn.textContent = t("batchTest");
           renderNodes();
           renderActivity();
+          scheduleIdlePoll();
         }
       }
     }

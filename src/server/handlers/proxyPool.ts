@@ -54,7 +54,7 @@ export async function handleProxyPool(
     const settings = await store.update((current) => {
       proxyStillExists = current.proxyPool.some((item) => item.id === result.id);
       if (!proxyStillExists) return {};
-      const synced = syncAnonymousWorkers(current, [result], probes);
+      const synced = syncAnonymousWorkers(current, [result]);
       addedIds = synced.addedIds;
       return {
         proxyPool: applyProbeEgressIps(current.proxyPool, [result]),

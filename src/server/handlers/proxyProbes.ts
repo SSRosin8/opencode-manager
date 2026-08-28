@@ -138,7 +138,7 @@ export async function handleProxyProbes(
     const enqueueResultWorkerSync = (result: ProbeResult): void => {
       workerSyncChain = workerSyncChain.then(async () => {
         const current = store.get();
-        const synced = syncAnonymousWorkers(current, [result], probes);
+        const synced = syncAnonymousWorkers(current, [result]);
         if (!synced.addedIds.length) return;
         const saved = await store.save({ accounts: synced.accounts });
         incrementallyAddedWorkerIds.push(...synced.addedIds);
@@ -345,7 +345,7 @@ async function finishBatchProbe(args: {
     throw workerSyncError;
   }
   probes.setMany(results);
-  const synced = syncAnonymousWorkers(store.get(), results, probes);
+  const synced = syncAnonymousWorkers(store.get(), results);
   let saved: GatewaySettings;
   try {
     saved = await store.save({

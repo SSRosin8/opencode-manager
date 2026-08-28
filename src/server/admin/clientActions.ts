@@ -252,9 +252,17 @@ export const ADMIN_CLIENT_ACTIONS = `    $("btn-top-refresh").onclick = () => re
     applyStaticI18n();
     showPage(page);
     $("run-label").textContent = t("loading");
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) stopIdlePolling();
+      else if (!batchTesting) scheduleIdlePoll(1000);
+    });
+    window.addEventListener("focus", () => {
+      if (!document.hidden && !batchTesting) scheduleIdlePoll(500);
+    });
     Promise.all([loadSettings(), loadStatus(), loadProbes(), loadFreeModels()]).then(() => {
       renderAll();
       syncBatchProgress(batchProgress);
+      if (!batchProgress?.running) scheduleIdlePoll();
     }).catch((e) => toast(String(e), false));
   </script>
 </body>
