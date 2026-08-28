@@ -457,15 +457,13 @@ export const ADMIN_CLIENT_CORE = `    function storageGet(key) {
       const accounts = settings.accounts || [];
       const routeCount = {};
       for (const a of accounts) {
-        const p = a.proxyId ? proxyById(a.proxyId) : null;
-        const probe = a.proxyId ? probeResults[a.proxyId] : null;
-        const k = probe?.egressIp || p?.egressIp || a.proxyId || "__direct__";
+        const k = a.proxyId || "__direct__";
         routeCount[k] = (routeCount[k] || 0) + 1;
       }
       return accounts.map((a, idx) => {
         const p = a.proxyId ? proxyById(a.proxyId) : null;
         const probe = a.proxyId ? probeResults[a.proxyId] : null;
-        const key = probe?.egressIp || p?.egressIp || a.proxyId || "__direct__";
+        const key = a.proxyId || "__direct__";
         const shared = routeCount[key] > 1;
         let state = "ok";
         if (!p) state = shared || accounts.length > 1 ? "warn" : "warn";

@@ -150,7 +150,7 @@ describe("incremental proxy tests and automatic Workers", () => {
     expect(maxActive).toBe(12);
   });
 
-  it("batch test creates one anonymous worker per usable egress without duplicates", async () => {
+  it("batch test creates one anonymous worker per usable node without duplicates", async () => {
     const { port, store } = await boot([
       px({ id: "usable", name: "Mexico", type: "http", host: "10.0.0.10", port: 8080 }),
       px({ id: "same-egress", name: "Mexico 2", type: "http", host: "10.0.0.12", port: 8080 }),
@@ -165,9 +165,14 @@ describe("incremental proxy tests and automatic Workers", () => {
     const firstBody = (await first.json()) as {
       autoWorkers: { added: number; addedIds: string[] }; settings: GatewaySettings;
     };
-    expect(firstBody.autoWorkers).toEqual({ added: 1, addedIds: ["anonymous-zen-usable"] });
+    expect(firstBody.autoWorkers.added).toBe(2);
+    expect(firstBody.autoWorkers.addedIds).toContain("anonymous-zen-usable");
+    expect(firstBody.autoWorkers.addedIds).toContain("anonymous-zen-same-egress");
     expect(firstBody.settings.accounts).toContainEqual(expect.objectContaining({
       id: "anonymous-zen-usable", kind: "anonymous_zen", apiKey: "", proxyId: "usable",
+    }));
+    expect(firstBody.settings.accounts).toContainEqual(expect.objectContaining({
+      id: "anonymous-zen-same-egress", kind: "anonymous_zen", apiKey: "", proxyId: "same-egress",
     }));
 
     const disabledAccounts = firstBody.settings.accounts.map((account) =>
@@ -179,7 +184,7 @@ describe("incremental proxy tests and automatic Workers", () => {
       autoWorkers: { added: number; addedIds: string[] }; settings: GatewaySettings;
     };
     expect(secondBody.autoWorkers).toEqual({ added: 0, addedIds: [] });
-    expect(secondBody.settings.accounts).toHaveLength(2);
+    expect(secondBody.settings.accounts).toHaveLength(3);
     expect(secondBody.settings.accounts.find((account) => account.id === "anonymous-zen-usable")?.enabled).toBe(false);
     expect(app?.upstream.rotator.getAccounts().map((account) => account.id)).toContain("anonymous-zen-usable");
   });

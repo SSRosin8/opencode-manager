@@ -333,11 +333,11 @@ describe("assignHealthyProxiesToWorkers", () => {
     expect(result.accounts[0]).toMatchObject({ id: "paused", enabled: false, proxyId: "only" });
   });
 
-  it("does not assign two nodes with the same measured egress IP", () => {
+  it("assigns two nodes even with the same measured egress IP", () => {
     const result = assignHealthyProxiesToWorkers({
       accounts: [
-        { id: "w1", apiKey: "key-1", proxyId: null, proxy: null },
-        { id: "w2", apiKey: "key-2", proxyId: null, proxy: null },
+        { id: "w1", kind: "anonymous_zen", apiKey: "", proxyId: null, proxy: null },
+        { id: "w2", kind: "anonymous_zen", apiKey: "", proxyId: null, proxy: null },
       ],
       pool: [px("a"), px("b")],
       probeResults: {
@@ -345,8 +345,7 @@ describe("assignHealthyProxiesToWorkers", () => {
         b: { ok: true, health: "healthy", latencyMs: 20, egressIp: "203.0.113.7", anonymousZen: { ok: true } },
       },
     });
-    expect(result.healthyAvailable).toBe(1);
-    expect(result.assigned).toBe(1);
+    expect(result.healthyAvailable).toBe(2);
   });
 
   it("allows one anonymous and one authenticated worker to share a verified egress", () => {
