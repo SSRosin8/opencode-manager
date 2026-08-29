@@ -77,6 +77,23 @@ git diff --check
 - 禁止使用破坏性 Git 命令清理用户工作区。推送前检查已暂存 diff 和敏感信息。
 - Commit message 使用简洁的 Conventional Commits 风格，例如 `refactor: split admin routes`。
 
+## 工作区隔离与 Worktree 约束
+
+- 主 worktree（仓库根目录 `opencode-manager`）为只读基准，禁止直接在其上进行任何代码编辑、构建或测试；仅用于 `git fetch/pull` 同步主分支、代码审阅和合并。
+- 所有开发、调试、构建与验证必须在独立的 git worktree 中进行。创建方式：
+
+```bash
+git fetch origin
+git worktree add ../opencode-manager-<feature> -b <branch> origin/main
+```
+
+  目录命名建议 `../opencode-manager-<feature>`，分支命名 `feat/*`、`fix/*`、`refactor/*`，与 worktree 目录一一对应。
+- 严禁在主 worktree 上运行 `npm run validate`、`npm run build`、`npm test`、`node` 启动等验证动作；上述命令必须在对应 worktree 内执行，且通过后方可推送。
+- 每个 worktree 为完整隔离环境，需独立安装依赖（可 `ln -s ../opencode-manager/node_modules node_modules` 复用以加速）并独立持有 `dist/` 等生成产物。
+- 开发期间主 worktree 必须保持 `git status --porcelain` 为空；若发现主 worktree 有未提交改动，必须先 `git stash` 或迁移至 worktree，不得在主 worktree 上提交。
+- 合并后必须及时清理：`git worktree remove ../opencode-manager-<feature>`、`git branch -d <branch>`、`git push origin --delete <branch>`、`git fetch --prune`。
+- 自动化助手（AI Agent）同样必须遵守本条：任何文件写入、编辑、测试执行都以 `workdir` 指向 worktree，不得以主 worktree 为默认工作目录。
+
 ## 完成定义
 
 - 代码满足文件和函数规模、模块职责与依赖方向规则。
