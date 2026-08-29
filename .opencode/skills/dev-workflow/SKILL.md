@@ -7,27 +7,29 @@ description: Use when starting any code change, bug fix, feature, or refactoring
 
 Standard workflow for all code changes in this project.
 
-## Step 1: Branch First
+## Step 1: Worktree + Branch First (强制)
 
-Before ANY code change, always switch to a dev branch:
+主 worktree 为只读基准，禁止直接在其上开发。必须先创建独立 worktree：
 
 ```
-git stash                          # save any uncommitted work
-git checkout main && git pull       # sync with upstream
-git checkout -b dev/<short-desc>    # create feature branch
-git stash pop                      # restore work if any
+git stash                          # save any uncommitted work in main if needed
+git fetch origin
+git worktree add ../opencode-manager-<feature> -b <branch> origin/main
+# 例：git worktree add ../opencode-manager-multi-bridge -b feat/multi-bridge-pool origin/main
+cd ../opencode-manager-<feature>
 ```
 
-Branch naming convention:
-- `dev/<short-description>` for features and fixes
-- `fix/<issue-or-bug>` for bug fixes
-- `refactor/<scope>` for refactoring
+分支/worktree 命名：
+- `feat/<short-description>` / `fix/<issue>` / `refactor/<scope>`
+- worktree 目录 `../opencode-manager-<feature>` 与分支一一对应
 
-## Step 2: Make Changes
+后续所有编辑、构建、测试均在该 worktree 内执行；主 worktree 保持 `git status --porcelain` 为空。
 
-- Follow AGENTS.md rules (file size limits, module responsibilities, etc.)
-- Keep changes minimal and focused
-- Run `npm run validate` before considering work done
+## Step 2: Make Changes (在 worktree 内)
+
+- Follow AGENTS.md 规则（文件规模、模块职责、Worktree 约束等）
+- 保持改动最小且聚焦
+- 所有 `npm run validate` / `npm run build` / `npm test` 必须在 worktree 内执行，严禁在主 worktree 执行
 
 ## Step 3: Commit
 
@@ -44,18 +46,32 @@ Examples:
 - `feat: add proxy pool health dashboard`
 - `refactor: split admin routes into domain handlers`
 
-## Step 4: Verify
+## Step 4: Verify (在 worktree 内)
 
-Always run before commit:
+Always run before commit/push **inside the worktree**:
 
 ```bash
 npm run validate
 git diff --check
+# workdir 必须为 ../opencode-manager-<feature>，而非主 worktree
+```
+
+## Step 5: Cleanup After Merge
+
+合并后及时清理：
+
+```bash
+git worktree remove ../opencode-manager-<feature>
+git branch -d <branch>
+git push origin --delete <branch>
+git fetch --prune
 ```
 
 ## Rules
 
 - Never commit directly to `main`
+- Never develop, build, or test in the main worktree — use a dedicated worktree
+- Main worktree must stay `git status --porcelain` empty during development
 - Never force-push or rewrite shared history
 - Each commit = one logical change
 - Tests + implementation belong in the same commit when they share one behavior change
