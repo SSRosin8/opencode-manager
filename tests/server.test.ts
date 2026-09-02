@@ -68,20 +68,33 @@ describe("gateway HTTP entry", () => {
     }
   });
 
-  it("rejects request bodies larger than one MiB", async () => {
-    const { port, dir } = await bootMocked(async () => {
-      throw new Error("oversized requests must not reach upstream");
+  it("forwards request bodies larger than one MiB", async () => {
+    let receivedImageData = "";
+    const { port, dir } = await bootMocked(async (_url, init) => {
+      const body = JSON.parse(String(init?.body || "{}")) as {
+        messages?: Array<{ content?: Array<{ image_url?: { url?: string } }> }>;
+      };
+      receivedImageData = body.messages?.[0]?.content?.[0]?.image_url?.url || "";
+      return new Response(JSON.stringify({ choices: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
     });
     try {
+      const imageData = `data:image/png;base64,${"a".repeat(1024 * 1024 + 1)}`;
       const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: "x".repeat(1024 * 1024 + 1),
+        body: JSON.stringify({
+          model: "big-pickle",
+          messages: [{
+            role: "user",
+            content: [{ type: "image_url", image_url: { url: imageData } }],
+          }],
+        }),
       });
-      expect(response.status).toBe(413);
-      expect(await response.json()).toMatchObject({
-        error: { type: "request_body_too_large" },
-      });
+      expect(response.status).toBe(200);
+      expect(receivedImageData).toBe(imageData);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

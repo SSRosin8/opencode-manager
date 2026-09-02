@@ -2,17 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { UpstreamClient } from "../proxy/upstream.js";
 import type { SettingsStore } from "../settings/store.js";
 
-const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
 export const DEFAULT_MAX_UPSTREAM_RESPONSE_BYTES = 8 * 1024 * 1024;
-
-export class RequestBodyTooLargeError extends Error {
-  readonly status = 413;
-
-  constructor(readonly limit: number) {
-    super(`Request body exceeds ${limit} bytes`);
-    this.name = "RequestBodyTooLargeError";
-  }
-}
 
 export class UpstreamResponseTooLargeError extends Error {
   constructor(readonly limit: number) {
@@ -34,31 +24,23 @@ export const HOP_BY_HOP = new Set([
   "content-length",
 ]);
 
-export function readBody(
-  req: IncomingMessage,
-  maxBytes = DEFAULT_MAX_BODY_BYTES
-): Promise<Buffer> {
+/**
+ * Read a client request without imposing a gateway-specific payload cap.
+ * OpenCode/Zen is responsible for accepting or rejecting multimodal payloads.
+ */
+export function readBody(req: IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    let size = 0;
-    let settled = false;
 
     req.on("data", (chunk) => {
-      if (settled) return;
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      size += buffer.length;
-      if (size > maxBytes) {
-        settled = true;
-        reject(new RequestBodyTooLargeError(maxBytes));
-        return;
-      }
       chunks.push(buffer);
     });
     req.on("end", () => {
-      if (!settled) resolve(Buffer.concat(chunks));
+      resolve(Buffer.concat(chunks));
     });
     req.on("error", (error) => {
-      if (!settled) reject(error);
+      reject(error);
     });
   });
 }

@@ -16,7 +16,7 @@ import { BatchProbeControl } from "./batchProbeControl.js";
 import { handleCoreAdmin } from "./handlers/coreAdmin.js";
 import { handleProxyAdmin } from "./handlers/proxyAdmin.js";
 import { handleRelay } from "./handlers/relay.js";
-import { RequestBodyTooLargeError, sendJson } from "./httpIO.js";
+import { sendJson } from "./httpIO.js";
 import { credentialLabel } from "./workerEgress.js";
 
 export type App = {
@@ -122,8 +122,8 @@ export async function createApp(opts?: {
       await handleRequest(req, res, context);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const status = error instanceof RequestBodyTooLargeError ? error.status : 500;
-      const type = status === 413 ? "request_body_too_large" : "server_error";
+      const status = 500;
+      const type = "server_error";
       store.recordGatewayRejection({
         method: req.method || "UNKNOWN",
         path: safeRequestPath(req.url),
