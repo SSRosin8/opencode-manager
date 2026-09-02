@@ -398,7 +398,6 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
         no_workers_configured: "rejectionNoWorkers",
         no_enabled_workers: "rejectionNoEnabledWorkers",
         authentication_error: "rejectionAuthentication",
-        request_body_too_large: "rejectionBodyTooLarge",
         server_error: "rejectionServerError",
       };
       $("overview-errors-panel").hidden = rejections.length === 0;
