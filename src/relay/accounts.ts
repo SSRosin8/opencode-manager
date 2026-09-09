@@ -199,10 +199,14 @@ export class AccountRotator {
         return acct;
       }
     }
-    // All in cooldown — stay on preferred index (no thrashing).
-    const account = this.accounts[this.nextIdx % this.accounts.length];
-    this.bindSession(sessionKey, account.id);
-    return account;
+    // All in cooldown — return the one recovering soonest instead of the
+    // round-robin slot, so retries converge instead of hammering one worker.
+    let earliest = this.accounts[0];
+    for (const account of this.accounts) {
+      if (account.cooldownUntil < earliest.cooldownUntil) earliest = account;
+    }
+    this.bindSession(sessionKey, earliest.id);
+    return earliest;
   }
 
   markCooldown(account: AccountState, now = Date.now(), jitter = Math.random() * 1000): void {
@@ -221,6 +225,20 @@ export class AccountRotator {
   ): void {
     account.consecutiveFails++;
     account.cooldownUntil = now + Math.max(0, retryAfterMs);
+  }
+
+  /**
+   * Auth failures (bad/rotated key) are config errors, not rate limits.
+   * Use a short backoff so a bad key neither spins hot nor disappears for
+   * 15 minutes and hides the misconfiguration.
+   */
+  markAuthFailed(account: AccountState, now = Date.now(), jitter = Math.random() * 1000): void {
+    account.consecutiveFails++;
+    const backoff = Math.min(
+      TRANSPORT_COOLDOWN_BASE_MS * Math.pow(2, Math.min(account.consecutiveFails, 4) - 1),
+      TRANSPORT_COOLDOWN_MAX_MS
+    );
+    account.cooldownUntil = now + backoff + jitter;
   }
 
   markSuccess(account: AccountState): void {

@@ -71,10 +71,14 @@ function responseOutcome(status: number): UpstreamAttemptEvent["outcome"] {
   return "upstream_error";
 }
 
-function safeErrorMessage(error: unknown, apiKey: string): string {
+function safeErrorMessage(error: unknown, apiKey: string, proxy?: AccountProxy): string {
   let message = error instanceof Error ? error.message : String(error);
   if (apiKey) message = message.split(apiKey).join("[REDACTED]");
   message = message.replace(/Bearer\s+[^\s,;]+/gi, "Bearer [REDACTED]");
+  // Proxy credentials can surface in dispatcher/connect errors; strip them.
+  if (proxy?.password) message = message.split(proxy.password).join("[REDACTED]");
+  if (proxy?.username) message = message.split(proxy.username).join("[REDACTED]");
+  message = message.replace(/:\/\/[^/\s@]+@/g, "://[REDACTED]@");
   return message.slice(0, 500);
 }
 
@@ -91,11 +95,18 @@ export function parseRetryAfterMs(value: string | null, now = Date.now()): numbe
   return Math.max(0, at - now);
 }
 
-function retryableStatus(status: number): "rate_limit" | "failure" | null {
-  if (status === 429 || status === 401 || status === 403) return "rate_limit";
+function retryableStatus(status: number): "rate_limit" | "auth" | "failure" | null {
+  if (status === 429) return "rate_limit";
+  // Bad/rotated keys are config errors: retry other workers but cool down
+  // briefly instead of applying the 15-minute rate-limit penalty.
+  if (status === 401 || status === 403) return "auth";
   if (status >= 500) return "failure";
   return null;
 }
+
+// Bound every upstream attempt so a hung provider cannot hold gateway
+// connections (and Clash selector slots) indefinitely.
+const UPSTREAM_REQUEST_TIMEOUT_MS = 120_000;
 
 function sessionKeyFromHeaders(headers?: Record<string, string>): string | undefined {
   if (!headers) return undefined;
@@ -239,7 +250,7 @@ export class UpstreamClient {
         maxAttempts: 1,
         status: null,
         outcome: "transport_error",
-        error: safeErrorMessage(error, account.apiKey),
+        error: safeErrorMessage(error, account.apiKey, egress.proxy),
         latencyMs: Date.now() - startedAt,
         willRetry: false,
         at: new Date().toISOString(),
@@ -267,11 +278,14 @@ export class UpstreamClient {
     init: RequestInit,
     proxy: AccountProxy
   ): Promise<Response> {
+    // Never follow redirects with Authorization attached: a hijacked baseUrl
+    // could otherwise 302 the Bearer key to an attacker domain.
+    const noRedirect: RequestInit = { ...init, redirect: "manual" };
     const dispatcher = this.dispatcherFor(proxy);
     if (dispatcher) {
-      return this.fetchImpl(url, { ...init, dispatcher });
+      return this.fetchImpl(url, { ...noRedirect, dispatcher });
     }
-    return this.fetchImpl(url, init);
+    return this.fetchImpl(url, noRedirect);
   }
 
   /**
@@ -423,6 +437,7 @@ export class UpstreamClient {
             method: "POST",
             headers,
             body: JSON.stringify(transformed),
+            signal: AbortSignal.timeout(UPSTREAM_REQUEST_TIMEOUT_MS),
           },
           account.proxy,
           account.clashNodeName
@@ -461,6 +476,8 @@ export class UpstreamClient {
               account,
               parseRetryAfterMs(response.headers.get("retry-after"))
             );
+          } else if (retry === "auth") {
+            this.rotator.markAuthFailed(account);
           } else {
             this.rotator.markCooldown(account);
           }
@@ -491,7 +508,7 @@ export class UpstreamClient {
           maxAttempts,
           status: null,
           outcome: "transport_error",
-          error: safeErrorMessage(err, account.apiKey),
+          error: safeErrorMessage(err, account.apiKey, account.proxy),
           latencyMs: Date.now() - startedAt,
           willRetry: attempt + 1 < maxAttempts,
           at: new Date().toISOString(),
@@ -538,7 +555,7 @@ export class UpstreamClient {
         }
         const response = await this.doFetch(
           url,
-          { method: "GET", headers },
+          { method: "GET", headers, signal: AbortSignal.timeout(UPSTREAM_REQUEST_TIMEOUT_MS) },
           account.proxy,
           account.clashNodeName
         );
@@ -567,6 +584,8 @@ export class UpstreamClient {
               account,
               parseRetryAfterMs(response.headers.get("retry-after"))
             );
+          } else if (retry === "auth") {
+            this.rotator.markAuthFailed(account);
           } else {
             this.rotator.markCooldown(account);
           }
@@ -611,7 +630,7 @@ export class UpstreamClient {
           maxAttempts,
           status: null,
           outcome: "transport_error",
-          error: safeErrorMessage(err, account.apiKey),
+          error: safeErrorMessage(err, account.apiKey, account.proxy),
           latencyMs: Date.now() - startedAt,
           willRetry: attempt + 1 < maxAttempts,
           at: new Date().toISOString(),

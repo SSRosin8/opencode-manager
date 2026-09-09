@@ -31,7 +31,7 @@ ss -ltnp | grep ':9876'
 
 An Admin port change requires a restart. The project does not load `.env` automatically; use shell variables, for example `PORT=9988 npm start`.
 
-The default bind address is `127.0.0.1`. Set `OPENCODE_MANAGER_HOST=0.0.0.0` only when Admin is separately protected by a firewall or reverse proxy.
+The default bind address is `127.0.0.1`. Even when bound to `0.0.0.0`, `/` and `/admin/api/*` reject non-loopback clients with `403 admin_forbidden`; publish `/v1/*` only and block admin paths at the reverse proxy. Startup logs warn when the bind address is non-loopback or the relay token is empty.
 
 ### Environment Variables
 
@@ -50,12 +50,16 @@ The default bind address is `127.0.0.1`. Set `OPENCODE_MANAGER_HOST=0.0.0.0` onl
 
 ## 2. Security Boundary
 
-- `X-OC-Relay-Key` protects `/v1/*` and the compatibility aliases `/models`, `/chat/completions`, and `/responses` only.
+- `X-OC-Relay-Key` protects `/v1/*` and the compatibility aliases `/models`, `/chat/completions`, and `/responses` only. Comparison is constant-time.
 - `/health` is intentionally unauthenticated and returns only process health, not settings or credentials.
-- `/` and `/admin/api/*` are not protected by that token.
+- `/` and `/admin/api/*` accept loopback clients only (`127.0.0.1`/`::1`); other clients get `403 admin_forbidden`.
+- Admin JSON bodies are capped at 1 MiB (`413 body_too_large`); relay chat/responses passthrough stays unbounded for multimodal payloads.
+- Upstream chat/models attempts time out after 120 s and never follow redirects with `Authorization` attached.
+- A `401/403` marks only a short auth cooldown on that Worker; `429` keeps the long rate-limit cooldown (or `Retry-After`).
+- Subscription URLs must be `http(s)` up to 2048 chars; a fetch that parses 0 nodes keeps the existing pool and only records an error.
 - Admin APIs contain Zen keys, proxy passwords, Clash secrets, and tokenized subscription URLs.
 - Never expose port 9876 directly to the public Internet or an untrusted LAN.
-- `data/settings.json` contains credentials and must never be committed or shared.
+- `data/settings.json` contains credentials, is written atomically with `0600`, and must never be committed or shared.
 
 For remote clients, publish `/v1/*` only and block `/`, `/admin`, and `/admin/api/*` at the reverse proxy.
 

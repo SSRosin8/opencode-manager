@@ -13,7 +13,7 @@ import { activateBridge, bridgeProfiles } from "../../proxy/bridgeRuntime.js";
 import { resolveBridge } from "../../proxy/bridgeRuntime.js";
 import { inferAccountKind, type AccountConfig } from "../../relay/index.js";
 import type { GatewaySettings } from "../../settings/store.js";
-import { readBody, sendJson } from "../httpIO.js";
+import { readAdminBody, sendJson } from "../httpIO.js";
 
 const CLASH_BRIDGE_KEYS = new Set([
   "enabled", "apiBase", "apiSecret", "localProxyHost", "localProxyPort", "selectorGroup",
@@ -222,7 +222,8 @@ export async function handleClashAdmin(
       });
       return true;
     }
-    const raw = await readBody(req);
+    const raw = await readAdminBody(req, res);
+    if (!raw) return true;
     let body: Record<string, unknown>;
     try {
       body = JSON.parse(raw.toString("utf8") || "{}") as Record<string, unknown>;
@@ -248,7 +249,8 @@ export async function handleClashAdmin(
   // POST /admin/api/clash-bridge/probe
   if (method === "POST" && path === "/admin/api/clash-bridge/probe") {
     const s = store.get();
-    const raw = await readBody(req);
+    const raw = await readAdminBody(req, res);
+    if (!raw) return true;
     let override: Partial<GatewaySettings["clashBridge"]> = {};
     if (raw.length) {
       try {
@@ -283,7 +285,8 @@ export async function handleClashAdmin(
 
   // POST /admin/api/clash-bridge/selector-groups
   if (method === "POST" && path === "/admin/api/clash-bridge/selector-groups") {
-    const raw = await readBody(req);
+    const raw = await readAdminBody(req, res);
+    if (!raw) return true;
     let body: Record<string, unknown> = {};
     if (raw.length) {
       try {
@@ -334,7 +337,8 @@ export async function handleClashAdmin(
       return true;
     }
     const s = store.get();
-    const raw = await readBody(req);
+    const raw = await readAdminBody(req, res);
+    if (!raw) return true;
     let override: Partial<GatewaySettings["clashBridge"]> = {};
     if (raw.length) {
       try {

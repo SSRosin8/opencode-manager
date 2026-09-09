@@ -3,7 +3,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import {
   DEFAULT_BASE_URL,
@@ -409,8 +409,13 @@ export class SettingsStore {
   }
 
   private async persist(settings = this.settings): Promise<void> {
+    // Atomic + restrictive perms: secrets (relay token, Zen keys, proxy
+    // passwords, Clash secrets) live in this file. Temp+rename avoids
+    // half-written JSON on crash; 0o600 keeps other local users out.
     await mkdir(dirname(this.path), { recursive: true });
-    await writeFile(this.path, JSON.stringify(settings, null, 2), "utf8");
+    const temp = `${this.path}.${process.pid}.${randomUUID()}.tmp`;
+    await writeFile(temp, JSON.stringify(settings, null, 2), { encoding: "utf8", mode: 0o600 });
+    await rename(temp, this.path);
   }
 
   private syncStatusFromSettings(): void {

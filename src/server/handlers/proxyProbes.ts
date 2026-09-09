@@ -6,7 +6,7 @@ import type { GatewaySettings } from "../../settings/store.js";
 import { applyProbeEgressIps } from "../../proxy/pool.js";
 import { batchProbeSnapshot, persistProbeState } from "../context.js";
 import { anonymousZenSummary, attachAnonymousZenResult, syncAnonymousWorkers } from "../workerEgress.js";
-import { readBody, sendJson } from "../httpIO.js";
+import { AdminBodyTooLargeError, readJsonBody, sendJson } from "../httpIO.js";
 import { logBatchSummary, logProbeFailure } from "../probeDiagnostics.js";
 import { activateBridge, resolveBridge } from "../../proxy/bridgeRuntime.js";
 import type { ClashBridgeConfig, PoolProxy } from "../../proxy/pool.js";
@@ -90,9 +90,12 @@ export async function handleProxyProbes(
     let ids: string[] | null = null;
     let raw: Buffer;
     try {
-      raw = await readBody(req);
+      // Batch options are tiny (optional id list); bound tightly. Relay chat
+      // passthrough stays unbounded by design (large multimodal payloads).
+      raw = await readJsonBody(req, 256 * 1024);
     } catch (err) {
       const finishedAt = new Date().toISOString();
+      const tooLarge = err instanceof AdminBodyTooLargeError;
       Object.assign(batchProbeProgress, {
         running: false,
         updatedAt: finishedAt,
@@ -100,6 +103,13 @@ export async function handleProxyProbes(
         error: err instanceof Error ? err.message : String(err),
       });
       await persistProbeState(ctx);
+      if (tooLarge) {
+        sendJson(res, 413, {
+          error: { message: (err as Error).message, type: "body_too_large" },
+          progress: batchProbeSnapshot(batchProbeProgress),
+        });
+        return true;
+      }
       throw err;
     }
     if (raw.length) {
@@ -459,18 +469,23 @@ async function finishBatchProbe(args: {
   });
   await probeState.save(probes.getAll(), batchProbeProgress);
   logBatchSummary(results, cancelled);
-  sendJson(res, 200, {
-    results,
-    summary: summarizeProbeResults(results),
-    anonymousSummary: anonymousZenSummary(results),
-    probeResults: probes.getAll(),
-    autoWorkers: {
-      added: incrementallyAddedWorkerIds.length + synced.addedIds.length,
-      addedIds: [...incrementallyAddedWorkerIds, ...synced.addedIds],
-    },
-    settings: saved,
-    progress: batchProbeSnapshot(batchProbeProgress),
-    cancelled,
-  });
+  // The batch state is already persisted above; if the browser disconnected
+  // mid-run, skip the final write (it would throw on a dead socket) — the
+  // client recovers via test-batch/status polling.
+  if (!res.writableEnded && !res.destroyed) {
+    sendJson(res, 200, {
+      results,
+      summary: summarizeProbeResults(results),
+      anonymousSummary: anonymousZenSummary(results),
+      probeResults: probes.getAll(),
+      autoWorkers: {
+        added: incrementallyAddedWorkerIds.length + synced.addedIds.length,
+        addedIds: [...incrementallyAddedWorkerIds, ...synced.addedIds],
+      },
+      settings: saved,
+      progress: batchProbeSnapshot(batchProbeProgress),
+      cancelled,
+    });
+  }
   return true;
 }

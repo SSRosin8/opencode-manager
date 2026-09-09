@@ -3,7 +3,7 @@ import type { RequestContext } from "../context.js";
 import { assignHealthyProxiesToWorkers } from "../../proxy/pool.js";
 import type { GatewaySettings } from "../../settings/store.js";
 import { duplicateWorkerEgress } from "../workerEgress.js";
-import { readBody, sendJson } from "../httpIO.js";
+import { readAdminBody, sendJson } from "../httpIO.js";
 
 export async function handleWorkersAdmin(
   req: IncomingMessage,
@@ -22,7 +22,8 @@ export async function handleWorkersAdmin(
       return true;
     }
     const id = decodeURIComponent(path.slice("/admin/api/workers/".length));
-    const raw = await readBody(req);
+    const raw = await readAdminBody(req, res);
+    if (!raw) return true;
     let enabled: boolean;
     try {
       const body = JSON.parse(raw.toString("utf8") || "{}") as { enabled?: unknown };
@@ -69,7 +70,8 @@ export async function handleWorkersAdmin(
 
   // POST /admin/api/worker-stats/reset — clear all or one worker
   if (method === "POST" && path === "/admin/api/worker-stats/reset") {
-    const raw = await readBody(req);
+    const raw = await readAdminBody(req, res);
+    if (!raw) return true;
     let accountId: string | undefined;
     if (raw.length) {
       try {
@@ -100,7 +102,8 @@ export async function handleWorkersAdmin(
       return true;
     }
     const s = store.get();
-    const raw = await readBody(req);
+    const raw = await readAdminBody(req, res);
+    if (!raw) return true;
     let accounts = s.accounts;
     if (raw.length) {
       try {
