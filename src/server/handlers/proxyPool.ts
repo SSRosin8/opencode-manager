@@ -3,7 +3,7 @@ import type { RequestContext } from "../context.js";
 import { probeAnonymousZenProxy, probePoolProxy, type ProbeResult } from "../../proxy/probe.js";
 import { applyProbeEgressIps } from "../../proxy/pool.js";
 import { attachAnonymousZenResult, syncAnonymousWorkers } from "../workerEgress.js";
-import { readBody, sendJson } from "../httpIO.js";
+import { readAdminBody, sendJson } from "../httpIO.js";
 import { persistProbeState } from "../context.js";
 import { logProbeFailure } from "../probeDiagnostics.js";
 import { activateBridge, resolveBridge } from "../../proxy/bridgeRuntime.js";
@@ -98,7 +98,8 @@ export async function handleProxyPool(
 
   // POST /admin/api/proxy-pool  — add manual proxy
   if (method === "POST" && path === "/admin/api/proxy-pool") {
-    const raw = await readBody(req);
+    const raw = await readAdminBody(req, res);
+    if (!raw) return true;
     let body: Record<string, unknown>;
     try {
       body = JSON.parse(raw.toString("utf8") || "{}") as Record<string, unknown>;

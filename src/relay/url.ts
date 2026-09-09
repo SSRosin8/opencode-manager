@@ -6,7 +6,17 @@ export const DEFAULT_BASE_URL = "https://opencode.ai/zen/v1";
 
 export function normalizeBaseUrl(baseUrl: string | undefined | null): string {
   const raw = (baseUrl ?? DEFAULT_BASE_URL).trim().replace(/\/+$/, "");
-  return raw || DEFAULT_BASE_URL;
+  if (!raw) return DEFAULT_BASE_URL;
+  // Only http(s) upstreams; anything else (file:, gopher:, bare host) would
+  // either throw in undici or turn the Bearer key into an SSRF primitive.
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return DEFAULT_BASE_URL;
+    if (!parsed.hostname) return DEFAULT_BASE_URL;
+    return raw;
+  } catch {
+    return DEFAULT_BASE_URL;
+  }
 }
 
 export function buildChatCompletionsUrl(baseUrl: string): string {

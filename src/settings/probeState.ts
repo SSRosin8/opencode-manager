@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { AnonymousZenProbeReasonCode, AnonymousZenProbeStatus, ProbeHealth, ProbeResult } from "../proxy/probe.js";
-import type { BatchProbeProgress } from "../server/context.js";
+import type { BatchProbeProgress } from "./batchProbeProgress.js";
 
 const MAX_RESULTS = 10_000;
 const MAX_TEXT = 240;
@@ -194,7 +194,16 @@ export class ProbeStateStore {
             Boolean(item && validProxyIds.has(item.id))).slice(0, MAX_RESULTS)
         : [];
       const batchProbe = sanitizeBatch(parsed.batchProbe, fallback);
+      const completedBeforeFilter = batchProbe.completedIds.length;
       batchProbe.completedIds = batchProbe.completedIds.filter((id) => validProxyIds.has(id));
+      // Deleting pool entries must not leave completed/total inconsistent with
+      // the surviving ids; shrink both by the number of dropped completions.
+      const dropped = Math.max(0, completedBeforeFilter - batchProbe.completedIds.length);
+      if (dropped) {
+        batchProbe.completed = Math.max(0, Math.min(batchProbe.completed, batchProbe.completedIds.length));
+        batchProbe.total = Math.max(batchProbe.completed, batchProbe.total - dropped);
+        batchProbe.stageCompleted = Math.min(batchProbe.stageCompleted, batchProbe.stageTotal);
+      }
       const interrupted = batchProbe.running;
       if (interrupted) {
         const now = new Date().toISOString();
@@ -218,18 +227,20 @@ export class ProbeStateStore {
   save(results: ProbeResult[] | Record<string, ProbeResult>, batchProbe: BatchProbeProgress): Promise<void> {
     const list = (Array.isArray(results) ? results : Object.values(results))
       .map(sanitizeResult).filter((item): item is ProbeResult => Boolean(item)).slice(0, MAX_RESULTS);
-    const state: ProbeStateFile = {
+    this.pendingState = {
       version: 1,
       probeResults: list,
       batchProbe: sanitizeBatch(batchProbe, batchProbe),
     };
-    this.pendingState = state;
-    if (!this.drainPromise) {
-      this.drainPromise = this.drain().finally(() => {
-        this.drainPromise = null;
-      });
-    }
-    return this.drainPromise;
+    // Serialize persists; each queued step persists the latest pending state,
+    // so a save arriving mid-persist (or as the loop exits) is never dropped —
+    // at worst it coalesces with the next persist.
+    const previous = this.drainPromise ?? Promise.resolve();
+    const next = previous.then(() => this.drain());
+    this.drainPromise = next.catch(() => undefined).then(() => {
+      if (!this.pendingState) this.drainPromise = null;
+    });
+    return next;
   }
 
   private async drain(): Promise<void> {

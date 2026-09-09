@@ -3,7 +3,34 @@ import type { RequestContext } from "../context.js";
 import { fetchClashSubscription } from "../../proxy/clash.js";
 import { mergeSubscriptionProxies, newProxyId, type ProxySubscription } from "../../proxy/pool.js";
 import { applyClashHintsToBridge } from "../clashHints.js";
-import { readBody, sendJson } from "../httpIO.js";
+import { AdminBodyTooLargeError, readJsonBody, sendJson } from "../httpIO.js";
+
+const MAX_ADMIN_SUBSCRIPTION_JSON_BYTES = 256 * 1024;
+
+/** Subscription sources are server-fetched URLs: http(s) only, bounded length. */
+function normalizeSubscriptionUrl(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const url = raw.trim();
+  if (!url || url.length > 2048) return null;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return null;
+    if (!parsed.hostname) return null;
+    return url;
+  } catch {
+    return null;
+  }
+}
+
+/** Never echo full subscription URLs (often token-bearing) back in errors. */
+function redactedSubscriptionUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.protocol}//${parsed.host}${parsed.pathname || "/"}`;
+  } catch {
+    return "[invalid url]";
+  }
+}
 
 export async function handleSubscriptions(
   req: IncomingMessage,
@@ -15,7 +42,18 @@ export async function handleSubscriptions(
   const { store, upstream, subscriptionFetch } = ctx;
   // POST /admin/api/proxy-subscriptions — add subscription (does not fetch yet)
   if (method === "POST" && path === "/admin/api/proxy-subscriptions") {
-    const raw = await readBody(req);
+    let raw: Buffer;
+    try {
+      raw = await readJsonBody(req, MAX_ADMIN_SUBSCRIPTION_JSON_BYTES);
+    } catch (err) {
+      sendJson(res, err instanceof AdminBodyTooLargeError ? 413 : 400, {
+        error: {
+          message: err instanceof AdminBodyTooLargeError ? err.message : "Invalid request body",
+          type: err instanceof AdminBodyTooLargeError ? "body_too_large" : "invalid_request",
+        },
+      });
+      return true;
+    }
     let body: Record<string, unknown>;
     try {
       body = JSON.parse(raw.toString("utf8") || "{}") as Record<string, unknown>;
@@ -23,9 +61,14 @@ export async function handleSubscriptions(
       sendJson(res, 400, { error: { message: "Invalid JSON" } });
       return true;
     }
-    const subUrl = typeof body.url === "string" ? body.url.trim() : "";
+    const subUrl = normalizeSubscriptionUrl(body.url);
     if (!subUrl) {
-      sendJson(res, 400, { error: { message: "url required" } });
+      sendJson(res, 400, {
+        error: {
+          type: "invalid_subscription_url",
+          message: "url must be an http(s) URL up to 2048 chars",
+        },
+      });
       return true;
     }
     const s = store.get();
@@ -99,16 +142,18 @@ export async function handleSubscriptions(
         fetchImpl: subscriptionFetch,
       });
       let updatedSub: ProxySubscription | null = null;
+      // A transient 0-node parse must never wipe a healthy pool. Keep old
+      // entries and surface the condition; operators retry explicitly.
+      const keepPoolOnEmpty = result.proxies.length === 0;
       const saved = await store.update((current) => {
         const latestSub = current.proxySubscriptions.find((x) => x.id === id);
         if (!latestSub) throw new Error("subscription_removed_during_fetch");
         updatedSub = {
           ...latestSub,
           lastFetchedAt: new Date().toISOString(),
-          lastError:
-            result.proxies.length === 0
-              ? "Parsed 0 nodes — check URL or try again"
-              : null,
+          lastError: keepPoolOnEmpty
+            ? "Parsed 0 nodes — kept existing pool, check URL or try again"
+            : null,
           lastImportCount: result.proxies.length,
           lastRawBytes: result.rawBytes,
           lastDirectCount: result.usableCount,
@@ -116,10 +161,26 @@ export async function handleSubscriptions(
           lastFormat: result.format,
           lastUserAgent: result.usedUserAgent,
         };
+        if (keepPoolOnEmpty) {
+          return {
+            proxySubscriptions: current.proxySubscriptions.map((x) =>
+              x.id === id ? updatedSub! : x
+            ),
+          };
+        }
+        const nextPool = mergeSubscriptionProxies(current.proxyPool, id, result.proxies);
+        const liveIds = new Set(nextPool.map((proxy) => proxy.id));
         return {
-          proxyPool: mergeSubscriptionProxies(current.proxyPool, id, result.proxies),
+          proxyPool: nextPool,
           proxySubscriptions: current.proxySubscriptions.map((x) =>
             x.id === id ? updatedSub! : x
+          ),
+          // Detach workers bound to nodes that no longer exist so requests
+          // fail closed with a clear binding error instead of stale routing.
+          accounts: current.accounts.map((account) =>
+            account.proxyId && !liveIds.has(account.proxyId)
+              ? { ...account, proxyId: null }
+              : account
           ),
           // Auto-fill bridge endpoints from hints without overwriting concurrent edits.
           clashBridge: applyClashHintsToBridge(current.clashBridge, result.clashHints),
@@ -150,8 +211,11 @@ export async function handleSubscriptions(
         settings: saved,
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (message === "subscription_removed_during_fetch") {
+      const rawMessage = err instanceof Error ? err.message : String(err);
+      // Fetch errors may embed the token-bearing URL; store a bounded message
+      // and return a redacted source instead of echoing the raw URL.
+      const message = rawMessage.replace(sub.url, redactedSubscriptionUrl(sub.url)).slice(0, 500);
+      if (rawMessage === "subscription_removed_during_fetch") {
         sendJson(res, 404, { error: { message: `Subscription not found: ${id}` } });
         return true;
       }

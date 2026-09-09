@@ -45,7 +45,7 @@ The service listens on `127.0.0.1:9876` by default.
 - [Architecture](docs/ARCHITECTURE.zh-CN.md): module ownership, dependencies, and persistence boundaries
 - [Contribution rules](AGENTS.md): repository structure, security requirements, and validation expectations
 
-Security: the relay token protects model endpoints, not the Admin UI. Keep the Admin listener on localhost unless `/`, `/admin`, and `/admin/api/*` are separately protected.
+Security: the relay token protects model endpoints (constant-time compare); the Admin surface accepts loopback clients only (`403` otherwise) and `settings.json` is written atomically with `0600`. Publish `/v1/*` only, never expose the admin port publicly.
 
 ## Development
 

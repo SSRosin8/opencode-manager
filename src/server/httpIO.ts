@@ -27,6 +27,7 @@ export const HOP_BY_HOP = new Set([
 /**
  * Read a client request without imposing a gateway-specific payload cap.
  * OpenCode/Zen is responsible for accepting or rejecting multimodal payloads.
+ * Admin/management routes must use readJsonBody() with an explicit limit.
  */
 export function readBody(req: IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -41,6 +42,43 @@ export function readBody(req: IncomingMessage): Promise<Buffer> {
     });
     req.on("error", (error) => {
       reject(error);
+    });
+  });
+}
+
+export class AdminBodyTooLargeError extends Error {
+  constructor(readonly limit: number) {
+    super(`Admin request body exceeded the ${limit} byte limit`);
+    this.name = "AdminBodyTooLargeError";
+  }
+}
+
+/** Bounded body reader for admin/management JSON. Relay passthrough stays unbounded. */
+export function readJsonBody(req: IncomingMessage, maxBytes = 1024 * 1024): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let rejected = false;
+    const onData = (chunk: unknown): void => {
+      if (rejected) return;
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
+      size += buffer.length;
+      if (size > maxBytes) {
+        rejected = true;
+        req.removeListener("data", onData);
+        // Drain without accumulating so the socket can be reused/closed cleanly.
+        req.resume();
+        reject(new AdminBodyTooLargeError(maxBytes));
+        return;
+      }
+      chunks.push(buffer);
+    };
+    req.on("data", onData);
+    req.on("end", () => {
+      if (!rejected) resolve(Buffer.concat(chunks, size));
+    });
+    req.on("error", (error) => {
+      if (!rejected) reject(error);
     });
   });
 }
@@ -61,6 +99,29 @@ export function sendJson(res: ServerResponse, status: number, body: unknown): vo
     "Content-Length": Buffer.byteLength(data),
   });
   res.end(data);
+}
+
+/**
+ * Read an admin/management body with a bound. Returns null after sending 413
+ * so handlers can `if (!raw) return true;` without duplicating error mapping.
+ * Relay passthrough must keep using readBody() (unbounded multimodal).
+ */
+export async function readAdminBody(
+  req: IncomingMessage,
+  res: ServerResponse,
+  maxBytes = 1024 * 1024
+): Promise<Buffer | null> {
+  try {
+    return await readJsonBody(req, maxBytes);
+  } catch (err) {
+    if (err instanceof AdminBodyTooLargeError) {
+      sendJson(res, 413, {
+        error: { message: err.message, type: "body_too_large" },
+      });
+      return null;
+    }
+    throw err;
+  }
 }
 
 export function rejectUnavailableWorkerPool(
@@ -131,17 +192,28 @@ export async function pipeUpstream(
   }
 
   const reader = upstream.body.getReader();
+  let clientClosed = false;
+  const onClose = (): void => {
+    clientClosed = true;
+    reader.cancel().catch(() => undefined);
+  };
+  // If the downstream client goes away, stop consuming upstream promptly so
+  // Clash selector slots and upstream connections are not held for nothing.
+  res.once("close", onClose);
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       if (value) {
+        if (clientClosed || res.writableEnded || res.destroyed) break;
         opts?.onChunk?.(value);
         res.write(Buffer.from(value));
       }
     }
-    res.end();
+    if (!clientClosed && !res.writableEnded && !res.destroyed) res.end();
   } catch (error) {
-    res.destroy(error as Error);
+    if (!res.writableEnded && !res.destroyed) res.destroy(error as Error);
+  } finally {
+    res.removeListener("close", onClose);
   }
 }

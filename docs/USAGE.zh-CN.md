@@ -35,7 +35,7 @@ ss -ltnp | grep ':9876'
 PORT=9988 npm start
 ```
 
-默认只监听 `127.0.0.1`。如确需监听其他网卡，可设置 `OPENCODE_MANAGER_HOST=0.0.0.0`，但必须通过防火墙或反向代理单独保护管理后台。
+默认只监听 `127.0.0.1`。即使绑定到 `0.0.0.0`，`/` 和 `/admin/api/*` 也只接受回环客户端，其他来源返回 `403 admin_forbidden`；对外只发布 `/v1/*` 并在反向代理层屏蔽管理路径。启动时若监听地址非回环或 Relay Token 为空会打印安全告警。
 
 ### 环境变量
 
@@ -54,12 +54,16 @@ PORT=9988 npm start
 
 ## 2. 安全边界
 
-- `X-OC-Relay-Key` 只保护 `/v1/*` 以及兼容别名 `/models`、`/chat/completions` 和 `/responses`。
+- `X-OC-Relay-Key` 只保护 `/v1/*` 以及兼容别名 `/models`、`/chat/completions` 和 `/responses`，比较为恒定时间。
 - `/health` 按设计无需鉴权，只返回进程健康状态，不包含设置或凭证。
-- `/` 和 `/admin/api/*` 不受该令牌保护。
+- `/` 和 `/admin/api/*` 只接受回环客户端（`127.0.0.1`/`::1`），其他来源返回 `403 admin_forbidden`。
+- 管理面 JSON 请求体上限 1 MiB（超限返回 `413 body_too_large`）；转发 chat/responses 为透传多模态大负载，保持不限大小。
+- 上游 chat/models 单次尝试 120 s 超时，且不会携带 `Authorization` 跟随重定向。
+- `401/403` 只对该 Worker 施加短鉴权冷却；`429` 保持长限流冷却（或按 `Retry-After`）。
+- 订阅 URL 须为 2048 字符内的 `http(s)` 地址；解析出 0 节点时保留旧池，仅记录错误。
 - 管理 API 包含 Zen Key、代理口令、Clash secret 和带 token 的订阅 URL。
 - 不要把 9876 端口直接暴露到公网或不可信局域网。
-- `data/settings.json` 包含凭证，不要提交到 Git 或发送给他人。
+- `data/settings.json` 包含凭证，原子写入且权限为 `0600`，不要提交到 Git 或发送给他人。
 
 如需让其他设备调用，建议只对外发布 `/v1/*`，并在反向代理层禁止 `/admin`、`/admin/api/*` 和 `/`。
 

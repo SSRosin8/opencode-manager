@@ -32,6 +32,17 @@ export async function handleSubscriptionRefresh(
           subscriptionId: sub.id,
           fetchImpl: subscriptionFetch,
         });
+        if (!result.proxies.length) {
+          // Transient empty parse must not wipe a healthy pool.
+          subs[i] = {
+            ...sub,
+            lastFetchedAt: new Date().toISOString(),
+            lastError: "Parsed 0 nodes — kept existing pool, check URL or try again",
+            lastImportCount: 0,
+          };
+          results.push({ id: sub.id, ok: false, error: subs[i].lastError });
+          continue;
+        }
         pool = mergeSubscriptionProxies(pool, sub.id, result.proxies);
         subs[i] = {
           ...sub,
@@ -61,7 +72,8 @@ export async function handleSubscriptionRefresh(
           clashHints: result.clashHints,
         });
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const rawMessage = err instanceof Error ? err.message : String(err);
+        const message = rawMessage.slice(0, 500);
         subs[i] = {
           ...sub,
           lastFetchedAt: new Date().toISOString(),
@@ -78,10 +90,16 @@ export async function handleSubscriptionRefresh(
       | undefined;
     const clashBridge = applyClashHintsToBridge(s.clashBridge, lastHints);
 
+    const liveIds = new Set(pool.map((proxy) => proxy.id));
     const saved = await store.save({
       proxyPool: pool,
       proxySubscriptions: subs,
       clashBridge,
+      accounts: s.accounts.map((account) =>
+        account.proxyId && !liveIds.has(account.proxyId)
+          ? { ...account, proxyId: null }
+          : account
+      ),
     });
     upstream.updateSettings(saved);
     store.updateReadyCount(

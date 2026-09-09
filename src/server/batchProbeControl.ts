@@ -39,7 +39,19 @@ export class BatchProbeControl {
   async checkpoint(): Promise<boolean> {
     if (this.cancelled) return false;
     if (!this.paused) return true;
-    return new Promise<boolean>((resolve) => this.waiters.add(resolve));
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        this.waiters.delete(resolve);
+        // Pause waits must not hang the batch forever if resume is lost;
+        // proceed so the batch can finish and persist its state.
+        resolve(true);
+      }, 5 * 60 * 1000);
+      timer.unref?.();
+      this.waiters.add((proceed: boolean) => {
+        clearTimeout(timer);
+        resolve(proceed);
+      });
+    });
   }
 
   private releaseWaiters(proceed: boolean): void {

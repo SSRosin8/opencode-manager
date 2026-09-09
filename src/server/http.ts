@@ -3,6 +3,7 @@
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { timingSafeEqual } from "node:crypto";
 import { ClashSwitchQueue } from "../proxy/clashBridge.js";
 import { FreeModelRegistry } from "../proxy/freeModels.js";
 import { ProbeResultCache } from "../proxy/probe.js";
@@ -121,7 +122,10 @@ export async function createApp(opts?: {
     try {
       await handleRequest(req, res, context);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      // Never echo raw internals (proxy host:port, controller URLs, file
+      // paths) to clients. Log the detail server-side, return a stable id.
+      const detail = error instanceof Error ? error.message : String(error);
+      console.error(`[http] unhandled request error: ${detail.slice(0, 500)}`);
       const status = 500;
       const type = "server_error";
       store.recordGatewayRejection({
@@ -131,7 +135,7 @@ export async function createApp(opts?: {
         type,
       });
       if (!res.headersSent) {
-        sendJson(res, status, { error: { message, type } });
+        sendJson(res, status, { error: { message: "Internal gateway error", type } });
       } else {
         res.destroy();
       }
@@ -172,10 +176,25 @@ async function handleRequest(
     path === "/responses" ||
     path.startsWith("/v1/");
 
+  // Admin surface (HTML + /admin/api/*) is localhost-only by design. Relay
+  // stays token-protected when configured; /health stays public for probes.
+  const adminPath = path === "/" || path === "/admin" || path.startsWith("/admin/");
+  if (adminPath && !isLoopbackRequest(req)) {
+    ctx.store.recordGatewayRejection({ method, path, status: 403, type: "admin_forbidden" });
+    sendJson(res, 403, {
+      error: {
+        message: "Admin UI/API is only available on localhost",
+        type: "admin_forbidden",
+      },
+    });
+    return;
+  }
+
   if (relayPath) {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Headers", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Vary", "Origin");
   }
   if (method === "OPTIONS") {
     res.writeHead(204);
@@ -184,7 +203,7 @@ async function handleRequest(
   }
 
   const relayAccessToken = ctx.store.get().relayAccessToken;
-  if (relayPath && relayAccessToken && req.headers["x-oc-relay-key"] !== relayAccessToken) {
+  if (relayPath && relayAccessToken && !isRelayAuthorized(req.headers["x-oc-relay-key"], relayAccessToken)) {
     ctx.store.recordGatewayRejection({ method, path, status: 401, type: "authentication_error" });
     sendJson(res, 401, {
       error: {
@@ -196,7 +215,12 @@ async function handleRequest(
   }
 
   if (method === "GET" && (path === "/" || path === "/admin" || path === "/admin/")) {
-    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.writeHead(200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "SAMEORIGIN",
+      "Referrer-Policy": "no-referrer",
+    });
     res.end(ADMIN_HTML);
     return;
   }
@@ -222,11 +246,39 @@ function safeRequestPath(rawUrl: string | undefined): string {
   }
 }
 
+/** Admin surface trusts loopback only; never treat X-Forwarded-For as proof. */
+function isLoopbackRequest(req: IncomingMessage): boolean {
+  const addr = req.socket?.remoteAddress ?? "";
+  return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
+}
+
+/** Constant-time relay token compare to avoid timing side channels. */
+function isRelayAuthorized(provided: unknown, expected: string): boolean {
+  if (typeof provided !== "string" || !provided || !expected) return false;
+  const a = Buffer.from(provided, "utf8");
+  const b = Buffer.from(expected, "utf8");
+  if (a.length !== b.length) return false;
+  try {
+    return timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
+}
+
 export function listen(app: App): Promise<void> {
   return new Promise((resolve, reject) => {
     app.server.once("error", reject);
     app.server.listen(app.port, app.host, () => {
       app.store.setRunning(true);
+      if (app.host !== "127.0.0.1" && app.host !== "::1" && app.host !== "localhost") {
+        console.warn(
+          `[security] listening on non-loopback ${app.host}: relay routes require X-OC-Relay-Key, ` +
+            `admin UI/API still rejects non-loopback clients. Do not expose this port publicly.`
+        );
+      }
+      if (!app.store.get().relayAccessToken) {
+        console.warn("[security] relayAccessToken is empty: /v1/* relay routes accept unauthenticated requests.");
+      }
       resolve();
     });
   });

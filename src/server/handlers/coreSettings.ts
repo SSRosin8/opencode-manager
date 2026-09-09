@@ -3,7 +3,7 @@ import type { RequestContext } from "../context.js";
 import { inferAccountKind } from "../../relay/index.js";
 import type { GatewaySettings } from "../../settings/store.js";
 import { credentialLabel, duplicateWorkerEgress } from "../workerEgress.js";
-import { readBody, sendJson } from "../httpIO.js";
+import { readAdminBody, sendJson } from "../httpIO.js";
 import { setupReadiness } from "../readiness.js";
 
 const GATEWAY_SETTING_KEYS = new Set([
@@ -20,7 +20,8 @@ export async function handleCoreSettings(
 ): Promise<boolean> {
   const { store, upstream, probes, workerStats, freeModels, batchProbeProgress } = ctx;
   if (method === "PATCH" && path === "/admin/api/gateway-settings") {
-    const raw = await readBody(req);
+    const raw = await readAdminBody(req, res);
+    if (!raw) return true;
     let body: Record<string, unknown>;
     try {
       body = JSON.parse(raw.toString("utf8") || "{}") as Record<string, unknown>;
@@ -60,7 +61,8 @@ export async function handleCoreSettings(
       return true;
     }
     if (method === "PUT" || method === "POST") {
-      const raw = await readBody(req);
+      const raw = await readAdminBody(req, res);
+      if (!raw) return true;
       let parsed: Partial<GatewaySettings>;
       try {
         parsed = JSON.parse(raw.toString("utf8") || "{}") as Partial<GatewaySettings>;

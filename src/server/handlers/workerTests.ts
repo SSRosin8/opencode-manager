@@ -5,7 +5,7 @@ import { probeAnonymousZenProxy, probePoolProxy } from "../../proxy/probe.js";
 import { applyProbeEgressIps } from "../../proxy/pool.js";
 import { inferAccountKind } from "../../relay/index.js";
 import { attachAnonymousZenResult } from "../workerEgress.js";
-import { UpstreamResponseTooLargeError, readBody, readStreamFully, sendJson } from "../httpIO.js";
+import { UpstreamResponseTooLargeError, readAdminBody, readStreamFully, sendJson } from "../httpIO.js";
 import { logProbeFailure } from "../probeDiagnostics.js";
 import { activateBridge, resolveBridge } from "../../proxy/bridgeRuntime.js";
 import { normalizeModelName } from "../../proxy/freeModels.js";
@@ -46,7 +46,8 @@ export async function handleWorkerTests(
     }
     let requestedModel: string | null = null;
     try {
-      const raw = await readBody(req);
+      const raw = await readAdminBody(req, res);
+    if (!raw) return true;
       if (raw.length) {
         const parsed: unknown = JSON.parse(raw.toString("utf8"));
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
