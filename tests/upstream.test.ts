@@ -451,6 +451,35 @@ describe("UpstreamClient chatCompletions", () => {
     expect(again.accountId).toBe(first.accountId);
   });
 
+  it("derives affinity from x-session-affinity and previous_response_id", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, { choices: [] }));
+    const client = new UpstreamClient(baseSettings(), fetchImpl);
+
+    const first = await client.chatCompletions({
+      body: { model: "big-pickle" },
+      stream: false,
+      clientHeaders: { "x-session-affinity": "aff-1" },
+    });
+    const again = await client.chatCompletions({
+      body: { model: "big-pickle" },
+      stream: false,
+      clientHeaders: { "x-session-affinity": "aff-1" },
+    });
+    expect(again.accountId).toBe(first.accountId);
+
+    const r1 = await client.chatCompletions({
+      body: { model: "big-pickle", previous_response_id: "resp-9" },
+      stream: false,
+      protocol: "responses",
+    });
+    const r2 = await client.chatCompletions({
+      body: { model: "big-pickle", previous_response_id: "resp-9" },
+      stream: false,
+      protocol: "responses",
+    });
+    expect(r2.accountId).toBe(r1.accountId);
+  });
+
   /**
    * Matches OmniRoute OpenCode free multi-account: empty apiKey, rotate on 429
    * by account slot (fingerprint/id + proxy), not by Bearer key.
@@ -481,10 +510,10 @@ describe("UpstreamClient chatCompletions", () => {
       fetchImpl
     );
 
-    // Intercept pick to record which account is used (mock only sees identical empty keys)
-    const origPick = client.rotator.pick.bind(client.rotator);
-    client.rotator.pick = (now?: number) => {
-      const acct = origPick(now);
+    // Intercept routing to record which account is used (mock only sees identical empty keys)
+    const origPick = client.rotator.pickWithHint.bind(client.rotator);
+    client.rotator.pickWithHint = (key: string, hashes: string[], now?: number) => {
+      const acct = origPick(key, hashes, now);
       callAccountIds.push(acct.id);
       return acct;
     };

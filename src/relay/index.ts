@@ -8,10 +8,15 @@ export {
   AccountRotator,
   inferAccountKind,
   DEFAULT_RATE_LIMIT_COOLDOWN_MS,
+  DEFAULT_SESSION_AFFINITY_TTL_MS,
   type AccountConfig,
   type AccountKind,
   type AccountProxy,
   type AccountState,
+  type PersistedAffinityEntry,
+  type SessionAffinitySink,
+  type SessionAffinitySnapshot,
+  type SessionBinding,
   type WorkerRoutingStrategy,
 } from "./accounts.js";
 export {
@@ -29,3 +34,10 @@ export {
   buildResponsesUrl,
   buildModelsUrl,
 } from "./url.js";
+export {
+  extractEncryptedBlobHashes,
+  isStaleReasoningError,
+  resolveSessionKey,
+  sessionKeyFromHeaders,
+  sessionKeyFromRequestBody,
+} from "./sessionRouting.js";

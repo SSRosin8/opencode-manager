@@ -14,6 +14,9 @@ import {
   normalizeBaseUrl,
   parseEffortLevel,
   passthroughBody,
+  resolveSessionKey,
+  sessionKeyFromHeaders,
+  sessionKeyFromRequestBody,
   transformRequestBody,
   transformResponsesRequestBody,
   DEFAULT_BASE_URL,
@@ -142,6 +145,48 @@ describe("transparent body passthrough + OpenCode fixes", () => {
     ) as Record<string, unknown>;
     expect(out.model).toBe("deepseek-v4-flash");
     expect(out.reasoning_effort).toBe("high");
+  });
+});
+
+describe("session routing signals", () => {
+  it("reads x-session-affinity as well as established session headers", () => {
+    expect(sessionKeyFromHeaders({ "x-session-id": "sess-1" })).toBe("sess-1");
+    expect(sessionKeyFromHeaders({ "X-OpenCode-Session": "sess-2" })).toBe("sess-2");
+    expect(sessionKeyFromHeaders({ "x-session-affinity": "sess-3" })).toBe("sess-3");
+    expect(sessionKeyFromHeaders({ "x-session-id": "   " })).toBeUndefined();
+    expect(sessionKeyFromHeaders(null)).toBeUndefined();
+  });
+
+  it("uses previous_response_id only for the Responses protocol", () => {
+    const body = { model: "m", previous_response_id: "resp-9" };
+    expect(sessionKeyFromRequestBody(body, "responses")).toBe("resp-9");
+    expect(sessionKeyFromRequestBody(body, "chat")).toBeUndefined();
+    expect(sessionKeyFromRequestBody(body)).toBeUndefined();
+    expect(sessionKeyFromRequestBody(null, "responses")).toBeUndefined();
+  });
+
+  it("caps overlong keys and prefers explicit keys over derived ones", () => {
+    const long = `k-${"x".repeat(500)}`;
+    expect(sessionKeyFromHeaders({ "x-session-id": long })?.length).toBeLessThanOrEqual(200);
+    expect(
+      resolveSessionKey({
+        sessionKey: "explicit",
+        clientHeaders: { "x-session-id": "header" },
+        body: { previous_response_id: "resp-1" },
+        protocol: "responses",
+      })
+    ).toBe("explicit");
+    expect(
+      resolveSessionKey({
+        clientHeaders: { "x-session-id": "header" },
+        body: { previous_response_id: "resp-1" },
+        protocol: "responses",
+      })
+    ).toBe("header");
+    expect(
+      resolveSessionKey({ body: { previous_response_id: "resp-1" }, protocol: "responses" })
+    ).toBe("resp-1");
+    expect(resolveSessionKey({})).toBeUndefined();
   });
 });
 
@@ -347,6 +392,30 @@ describe("multi-key sticky affinity / 429 cooldown", () => {
     rot.markCooldown(acct, 0, 0);
     expect(acct.cooldownUntil).toBeGreaterThan(firstCd);
     expect(acct.consecutiveFails).toBe(2);
+  });
+
+  it("never preempts a bound ready worker when a preferred worker recovers", () => {
+    const rot = new AccountRotator();
+    rot.sync(
+      [
+        { id: "anon", apiKey: "", kind: "anonymous_zen" },
+        { id: "login", apiKey: "key", kind: "authenticated_zen" },
+      ],
+      undefined,
+      "anonymous_first"
+    );
+
+    // Preferred anonymous worker takes the new session.
+    expect(rot.pick("session", 1_000).id).toBe("anon");
+    // Anonymous cools down (429): the session fails over to signed-in.
+    const anon = rot.getAccounts().find((account) => account.id === "anon")!;
+    rot.markRateLimited(anon, 60_000, 1_000);
+    expect(rot.pick("session", 2_000).id).toBe("login");
+    // Anonymous recovers, but the bound session must NOT bounce back
+    // mid-conversation: encrypted reasoning is issued per caller identity.
+    expect(rot.pick("session", 500_000).id).toBe("login");
+    // New sessions still honor the routing strategy.
+    expect(rot.pick("other", 500_000).id).toBe("anon");
   });
 
   it("uses a 15 minute default rate-limit cooldown", () => {

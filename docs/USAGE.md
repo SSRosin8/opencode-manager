@@ -159,7 +159,9 @@ When the batch test's primary model returns the same upstream `503` on two conse
 - Signed-in first: reverse that preference.
 - Mixed: follow configured Worker order.
 
-OpenCode sessions remain sticky to a Worker for cache locality. The gateway rotates after 401, 403, 429, 5xx, or transport failures.
+OpenCode sessions stay strictly sticky to a Worker for cache locality and reasoning continuity: a bound session never moves while its Worker is ready, even when a strategy-preferred Worker recovers. The gateway rotates only after 401, 403, 429, 5xx, or transport failures. Session identity comes from `x-session-id` / `x-opencode-session` / `x-session-affinity` headers, or `previous_response_id` on the Responses API.
+
+Affinity survives restarts: session→Worker bindings and encrypted-reasoning fingerprints (sha256 digests only, never message content) persist to `data/session-affinity.json` with a 24 h TTL. Requests that replay reasoning issued to a different caller (`encrypted_content was not issued to this caller`) are returned as-is; the poisoned binding is dropped instead of pinned, so the next turn re-picks a Worker. Histories poisoned before the fix still need a fresh OpenCode session.
 
 The Overview distinguishes client generation requests from actual per-Worker upstream attempts. A retry chain counts as one client request, while every routed attempt remains visible on its Worker; only 2xx final responses count as successful. Global model distribution is deduplicated by request chain, while each Worker shows its actual attempted models. Tokens are accumulated only when a successful upstream response reports `usage`. Streaming requests ask the upstream to include usage, but missing usage is still shown in the coverage details instead of being estimated. Cache hit rate is cache-read input tokens divided by total input tokens; uncached input and explicit cache writes are separate values. Token and cache totals are grouped by model so model changes can be inspected independently. Failures before routing appear under Gateway rejections. Global **Reset stats** clears Worker counters, recent upstream attempts, recent errors, and Gateway rejections.
 
@@ -248,6 +250,7 @@ npm start
 - `503 no_workers_configured`: run Batch Test or add a signed-in Worker.
 - `503 no_enabled_workers`: enable and save at least one Worker.
 - Worker test failure: distinguish egress failure, 401/403 invalid key, 429 exhausted quota, and temporary 5xx.
+- `encrypted_content was not issued to this caller`: the resumed session replays reasoning issued to a different Worker/egress (often after long pauses, node changes, or restarts). Start a fresh OpenCode session; the gateway drops the poisoned binding automatically.
 - Port conflict: run `PORT=9988 npm start`; Admin port changes apply after restart.
 
 ### Controller And Bridge
