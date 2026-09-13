@@ -69,6 +69,8 @@ describe("gateway hardening", () => {
     expect(normalizeBaseUrl("gopher://example.com")).toBe(DEFAULT_BASE_URL);
     expect(normalizeBaseUrl("not-a-url")).toBe(DEFAULT_BASE_URL);
     expect(normalizeBaseUrl("https://opencode.ai/zen/v1/")).toBe("https://opencode.ai/zen/v1");
+    expect(normalizeBaseUrl("https://user:pass@opencode.ai/zen/v1")).toBe(DEFAULT_BASE_URL);
+    expect(normalizeBaseUrl("https://opencode.ai/zen/v1?token=secret")).toBe(DEFAULT_BASE_URL);
   });
 
   it("rejects non-http subscription urls without fetching", async () => {

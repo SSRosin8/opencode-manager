@@ -116,11 +116,7 @@ export async function createApp(opts?: {
   });
 
   const freeModels = opts?.freeModels ?? new FreeModelRegistry();
-  if (opts?.freeModels) {
-    // Test-injected registry: caller owns seeding; never hit the network.
-  } else if (process.env.VITEST) {
-    await freeModels.loadCache().catch(() => {});
-  } else {
+  if (!opts?.freeModels) {
     await freeModels.loadCache().catch(() => {});
   }
 

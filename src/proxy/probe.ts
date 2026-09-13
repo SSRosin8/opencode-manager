@@ -152,6 +152,8 @@ export type AnonymousZenProbeOptions = {
 };
 
 const anonymousZenClashQueue = new ClashSwitchQueue();
+const MAX_ZEN_ERROR_BYTES = 64 * 1024;
+const MAX_EGRESS_RESPONSE_BYTES = 64 * 1024;
 
 /** In-memory last probe results (process lifetime). */
 export class ProbeResultCache {
@@ -248,7 +250,36 @@ async function timedProxyFetch(
     });
     let body = "";
     try {
-      body = (await res.text()).trim();
+      const declared = Number(res.headers.get("content-length") ?? "");
+      if (Number.isFinite(declared) && declared > MAX_EGRESS_RESPONSE_BYTES) {
+        await res.body?.cancel("probe response is too large").catch(() => undefined);
+      } else if (res.body) {
+        const reader = res.body.getReader();
+        const chunks: Uint8Array[] = [];
+        let size = 0;
+        try {
+          while (true) {
+            const next = await reader.read();
+            if (next.done) break;
+            if (!next.value) continue;
+            size += next.value.byteLength;
+            if (size > MAX_EGRESS_RESPONSE_BYTES) {
+              await reader.cancel("probe response is too large").catch(() => undefined);
+              break;
+            }
+            chunks.push(next.value);
+          }
+        } finally {
+          reader.releaseLock();
+        }
+        const bytes = new Uint8Array(size);
+        let offset = 0;
+        for (const chunk of chunks) {
+          bytes.set(chunk, offset);
+          offset += chunk.byteLength;
+        }
+        body = new TextDecoder().decode(bytes).trim();
+      }
     } catch {
       /* body is optional */
     }
@@ -310,7 +341,37 @@ function retryAfterSeconds(headers: Headers): number | undefined {
 async function zenResponseError(response: Response): Promise<string> {
   let text = "";
   try {
-    text = (await response.text()).trim();
+    const declared = Number(response.headers.get("content-length") ?? "");
+    if (Number.isFinite(declared) && declared > MAX_ZEN_ERROR_BYTES) {
+      await response.body?.cancel("error response is too large").catch(() => undefined);
+      return `Zen HTTP ${response.status}`;
+    }
+    if (!response.body) return `Zen HTTP ${response.status}`;
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+      while (true) {
+        const next = await reader.read();
+        if (next.done) break;
+        if (!next.value) continue;
+        size += next.value.byteLength;
+        if (size > MAX_ZEN_ERROR_BYTES) {
+          await reader.cancel("error response is too large").catch(() => undefined);
+          return `Zen HTTP ${response.status}`;
+        }
+        chunks.push(next.value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    text = new TextDecoder().decode(bytes).trim();
   } catch {
     /* fall back to the HTTP status */
   }

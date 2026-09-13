@@ -5,11 +5,13 @@ import { ADMIN_CLIENT_I18N } from "../src/server/admin/clientI18n.js";
 import { ADMIN_CLIENT_MODELS } from "../src/server/admin/clientModels.js";
 import { ADMIN_CLIENT_PROXY_VIEWS } from "../src/server/admin/clientProxyViews.js";
 import { ADMIN_CLIENT_TOOLTIPS } from "../src/server/admin/clientTooltips.js";
+import { ADMIN_CLIENT_USAGE_VIEWS } from "../src/server/admin/clientUsageViews.js";
 import { ADMIN_CLIENT_WORKER_VIEWS } from "../src/server/admin/clientWorkerViews.js";
 import { ADMIN_DOCUMENT_HEAD } from "../src/server/admin/documentHead.js";
 import { ADMIN_MARKUP } from "../src/server/admin/markup.js";
 import { ADMIN_MODELS_MARKUP } from "../src/server/admin/modelsMarkup.js";
 import { ADMIN_FEATURE_STYLES } from "../src/server/admin/featureStyles.js";
+import { ADMIN_USAGE_STYLES } from "../src/server/admin/usageStyles.js";
 
 describe("admin proxy-pool UX contracts", () => {
   it("keeps inactive batch controls hidden despite button display styles", () => {
@@ -98,6 +100,16 @@ describe("admin proxy-pool UX contracts", () => {
     expect(ADMIN_CLIENT_CORE).toContain('function initGuide()');
     expect(ADMIN_FEATURE_STYLES).toContain('.getting-started-steps');
     expect(ADMIN_FEATURE_STYLES).toContain('.guide-modal');
+  });
+
+  it("keeps form dialogs accessible and keyboard-dismissible", () => {
+    expect(ADMIN_MARKUP).toContain('role="dialog" aria-modal="true"');
+    expect(ADMIN_MARKUP).toContain('aria-hidden="true"');
+    expect(ADMIN_MARKUP).toContain('role="status" aria-live="polite"');
+    expect(ADMIN_CLIENT_WORKER_VIEWS).toContain('event.key === "Escape"');
+    expect(ADMIN_CLIENT_WORKER_VIEWS).toContain("modalFocusables(root)");
+    expect(ADMIN_CLIENT_WORKER_VIEWS).toContain("opener?.focus?.()");
+    expect(ADMIN_FEATURE_STYLES).toMatch(/@media \(max-width: 900px\)[\s\S]*position: sticky; top: var\(--topbar-h\); z-index: 30;/);
   });
 
   it("keeps secondary accent controls from crowding mobile language controls", () => {
@@ -286,6 +298,30 @@ describe("admin proxy-pool UX contracts", () => {
   it("shows the supported Responses endpoint in client usage without exposing admin routes", () => {
     expect(ADMIN_MARKUP).toContain("POST /v1/responses");
     expect(ADMIN_MARKUP).not.toContain('data-i18n="adminApis"');
+  });
+
+  it("provides a bilingual usage trend with range controls and mobile-safe chart styles", () => {
+    expect(ADMIN_MARKUP).toContain('id="ov-usage-chart"');
+    expect(ADMIN_MARKUP).toContain('data-timeline-hours="24"');
+    expect(ADMIN_MARKUP).toContain('data-timeline-hours="168"');
+    expect(ADMIN_CLIENT_USAGE_VIEWS).toContain("renderUsageTimeline");
+    expect(ADMIN_CLIENT_USAGE_VIEWS).toContain('storageSet("opencode-manager-usage-range"');
+    expect(ADMIN_CLIENT_I18N).toContain('usageTrend: "Usage trend"');
+    expect(ADMIN_CLIENT_I18N).toContain('usageTrend: "用量趋势"');
+    expect(ADMIN_USAGE_STYLES).toContain(".usage-chart-bars");
+    expect(ADMIN_USAGE_STYLES).toContain("min-width:620px");
+    expect(ADMIN_MARKUP).toContain('id="ov-usage-timeline-legend"');
+    expect(ADMIN_CLIENT_USAGE_VIEWS).toContain("hasActivity");
+  });
+
+  it("keeps the mobile shell, cards, overlays, and dialogs within the viewport", () => {
+    expect(ADMIN_FEATURE_STYLES).toContain(".topbar { position: sticky; top: 0; }");
+    expect(ADMIN_FEATURE_STYLES).toContain("position: sticky; top: var(--topbar-h); z-index: 30;");
+    expect(ADMIN_FEATURE_STYLES).toContain(".metrics { grid-template-columns: 1fr; }");
+    expect(ADMIN_FEATURE_STYLES).toContain("max-height: calc(100dvh - 20px)");
+    expect(ADMIN_FEATURE_STYLES).toContain(".toast { left: 12px; right: 12px;");
+    expect(ADMIN_FEATURE_STYLES).toContain(".brand-name { display: none; }");
+    expect(ADMIN_FEATURE_STYLES).toContain("table.nodes.overview-workers-table th { white-space:normal;");
   });
 
   it("paginates dense admin lists with one shared eight-item control", () => {

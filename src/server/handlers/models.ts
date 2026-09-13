@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { RequestContext } from "../context.js";
+import { sanitizeUpstreamError } from "../../proxy/upstream.js";
 import { HOP_BY_HOP, UpstreamResponseTooLargeError, clientHeadersFrom, pipeUpstream, readStreamFully, rejectUnavailableWorkerPool, sendJson } from "../httpIO.js";
 
 const MAX_MODELS_RESPONSE_BYTES = 4 * 1024 * 1024;
@@ -75,7 +76,7 @@ export async function handleModels(
         });
         return true;
       }
-      const message = err instanceof Error ? err.message : String(err);
+      const message = sanitizeUpstreamError(err);
       store.recordRequest(path, 502, message);
       sendJson(res, 502, {
         error: { message: `Upstream models failed: ${message}`, type: "upstream_error" },

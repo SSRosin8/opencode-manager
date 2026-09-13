@@ -12,7 +12,9 @@ export function normalizeBaseUrl(baseUrl: string | undefined | null): string {
   try {
     const parsed = new URL(raw);
     if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return DEFAULT_BASE_URL;
-    if (!parsed.hostname) return DEFAULT_BASE_URL;
+    if (!parsed.hostname || parsed.username || parsed.password || parsed.search || parsed.hash) {
+      return DEFAULT_BASE_URL;
+    }
     return raw;
   } catch {
     return DEFAULT_BASE_URL;

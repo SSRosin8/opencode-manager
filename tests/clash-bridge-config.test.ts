@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { normalizeClashBridge } from "../src/proxy/pool.js";
+import { isValidProxyHost, normalizeClashBridge, normalizePoolProxy, proxyToUri } from "../src/proxy/pool.js";
+import { applyClashHintsToBridge } from "../src/server/clashHints.js";
 import { normalizeSettings } from "../src/settings/store.js";
 
 describe("normalizeClashBridge", () => {
@@ -94,5 +95,26 @@ describe("normalizeClashBridge", () => {
     });
     expect(result.bridges).toEqual([]);
     expect(result.activeBridgeId).toBeNull();
+  });
+});
+
+describe("proxy input normalization", () => {
+  it("rejects authority-breaking hosts and preserves IPv6 proxy URIs", () => {
+    expect(isValidProxyHost("proxy.example.test")).toBe(true);
+    expect(isValidProxyHost("user@proxy.example.test")).toBe(false);
+    expect(normalizePoolProxy({ host: "proxy.example.test", port: 80.5 })).toBeNull();
+    expect(proxyToUri({ type: "http", host: "2001:db8::1", port: 8080 })).toBe(
+      "http://[2001:db8::1]:8080"
+    );
+  });
+
+  it("does not let a subscription redirect bridge hints to a remote controller", () => {
+    const current = normalizeClashBridge({ enabled: false });
+    const next = applyClashHintsToBridge(current, {
+      externalController: "https://attacker.example/controller",
+      mixedPort: 7892,
+    });
+    expect(next.apiBase).toBe(current.apiBase);
+    expect(next.localProxyPort).toBe(7892);
   });
 });

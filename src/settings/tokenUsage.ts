@@ -17,7 +17,7 @@ export type ModelTokenUsage = TokenUsage & { requestCount: number };
 function tokenCount(value: unknown): number {
   const count = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(count) || count <= 0) return 0;
-  return Math.floor(count);
+  return Math.min(1_000_000_000_000, Math.floor(count));
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

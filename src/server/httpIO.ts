@@ -3,11 +3,24 @@ import type { UpstreamClient } from "../proxy/upstream.js";
 import type { SettingsStore } from "../settings/store.js";
 
 export const DEFAULT_MAX_UPSTREAM_RESPONSE_BYTES = 8 * 1024 * 1024;
+export const DEFAULT_MAX_RELAY_REQUEST_BYTES = 32 * 1024 * 1024;
+
+const configuredRelayBodyBytes = Number(process.env.OPENCODE_MANAGER_MAX_RELAY_BODY_BYTES);
+export const MAX_RELAY_REQUEST_BYTES = Number.isSafeInteger(configuredRelayBodyBytes) && configuredRelayBodyBytes >= 1024 * 1024
+  ? Math.min(configuredRelayBodyBytes, 128 * 1024 * 1024)
+  : DEFAULT_MAX_RELAY_REQUEST_BYTES;
 
 export class UpstreamResponseTooLargeError extends Error {
   constructor(readonly limit: number) {
     super("Upstream response exceeded the configured size limit");
     this.name = "UpstreamResponseTooLargeError";
+  }
+}
+
+export class RelayBodyTooLargeError extends Error {
+  constructor(readonly limit: number) {
+    super(`Relay request body exceeded the ${limit} byte limit`);
+    this.name = "RelayBodyTooLargeError";
   }
 }
 
@@ -24,24 +37,45 @@ export const HOP_BY_HOP = new Set([
   "content-length",
 ]);
 
-/**
- * Read a client request without imposing a gateway-specific payload cap.
- * OpenCode/Zen is responsible for accepting or rejecting multimodal payloads.
- * Admin/management routes must use readJsonBody() with an explicit limit.
- */
-export function readBody(req: IncomingMessage): Promise<Buffer> {
+/** Read a relay request with a generous multimodal-safe bound. */
+export function readBody(req: IncomingMessage, maxBytes = MAX_RELAY_REQUEST_BYTES): Promise<Buffer> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+    return Promise.reject(new RangeError("maxBytes must be a non-negative safe integer"));
+  }
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-
-    req.on("data", (chunk) => {
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    let size = 0;
+    let rejected = false;
+    const rejectTooLarge = (): void => {
+      if (rejected) return;
+      rejected = true;
+      req.removeListener("data", onData);
+      req.resume();
+      reject(new RelayBodyTooLargeError(maxBytes));
+    };
+    const onData = (chunk: unknown): void => {
+      if (rejected) return;
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
+      size += buffer.length;
+      if (size > maxBytes) {
+        rejectTooLarge();
+        return;
+      }
       chunks.push(buffer);
-    });
+    };
+
+    const declared = Number(req.headers["content-length"] ?? "");
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      rejectTooLarge();
+      return;
+    }
+
+    req.on("data", onData);
     req.on("end", () => {
-      resolve(Buffer.concat(chunks));
+      if (!rejected) resolve(Buffer.concat(chunks, size));
     });
     req.on("error", (error) => {
-      reject(error);
+      if (!rejected) reject(error);
     });
   });
 }
@@ -53,7 +87,7 @@ export class AdminBodyTooLargeError extends Error {
   }
 }
 
-/** Bounded body reader for admin/management JSON. Relay passthrough stays unbounded. */
+/** Bounded body reader for admin/management JSON. */
 export function readJsonBody(req: IncomingMessage, maxBytes = 1024 * 1024): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -73,6 +107,13 @@ export function readJsonBody(req: IncomingMessage, maxBytes = 1024 * 1024): Prom
       }
       chunks.push(buffer);
     };
+    const declared = Number(req.headers["content-length"] ?? "");
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      rejected = true;
+      req.resume();
+      reject(new AdminBodyTooLargeError(maxBytes));
+      return;
+    }
     req.on("data", onData);
     req.on("end", () => {
       if (!rejected) resolve(Buffer.concat(chunks, size));
@@ -104,7 +145,7 @@ export function sendJson(res: ServerResponse, status: number, body: unknown): vo
 /**
  * Read an admin/management body with a bound. Returns null after sending 413
  * so handlers can `if (!raw) return true;` without duplicating error mapping.
- * Relay passthrough must keep using readBody() (unbounded multimodal).
+ * Relay requests use readBody() with the configured multimodal-safe bound.
  */
 export async function readAdminBody(
   req: IncomingMessage,

@@ -13,7 +13,8 @@
  *    free model ids so a fresh boot is not empty and no paid model leaks.
  */
 
-import { mkdir, open, writeFile } from "node:fs/promises";
+import { mkdir, open, rename, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { dirname, resolve } from "node:path";
 
 export const ZEN_MODELS_URL =
@@ -51,11 +52,13 @@ async function readCacheText(path: string): Promise<string> {
 async function readCatalogText(res: Response): Promise<string> {
   const reader = res.body?.getReader?.();
   if (!reader) {
-    const text = await res.text();
-    if (Buffer.byteLength(text, "utf8") > MAX_CATALOG_BYTES) {
+    const buffer = typeof res.arrayBuffer === "function"
+      ? Buffer.from(await res.arrayBuffer())
+      : Buffer.from(await res.text(), "utf8");
+    if (buffer.length > MAX_CATALOG_BYTES) {
       throw new Error("model catalog response is too large");
     }
-    return text;
+    return buffer.toString("utf8");
   }
 
   const chunks: Buffer[] = [];
@@ -190,15 +193,16 @@ export class FreeModelRegistry {
 
   private async persist(): Promise<void> {
     await mkdir(dirname(this.cachePath), { recursive: true });
+    const temp = `${this.cachePath}.${process.pid}.${randomUUID()}.tmp`;
     await writeFile(
-      this.cachePath,
+      temp,
       JSON.stringify(
         { fetchedAt: this.lastFetchedAt, ids: this.ids() },
         null,
         2
-      ),
-      "utf8"
+      ), { encoding: "utf8", mode: 0o600 }
     );
+    await rename(temp, this.cachePath);
   }
 
   /**

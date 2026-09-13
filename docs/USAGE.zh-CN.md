@@ -47,6 +47,7 @@ PORT=9988 npm start
 | `OPENCODE_MANAGER_STATS_PATH` | 覆盖 Worker 统计文件路径 |
 | `OPENCODE_MANAGER_MODELS_URL` | 覆盖 Zen 官方模型目录 URL |
 | `OPENCODE_MANAGER_ANONYMOUS_ZEN_TIMEOUT_MS` | 匿名 Zen 探测超时，单位毫秒，范围 5000-120000 |
+| `OPENCODE_MANAGER_MAX_RELAY_BODY_BYTES` | Chat/Responses 请求体上限，默认 32 MiB，允许范围 1-128 MiB |
 | `OPENCODE_SYNTHESIZE_CLI_HEADERS` | 开启 OpenCode CLI 身份请求头合成 |
 | `OPENCODE_USER_AGENT` / `OPENCODE_CLIENT` / `OPENCODE_PROJECT` | 合成 CLI 身份请求头时使用的默认值 |
 | `OPENCODE_MANAGER_SERVICE_RUNTIME_DIR` | 覆盖 `npm start` 等服务命令使用的 PID/日志目录 |
@@ -57,7 +58,7 @@ PORT=9988 npm start
 - `X-OC-Relay-Key` 只保护 `/v1/*` 以及兼容别名 `/models`、`/chat/completions` 和 `/responses`，比较为恒定时间。
 - `/health` 按设计无需鉴权，只返回进程健康状态，不包含设置或凭证。
 - `/` 和 `/admin/api/*` 只接受回环客户端（`127.0.0.1`/`::1`），其他来源返回 `403 admin_forbidden`。
-- 管理面 JSON 请求体上限 1 MiB（超限返回 `413 body_too_large`）；转发 chat/responses 为透传多模态大负载，保持不限大小。
+- 管理面 JSON 请求体上限 1 MiB（超限返回 `413 body_too_large`）；转发 Chat/Responses 默认允许 32 MiB，超过配置上限时返回 `413 body_too_large`。
 - 上游 chat/models 单次尝试 120 s 超时，且不会携带 `Authorization` 跟随重定向。
 - `401/403` 只对该 Worker 施加短鉴权冷却；`429` 保持长限流冷却（或按 `Retry-After`）。
 - 订阅 URL 须为 2048 字符内的 `http(s)` 地址；解析出 0 节点时保留旧池，仅记录错误。
@@ -174,7 +175,7 @@ Worker 卡片可从当前检测到的免费模型集合中选择测试模型。�
 
 亲和关系在重启后仍然有效：会话→Worker 绑定与加密推理指纹（仅 sha256 摘要，不存任何消息内容）会落盘到 `data/session-affinity.json`，TTL 为 24 小时。回放了别的调用者签发的推理（`encrypted_content was not issued to this caller`）的请求会原样返回上游 400，但坏绑定会被丢弃而不是钉死，下一轮会重新选择 Worker。修复前就已中毒的历史会话仍需在 OpenCode 里新开会话。
 
-总览会区分客户端生成请求和每个 Worker 的实际上游尝试。同一重试链只算一个客户端请求，但每次实际路由仍会记录到对应 Worker；只有最终 2xx 响应算成功。全局模型分布按请求链去重，各 Worker 则展示自己实际尝试过的模型。Token 只累计成功上游响应实际报告的 `usage`。流式请求会要求上游附带 usage，但缺失时不会估算，而会反映在 usage 覆盖详情中。缓存命中率是“缓存读取输入 Token / 总输入 Token”；未缓存输入与明确的缓存写入是两个独立数值。Token 和缓存会按模型分别聚合，切换模型后仍可独立核对。路由前失败会进入网关拒绝列表。全局“重置统计”会清除 Worker 计数、最近上游尝试、最近错误和网关拒绝记录。
+总览会区分客户端生成请求和每个 Worker 的实际上游尝试。同一重试链只算一个客户端请求，但每次实际路由仍会记录到对应 Worker；只有最终 2xx 响应算成功。全局模型分布按请求链去重，各 Worker 则展示自己实际尝试过的模型。Worker 用量面板还提供最近 24 小时或 7 天的按小时趋势：堆叠柱分别显示成功和失败的上游尝试，范围摘要显示尝试数、成功率、Tokens、usage 覆盖率和缓存命中率。Token 只累计成功上游响应实际报告的 `usage`。流式请求会要求上游附带 usage，但缺失时不会估算，而会反映在 usage 覆盖详情中。缓存命中率是“缓存读取输入 Token / 总输入 Token”；未缓存输入与明确的缓存写入是两个独立数值。Token 和缓存会按模型分别聚合，切换模型后仍可独立核对。路由前失败会进入网关拒绝列表。全局“重置统计”会清除 Worker 计数、小时趋势桶、最近上游尝试、最近错误和网关拒绝记录。
 
 ## 8. 接入 OpenCode
 
@@ -241,10 +242,11 @@ curl -sS http://127.0.0.1:9876/v1/responses \
 
 - `data/settings.json`：Worker、Key、代理、订阅、后台配置，以及每个代理最后一次成功探测的公网出口 IP；需要保密。探测失败不会清除上一次成功出口，“删除全部代理”会随代理池一起删除这些记录。
 - `data/probe-state.json`：脱敏的节点探测结果和最近一次批测状态。
-- `data/worker-stats.json`：用量和请求尝试统计。
+- `data/worker-stats.json`：累计用量、最近请求尝试，以及可选的按 Worker 小时趋势（最多保留 168 个 UTC 小时桶）。
 - `data/free-models.json`：免费模型缓存，可重新生成。
 
 旧版 `worker-stats.json` 仍可读取。升级前产生的历史累计值不会补出 usage 覆盖率和按模型 Token 明细；只有升级后的新响应会增加这些细分。旧版曾用缓存字段表示未缓存输入，加载时会迁移为缓存未命中，不会继续显示为明确的缓存写入。
+小时趋势有固定数量上限；旧版本没有保存趋势时，升级后会从新事件开始累积，历史累计值仍然有效。节点探测/测试请求不会进入用量趋势。由于上游响应没有独立的记账时间，Token 和缺失 usage 会归入当前 UTC 小时。
 
 `OPENCODE_MANAGER_SETTINGS_PATH` 用于覆盖 `settings.json`，`probe-state.json` 和 `free-models.json` 会跟随它保存到同一目录；`OPENCODE_MANAGER_STATS_PATH` 单独覆盖 `worker-stats.json`。备份或迁移前先停止服务，然后复制实际使用的数据文件。升级前先停止正在运行的服务，避免新旧进程争用同一端口：
 
@@ -314,6 +316,6 @@ PORT=9988 npm start
 
 - 当前只支持 Zen，不处理 OpenCode Go。
 - 一个共享 Clash Selector 无法同时稳定承载多个不同出口；需要真正并发时，应配置独立 Mihomo 入站或实例。
-- 常规上游转发尚未设置统一请求超时；极端失联上游可能长时间等待。
+- 上游转发每次尝试有 120 秒超时；存在其他就绪 Worker 时会切换重试，最终返回有界的 `502 upstream_error`。
 - 管理后台没有独立认证，必须依赖本机监听、网络隔离或反向代理保护。
 - 官方免费模型目录会在启动时及之后每 15 分钟刷新，后台也可以立即手动刷新；目录暂时不可用时使用经过校验的上次成功缓存。

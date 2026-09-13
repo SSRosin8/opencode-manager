@@ -168,6 +168,7 @@ export async function handleCoreSettings(
         anonymous_zen: workerStats.totals(anonymousIds),
         authenticated_zen: workerStats.totals(authenticatedIds),
       },
+      usageTimeline: workerStats.usageTimeline(accountIds),
       recentAttempts,
     });
     return true;

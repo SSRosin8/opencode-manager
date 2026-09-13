@@ -129,6 +129,7 @@ describe("worker stats HTTP", () => {
         anonymous_zen: { requestCount: number };
         authenticated_zen: { requestCount: number };
       };
+      usageTimeline: Array<{ requestCount: number; successCount: number; totalTokens: number }>;
     };
 
     const used = status.workers.filter((worker) => worker.requestCount > 0);
@@ -147,6 +148,8 @@ describe("worker stats HTTP", () => {
     expect(status.usageTotalsByKind.anonymous_zen.requestCount).toBe(0);
     expect(status.workers.some((worker) => worker.modelUsage["big-pickle"] === 1)).toBe(true);
     expect(status.workers.some((worker) => worker.distinctModelCount === 1)).toBe(true);
+    expect(status.usageTimeline).toHaveLength(168);
+    expect(status.usageTimeline.some((bucket) => bucket.requestCount >= 2 && bucket.successCount >= 2 && bucket.totalTokens === 20)).toBe(true);
 
     const reset = await fetch(`${base}/admin/api/worker-stats/reset`, {
       method: "POST",
@@ -156,8 +159,11 @@ describe("worker stats HTTP", () => {
     expect(reset.status).toBe(200);
     const after = (await (await fetch(`${base}/admin/api/status`)).json()) as {
       usageTotals: { requestCount: number; totalTokens: number };
+      usageTimeline: Array<{ requestCount: number; totalTokens: number }>;
     };
     expect(after.usageTotals).toMatchObject({ requestCount: 0, totalTokens: 0 });
+    expect(after.usageTimeline).toHaveLength(168);
+    expect(after.usageTimeline.every((bucket) => bucket.requestCount === 0 && bucket.totalTokens === 0)).toBe(true);
   });
 
   it("shows the failed egress and the successful Zen key in one retry chain", async () => {

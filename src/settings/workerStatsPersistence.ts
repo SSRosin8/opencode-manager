@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { WorkerAttemptRecord, WorkerStatSnapshot } from "./workerStats.js";
+import type { UsageTimelinePersisted } from "./usageTimeline.js";
 
 export type WorkerStatsPersistShape = {
   workers: Record<
@@ -8,6 +9,7 @@ export type WorkerStatsPersistShape = {
     Omit<WorkerStatSnapshot, "accountId" | "cacheRate" | "distinctModelCount">
   >;
   attempts?: WorkerAttemptRecord[];
+  usageTimeline?: UsageTimelinePersisted;
 };
 
 export function defaultWorkerStatsPath(): string {

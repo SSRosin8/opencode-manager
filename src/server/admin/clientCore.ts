@@ -20,6 +20,7 @@ export const ADMIN_CLIENT_CORE = `    function storageGet(key) {
     let proxyTab = storageGet("opencode-manager-proxy-tab") || "nodes";
     if (!["nodes", "sources", "bindings"].includes(proxyTab)) proxyTab = "nodes";
     let showIdleWorkers = false;
+    let usageTimelineHours = Number(storageGet("opencode-manager-usage-range")) === 168 ? 168 : 24;
     let sidebarCollapsed = storageGet("opencode-manager-sidebar-collapsed") === "1";
     let nodePage = 1;
     let isolationPage = 1;

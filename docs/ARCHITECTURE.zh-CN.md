@@ -65,12 +65,14 @@ settings -> domain event types when required
 HTTP 层应由一个小型装配模块和多个领域路由组成：
 
 - Relay：模型列表、Chat Completions、Responses、鉴权、流式响应。
-- Settings/Status：设置读写、运行状态、免费模型状态。
+- Settings/Status：设置读写、运行状态、免费模型状态和累计/小时用量统计。
 - Workers：启停、连接测试、统计重置、代理分配。
 - Proxy Pool/Probe：节点增删、单测、批测状态与批测任务。
 - Subscriptions/Clash：订阅拉取、Controller 探测和导入。
 
 请求 handler 只做四件事：解析和校验请求、调用服务、映射 HTTP 响应、记录必要状态。批量测试等长流程应由独立服务维护状态机，使浏览器断开不会取消服务端任务。
+
+请求边界也由 HTTP 层统一执行：管理 JSON 默认限制为 1 MiB，Chat/Responses Relay 默认限制为 32 MiB（通过 `OPENCODE_MANAGER_MAX_RELAY_BODY_BYTES` 可调，最大 128 MiB），超限返回 `413 body_too_large`；模型、探测和订阅响应分别使用有界读取。订阅中的 Clash Controller 提示只会自动应用到本机回环地址，避免远程订阅内容把控制面重定向到任意主机。
 
 ## 管理后台拆分
 
@@ -86,10 +88,11 @@ HTTP 层应由一个小型装配模块和多个领域路由组成：
 ## 状态与持久化
 
 - `GatewaySettings` 是持久化配置的唯一规范模型；所有外部输入先归一化再保存。
-- Worker 请求、Token 和上游尝试由独立统计存储持久化，不混入 `GatewaySettings`；成功探测的公网出口 IP 属于代理节点的持久配置字段。
+- Worker 请求、Token、上游尝试和最近 168 个 UTC 小时桶由独立统计存储持久化，不混入 `GatewaySettings`；成功探测的公网出口 IP 属于代理节点的持久配置字段。`src/settings/usageTimeline.ts` 只负责有界时间桶的聚合、恢复和按 Worker 查询。
 - Clash/Mihomo 桥接支持多个独立内核候选；旧单内核字段加载时迁移为候选配置。自动选择按 Controller 鉴权、Selector 和节点命中结果择优，一次批测固定一个内核。
 - 批测进度等短期任务状态保存在独立的 `data/probe-state.json` 中，用于刷新后恢复显示，并在服务重启时将进行中的批测标记为中断；不得混入 `GatewaySettings`。
 - 写入应保持原子性或可恢复性，加载损坏文件时不得泄漏内容。
+- 免费模型缓存、设置、探测状态和会话亲和快照都使用临时文件加重命名，避免进程中断留下半份 JSON。
 - 修改配置格式时需要兼容旧数据的测试，并在使用指南中说明迁移影响。
 
 ## 本地检查

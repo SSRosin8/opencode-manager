@@ -18,6 +18,8 @@ import {
   normalizePoolProxy,
   normalizeProxyPool,
   normalizeSubscriptions,
+  isValidProxyHost,
+  normalizeProtocol,
   type ClashBridgeConfig,
   type PoolProxy,
   type ProxySubscription,
@@ -85,6 +87,7 @@ export type GatewayRejectionInput = {
 };
 
 const MAX_RECENT_GATEWAY_REJECTIONS = 50;
+const MAX_ACCOUNTS = 500;
 
 function safeEventText(value: string, maxLength: number): string {
   return value.replace(/[\r\n\t]/g, " ").trim().slice(0, maxLength);
@@ -129,11 +132,13 @@ function defaultDataPath(): string {
 function normalizeProxy(raw: unknown): AccountProxy {
   if (!raw || typeof raw !== "object") return null;
   const p = raw as Record<string, unknown>;
-  if (typeof p.host !== "string" || typeof p.port !== "number") return null;
+  const port = typeof p.port === "number" ? p.port : Number(p.port);
+  const type = typeof p.type === "string" ? normalizeProtocol(p.type) : "http";
+  if (!["http", "https", "socks5", "socks4"].includes(type) || typeof p.host !== "string" || !isValidProxyHost(p.host) || !Number.isInteger(port) || port <= 0 || port > 65535) return null;
   return {
-    type: typeof p.type === "string" ? p.type : "http",
+    type,
     host: p.host,
-    port: p.port,
+    port,
     username: typeof p.username === "string" ? p.username : undefined,
     password: typeof p.password === "string" ? p.password : undefined,
   };
@@ -153,7 +158,8 @@ function normalizeAccounts(raw: unknown): AccountConfig[] {
   // An explicit empty list is meaningful: operators may remove every Worker
   // and let a later batch proxy test repopulate anonymous Zen Workers.
   if (raw.length === 0) return [];
-  return raw.map((item, i) => {
+  const seen = new Set<string>();
+  return raw.slice(0, MAX_ACCOUNTS).map((item, i) => {
     const a = (item && typeof item === "object" ? item : {}) as Record<string, unknown>;
     const proxyId =
       typeof a.proxyId === "string" && a.proxyId
@@ -161,7 +167,7 @@ function normalizeAccounts(raw: unknown): AccountConfig[] {
         : a.proxyId === null
           ? null
           : null;
-    const apiKey = typeof a.apiKey === "string" ? a.apiKey : "";
+    const apiKey = typeof a.apiKey === "string" ? a.apiKey.slice(0, 4096) : "";
     const kind = inferAccountKind({
       apiKey,
       kind:
@@ -170,13 +176,17 @@ function normalizeAccounts(raw: unknown): AccountConfig[] {
           : undefined,
     });
     return {
-      id: typeof a.id === "string" && a.id ? a.id : `account-${i + 1}`,
+      id: typeof a.id === "string" && a.id.trim() ? a.id.trim().slice(0, 128) : `account-${i + 1}`,
       apiKey: kind === "anonymous_zen" ? "" : apiKey,
       kind,
       enabled: a.enabled !== false,
       proxyId,
       proxy: normalizeProxy(a.proxy),
     };
+  }).filter((account) => {
+    if (seen.has(account.id)) return false;
+    seen.add(account.id);
+    return true;
   });
 }
 

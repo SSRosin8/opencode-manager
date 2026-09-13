@@ -5,6 +5,15 @@ import { mergeSubscriptionProxies } from "../../proxy/pool.js";
 import { applyClashHintsToBridge } from "../clashHints.js";
 import { sendJson } from "../httpIO.js";
 
+function redactedSubscriptionUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.protocol}//${parsed.host}${parsed.pathname || "/"}`;
+  } catch {
+    return "[invalid url]";
+  }
+}
+
 export async function handleSubscriptionRefresh(
   _req: IncomingMessage,
   res: ServerResponse,
@@ -73,7 +82,7 @@ export async function handleSubscriptionRefresh(
         });
       } catch (err) {
         const rawMessage = err instanceof Error ? err.message : String(err);
-        const message = rawMessage.slice(0, 500);
+        const message = rawMessage.replace(sub.url, redactedSubscriptionUrl(sub.url)).slice(0, 500);
         subs[i] = {
           ...sub,
           lastFetchedAt: new Date().toISOString(),

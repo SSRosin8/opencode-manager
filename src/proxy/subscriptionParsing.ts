@@ -1,6 +1,7 @@
 import { parse as parseYaml } from "yaml";
 import {
   isClashProtocol,
+  isValidProxyHost,
   isUsableProtocol,
   newProxyId,
   normalizeProtocol,
@@ -101,9 +102,10 @@ function poolProxy(
   subscriptionId?: string,
   username?: string,
   password?: string,
-): PoolProxy {
+): PoolProxy | null {
   const type = normalizeProtocol(typeValue === "hy2" ? "hysteria2" : typeValue);
   const usable = isUsableProtocol(type);
+  if (!isValidProxyHost(host) || !Number.isInteger(port) || port <= 0 || port > 65535) return null;
   return {
     id: newProxyId("sub"),
     name,

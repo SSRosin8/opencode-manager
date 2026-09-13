@@ -91,7 +91,7 @@ export async function handleProxyProbes(
     let raw: Buffer;
     try {
       // Batch options are tiny (optional id list); bound tightly. Relay chat
-      // passthrough stays unbounded by design (large multimodal payloads).
+      // uses its separate multimodal-safe request bound.
       raw = await readJsonBody(req, 256 * 1024);
     } catch (err) {
       const finishedAt = new Date().toISOString();

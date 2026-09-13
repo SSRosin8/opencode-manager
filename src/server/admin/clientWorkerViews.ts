@@ -273,6 +273,7 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
       if (!body) return;
       const workers = status?.workers || [];
       const totals = status?.usageTotals || {};
+      renderUsageTimeline();
       const generationRequests = Number(totals.generationRequestCount ?? totals.generationAttemptCount ?? totals.chatCount ?? 0);
       const generationSuccess = Number(totals.generationCompletedSuccessCount ?? totals.generationSuccessCount ?? 0);
       const generationErrors = Number(totals.generationCompletedErrorCount ?? totals.generationErrorCount ?? 0);
@@ -453,8 +454,38 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
       if (cb) await cb();
     };
 
-    function openModal(id) { $(id).classList.add("show"); }
-    function closeModal(id) { $(id).classList.remove("show"); }
+    let activeModalId = null;
+    let modalOpener = null;
+    function modalFocusables(root) {
+      return Array.from(root.querySelectorAll("button, input, select, textarea, [href], [tabindex]:not([tabindex='-1'])"))
+        .filter((el) => !el.disabled && getComputedStyle(el).display !== "none" && getComputedStyle(el).visibility !== "hidden");
+    }
+    function openModal(id) {
+      const root = $(id);
+      if (!root) return;
+      modalOpener = $("btn-add-source");
+      activeModalId = id;
+      root.classList.add("show");
+      root.setAttribute("aria-hidden", "false");
+      window.setTimeout(() => {
+        if (activeModalId !== id) return;
+        const dialog = root.querySelector("[role='dialog']");
+        const first = modalFocusables(root)[0];
+        (first || dialog)?.focus?.();
+      }, 0);
+    }
+    function closeModal(id) {
+      const root = $(id);
+      if (!root) return;
+      root.classList.remove("show");
+      root.setAttribute("aria-hidden", "true");
+      if (activeModalId === id) {
+        activeModalId = null;
+        const opener = modalOpener;
+        modalOpener = null;
+        opener?.focus?.();
+      }
+    }
     $("btn-add-source").onclick = (e) => {
       e.stopPropagation();
       const menu = $("add-source-menu");
@@ -467,6 +498,27 @@ export const ADMIN_CLIENT_WORKER_VIEWS = `    function renderAccounts() {
     $("modal-sub-cancel").onclick = () => closeModal("modal-sub");
     $("modal-proxy").addEventListener("click", (e) => { if (e.target.id === "modal-proxy") closeModal("modal-proxy"); });
     $("modal-sub").addEventListener("click", (e) => { if (e.target.id === "modal-sub") closeModal("modal-sub"); });
+    document.addEventListener("keydown", (event) => {
+      if (!activeModalId) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeModal(activeModalId);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const root = $(activeModalId);
+      const focusables = modalFocusables(root);
+      if (!focusables.length) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    });
 
     $("btn-more").onclick = (e) => {
       e.stopPropagation();

@@ -4,6 +4,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { isIP } from "node:net";
 import type { AccountProxy } from "../relay/accounts.js";
 
 export type ProxyProtocol = "http" | "https" | "socks5" | "socks4";
@@ -116,6 +117,9 @@ export const DEFAULT_CLASH_BRIDGE: ClashBridgeConfig = {
   activeBridgeId: null,
 };
 
+const MAX_POOL_ENTRIES = 5_000;
+const MAX_SUBSCRIPTIONS = 100;
+
 export function newProxyId(prefix = "px"): string {
   return `${prefix}_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
 }
@@ -128,6 +132,17 @@ export function normalizeProtocol(type: string): string {
   if (t === "http" || t === "http-connect") return "http";
   if (t === "hy2") return "hysteria2";
   return t;
+}
+
+/** Reject proxy host syntax that could escape the proxy URI authority. */
+export function isValidProxyHost(value: string): boolean {
+  const raw = value.trim();
+  const host = raw.startsWith("[") && raw.endsWith("]") ? raw.slice(1, -1) : raw;
+  if (!host || host.length > 255 || /[\s/?#@\\]/.test(host)) return false;
+  if (isIP(host) === 6) return true;
+  if (isIP(host) === 4) return true;
+  return /^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/.test(host) &&
+    !host.includes("..") && !host.startsWith(".") && !host.endsWith(".");
 }
 
 /** Whether protocol is directly usable for gateway egress (no Clash). */
@@ -158,7 +173,7 @@ export function normalizePoolProxy(raw: unknown, index = 0): PoolProxy | null {
   const p = raw as Record<string, unknown>;
   const host = typeof p.host === "string" ? p.host.trim() : "";
   const port = typeof p.port === "number" ? p.port : Number(p.port);
-  if (!host || !Number.isFinite(port) || port <= 0 || port > 65535) return null;
+  if (!isValidProxyHost(host) || !Number.isInteger(port) || port <= 0 || port > 65535) return null;
 
   const typeRaw = typeof p.type === "string" ? p.type.toLowerCase().trim() : "http";
   const type = normalizeProtocol(typeRaw);
@@ -195,7 +210,7 @@ export function normalizePoolProxy(raw: unknown, index = 0): PoolProxy | null {
         ? p.controllerGroup
         : undefined,
     clashType: typeof p.clashType === "string" ? p.clashType : undefined,
-    usable,
+    usable: direct ? usable : false,
     bridgeable,
     clashNodeName:
       typeof p.clashNodeName === "string" && p.clashNodeName
@@ -236,7 +251,7 @@ export function applyProbeEgressIps(
 export function normalizeProxyPool(raw: unknown): PoolProxy[] {
   if (!Array.isArray(raw)) return [];
   const out: PoolProxy[] = [];
-  for (let i = 0; i < raw.length; i++) {
+  for (let i = 0; i < Math.min(raw.length, MAX_POOL_ENTRIES); i++) {
     const p = normalizePoolProxy(raw[i], i);
     if (p) out.push(p);
   }
@@ -246,7 +261,7 @@ export function normalizeProxyPool(raw: unknown): PoolProxy[] {
 export function normalizeSubscriptions(raw: unknown): ProxySubscription[] {
   if (!Array.isArray(raw)) return [];
   const out: ProxySubscription[] = [];
-  for (let i = 0; i < raw.length; i++) {
+  for (let i = 0; i < Math.min(raw.length, MAX_SUBSCRIPTIONS); i++) {
     const item = raw[i];
     if (!item || typeof item !== "object") continue;
     const s = item as Record<string, unknown>;
@@ -285,20 +300,30 @@ export function normalizeClashBridge(raw: unknown): ClashBridgeConfig {
   const d = DEFAULT_CLASH_BRIDGE;
   if (!raw || typeof raw !== "object") return { ...d, bridges: [] };
   const b = raw as Record<string, unknown>;
+  const normalizeApiBase = (value: unknown): string | null => {
+    if (typeof value !== "string" || !value.trim()) return null;
+    try {
+      const parsed = new URL(value.trim());
+      if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+          !parsed.hostname || parsed.username || parsed.password || parsed.search || parsed.hash) {
+        return null;
+      }
+      return parsed.toString().replace(/\/+$/, "");
+    } catch {
+      return null;
+    }
+  };
   const legacy = {
     enabled: Boolean(b.enabled),
-    apiBase:
-      typeof b.apiBase === "string" && b.apiBase.trim()
-        ? b.apiBase.trim().replace(/\/+$/, "")
-        : d.apiBase,
+    apiBase: normalizeApiBase(b.apiBase) ?? d.apiBase,
     apiSecret: typeof b.apiSecret === "string" ? b.apiSecret : "",
     localProxyHost:
-      typeof b.localProxyHost === "string" && b.localProxyHost.trim()
+      typeof b.localProxyHost === "string" && isValidProxyHost(b.localProxyHost)
         ? b.localProxyHost.trim()
         : d.localProxyHost,
     localProxyPort:
-      typeof b.localProxyPort === "number" && b.localProxyPort > 0
-        ? Math.floor(b.localProxyPort)
+      typeof b.localProxyPort === "number" && Number.isInteger(b.localProxyPort) && b.localProxyPort > 0 && b.localProxyPort <= 65535
+        ? b.localProxyPort
         : d.localProxyPort,
     selectorGroup:
       typeof b.selectorGroup === "string" && b.selectorGroup.trim()
@@ -308,14 +333,12 @@ export function normalizeClashBridge(raw: unknown): ClashBridgeConfig {
   const normalizeProfile = (value: unknown, index: number): ClashBridgeProfile | null => {
     if (!value || typeof value !== "object") return null;
     const p = value as Record<string, unknown>;
-    const apiBase = typeof p.apiBase === "string" && p.apiBase.trim()
-      ? p.apiBase.trim().replace(/\/+$/, "")
-      : "";
-    const host = typeof p.localProxyHost === "string" && p.localProxyHost.trim()
+    const apiBase = normalizeApiBase(p.apiBase);
+    const host = typeof p.localProxyHost === "string" && isValidProxyHost(p.localProxyHost)
       ? p.localProxyHost.trim()
       : "127.0.0.1";
-    const port = typeof p.localProxyPort === "number" ? Math.floor(p.localProxyPort) : Number(p.localProxyPort);
-    if (!apiBase || !Number.isFinite(port) || port <= 0 || port > 65535) return null;
+    const port = typeof p.localProxyPort === "number" ? p.localProxyPort : Number(p.localProxyPort);
+    if (!apiBase || !Number.isInteger(port) || port <= 0 || port > 65535) return null;
     return {
       id: typeof p.id === "string" && p.id.trim() ? p.id.trim() : `bridge-${index + 1}`,
       name: typeof p.name === "string" && p.name.trim() ? p.name.trim() : `Bridge ${index + 1}`,
@@ -513,8 +536,6 @@ export function mergeControllerProxiesByBridge(
 ): PoolProxy[] {
   if (!byBridge.size) return pool;
   const previousById = new Map(pool.map((proxy) => [proxy.id, proxy] as const));
-  const incomingIds = new Set<string>();
-  for (const list of byBridge.values()) for (const proxy of list) incomingIds.add(proxy.id);
   // Keep all non-controller plus controller nodes whose bridgeId is not being refreshed
   const kept = pool.filter((proxy) => {
     if (proxy.source !== "controller") return true;
@@ -543,7 +564,10 @@ export function proxyToUri(proxy: NonNullable<AccountProxy>): string {
   const t = normalizeProtocol(proxy.type || "http");
   const scheme =
     t === "socks5" || t === "socks4" ? t : t === "https" ? "https" : "http";
-  return `${scheme}://${auth}${proxy.host}:${proxy.port}`;
+  const host = proxy.host.includes(":") && !proxy.host.startsWith("[")
+    ? `[${proxy.host}]`
+    : proxy.host;
+  return `${scheme}://${auth}${host}:${proxy.port}`;
 }
 
 /** Whether a pool entry can be selected for a worker given current bridge settings. */

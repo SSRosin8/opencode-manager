@@ -87,7 +87,13 @@ function safeErrorMessage(error: unknown, apiKey: string, proxy?: AccountProxy):
   if (proxy?.password) message = message.split(proxy.password).join("[REDACTED]");
   if (proxy?.username) message = message.split(proxy.username).join("[REDACTED]");
   message = message.replace(/:\/\/[^/\s@]+@/g, "://[REDACTED]@");
+  message = message.replace(/([?&](?:token|key|api[-_]?key|secret|password)=)[^&\s]+/gi, "$1[REDACTED]");
   return message.slice(0, 500);
+}
+
+/** Error text returned to API clients must not include credentials or tokenized URLs. */
+export function sanitizeUpstreamError(error: unknown): string {
+  return safeErrorMessage(error, "");
 }
 
 function effectiveApiKey(apiKey: string, kind: AccountKind): string {

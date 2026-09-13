@@ -1,8 +1,44 @@
+import { EventEmitter } from "node:events";
+import type { IncomingMessage } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import {
+  RelayBodyTooLargeError,
   UpstreamResponseTooLargeError,
+  readBody,
   readStreamFully,
 } from "../src/server/httpIO.js";
+
+function requestDouble(): IncomingMessage & { resume: ReturnType<typeof vi.fn> } {
+  const request = new EventEmitter() as IncomingMessage & { resume: ReturnType<typeof vi.fn> };
+  Object.assign(request, { headers: {}, resume: vi.fn() });
+  return request;
+}
+
+describe("readBody", () => {
+  it("reads a multimodal-sized body up to the configured bound", async () => {
+    const request = requestDouble();
+    const result = readBody(request, 4);
+    request.emit("data", Buffer.from("ab"));
+    request.emit("data", Buffer.from("cd"));
+    request.emit("end");
+
+    await expect(result).resolves.toEqual(Buffer.from("abcd"));
+  });
+
+  it("stops accumulating as soon as a request exceeds its bound", async () => {
+    const request = requestDouble();
+    const result = readBody(request, 4);
+    request.emit("data", Buffer.from("abcde"));
+
+    await expect(result).rejects.toEqual(
+      expect.objectContaining({
+        name: RelayBodyTooLargeError.name,
+        message: "Relay request body exceeded the 4 byte limit",
+      })
+    );
+    expect(request.resume).toHaveBeenCalledOnce();
+  });
+});
 
 describe("readStreamFully", () => {
   it("returns a response whose size is exactly the configured limit", async () => {

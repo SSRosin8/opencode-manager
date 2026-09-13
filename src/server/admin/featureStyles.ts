@@ -175,12 +175,13 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
     .usage-summary-item .detail { display:none; }
     .metric-footline { color:var(--muted); font-size:11px; }
     .overview-workers-table { min-width:900px; table-layout:fixed; }
-    .overview-workers-table th:nth-child(1) { width:23%; }
-    .overview-workers-table th:nth-child(2) { width:20%; }
-    .overview-workers-table th:nth-child(3), .overview-workers-table th:nth-child(4) { width:7%; }
-    .overview-workers-table th:nth-child(5), .overview-workers-table th:nth-child(6) { width:14%; }
-    .overview-workers-table th:nth-child(7) { width:7%; }
-    .overview-workers-table th:nth-child(8) { width:8%; }
+    .overview-workers-table th:nth-child(1) { width:22%; }
+    .overview-workers-table th:nth-child(2) { width:18%; }
+    .overview-workers-table th:nth-child(3), .overview-workers-table th:nth-child(4) { width:11%; }
+    .overview-workers-table th:nth-child(5), .overview-workers-table th:nth-child(6) { width:10%; }
+    .overview-workers-table th:nth-child(7) { width:8%; }
+    .overview-workers-table th:nth-child(8) { width:10%; }
+    table.nodes.overview-workers-table th { white-space:normal; overflow-wrap:anywhere; line-height:1.25; }
     table.nodes.overview-workers-table td { white-space:normal; overflow-wrap:anywhere; }
     .worker-route-primary { max-width:380px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .mobile-cell-label { display:none; }
@@ -411,6 +412,7 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
     .modal-root {
       position: fixed; inset: 0; z-index: 90; display: none;
       align-items: center; justify-content: center;
+      padding: 16px; overflow-y: auto;
       background: rgba(0,0,0,0.48); backdrop-filter: blur(4px);
     }
     .modal-root.show { display: flex; animation: modal-backdrop-in 0.2s ease-out; }
@@ -420,6 +422,7 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
       background: var(--glass-bg); backdrop-filter: blur(var(--glass-blur)) saturate(1.2);
       border: 1px solid var(--glass-border);
       border-radius: var(--radius); box-shadow: var(--shadow-lg); padding: 18px;
+      max-height: calc(100dvh - 32px); overflow-y: auto;
       animation: modal-enter 0.3s var(--ease-enter);
     }
     @keyframes modal-enter {
@@ -501,6 +504,7 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
     @media (max-width: 900px) {
       html, body, .app { max-width:100%; overflow-x:hidden; }
       .topbar { padding: 0 10px; gap: 8px; }
+      .topbar { position: sticky; top: 0; }
       .addr-box { display: none; }
       .accent-switcher { display:none; }
       .body { flex-direction: column; }
@@ -508,6 +512,7 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
         display: flex; width: 100%; height: 52px; padding: 6px;
         border-right: none; border-bottom: 1px solid var(--border);
         overflow-x: auto; overflow-y: hidden;
+        position: sticky; top: var(--topbar-h); z-index: 30;
       }
       .nav { flex: none; flex-direction: row; gap: 4px; padding: 0; }
       .nav-item { width: auto; flex-shrink: 0; padding: 0 10px; }
@@ -557,6 +562,7 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
       .worker-card .worker-actions { flex-wrap: wrap; }
       .worker-card .btn-toggle-worker { position: absolute; top: 0; right: 0; }
       .confirm-float { left: 12px; right: 12px; bottom: 12px; width: auto; }
+      .toast { left: 12px; right: 12px; bottom: 12px; min-width: 0; max-width: none; }
     }
     @media (max-width: 600px) {
       .models-metrics { grid-template-columns:1fr; }
@@ -575,6 +581,16 @@ export const ADMIN_FEATURE_STYLES = `    /* ── Proxy Pool layout ── */
       .nav-item { min-height:44px; }
       .page-actions .btn:not(.btn-icon), .table-tools .btn:not(.btn-icon) { min-height:44px; }
       .pager button { min-width:44px; height:44px; }
+      .metrics { grid-template-columns: 1fr; }
+      .modal-root { padding: 10px; }
+      .modal { width: min(440px, calc(100vw - 20px)); max-height: calc(100dvh - 20px); padding: 14px; }
+    }
+    @media (max-width: 420px) {
+      .brand-name { display: none; }
+      .topbar-left { flex: 1; min-width: 0; }
+      .topbar-mid { flex: 1; }
+      .run-pill { max-width: 96px; overflow: hidden; text-overflow: ellipsis; }
+      .topbar-right { gap: 4px; }
     }
   </style>
 `;

@@ -43,6 +43,7 @@ The default bind address is `127.0.0.1`. Even when bound to `0.0.0.0`, `/` and `
 | `OPENCODE_MANAGER_STATS_PATH` | Override the Worker statistics file path |
 | `OPENCODE_MANAGER_MODELS_URL` | Override the official Zen model catalog URL |
 | `OPENCODE_MANAGER_ANONYMOUS_ZEN_TIMEOUT_MS` | Anonymous Zen probe timeout in milliseconds, bounded to 5,000-120,000 |
+| `OPENCODE_MANAGER_MAX_RELAY_BODY_BYTES` | Maximum Chat/Responses request body; defaults to 32 MiB and is bounded to 1-128 MiB |
 | `OPENCODE_SYNTHESIZE_CLI_HEADERS` | Enable OpenCode CLI identity-header synthesis |
 | `OPENCODE_USER_AGENT` / `OPENCODE_CLIENT` / `OPENCODE_PROJECT` | Defaults for synthesized CLI identity headers |
 | `OPENCODE_MANAGER_SERVICE_RUNTIME_DIR` | Override the service PID/log directory used by `npm start` and related commands |
@@ -53,7 +54,7 @@ The default bind address is `127.0.0.1`. Even when bound to `0.0.0.0`, `/` and `
 - `X-OC-Relay-Key` protects `/v1/*` and the compatibility aliases `/models`, `/chat/completions`, and `/responses` only. Comparison is constant-time.
 - `/health` is intentionally unauthenticated and returns only process health, not settings or credentials.
 - `/` and `/admin/api/*` accept loopback clients only (`127.0.0.1`/`::1`); other clients get `403 admin_forbidden`.
-- Admin JSON bodies are capped at 1 MiB (`413 body_too_large`); relay chat/responses passthrough stays unbounded for multimodal payloads.
+- Admin JSON bodies are capped at 1 MiB (`413 body_too_large`); relay Chat/Responses bodies default to 32 MiB and return `413 body_too_large` when the configured bound is exceeded.
 - Upstream chat/models attempts time out after 120 s and never follow redirects with `Authorization` attached.
 - A `401/403` marks only a short auth cooldown on that Worker; `429` keeps the long rate-limit cooldown (or `Retry-After`).
 - Subscription URLs must be `http(s)` up to 2048 chars; a fetch that parses 0 nodes keeps the existing pool and only records an error.
@@ -163,7 +164,7 @@ OpenCode sessions stay strictly sticky to a Worker for cache locality and reason
 
 Affinity survives restarts: session→Worker bindings and encrypted-reasoning fingerprints (sha256 digests only, never message content) persist to `data/session-affinity.json` with a 24 h TTL. Requests that replay reasoning issued to a different caller (`encrypted_content was not issued to this caller`) are returned as-is; the poisoned binding is dropped instead of pinned, so the next turn re-picks a Worker. Histories poisoned before the fix still need a fresh OpenCode session.
 
-The Overview distinguishes client generation requests from actual per-Worker upstream attempts. A retry chain counts as one client request, while every routed attempt remains visible on its Worker; only 2xx final responses count as successful. Global model distribution is deduplicated by request chain, while each Worker shows its actual attempted models. Tokens are accumulated only when a successful upstream response reports `usage`. Streaming requests ask the upstream to include usage, but missing usage is still shown in the coverage details instead of being estimated. Cache hit rate is cache-read input tokens divided by total input tokens; uncached input and explicit cache writes are separate values. Token and cache totals are grouped by model so model changes can be inspected independently. Failures before routing appear under Gateway rejections. Global **Reset stats** clears Worker counters, recent upstream attempts, recent errors, and Gateway rejections.
+The Overview distinguishes client generation requests from actual per-Worker upstream attempts. A retry chain counts as one client request, while every routed attempt remains visible on its Worker; only 2xx final responses count as successful. Global model distribution is deduplicated by request chain, while each Worker shows its actual attempted models. The Worker usage panel also includes an hourly trend for the last 24 hours or 7 days: stacked bars show successful and failed upstream attempts, and the range summary shows attempts, success rate, tokens, usage coverage, and cache hit rate. Tokens are accumulated only when a successful upstream response reports `usage`. Streaming requests ask the upstream to include usage, but missing usage is still shown in the coverage details instead of being estimated. Cache hit rate is cache-read input tokens divided by total input tokens; uncached input and explicit cache writes are separate values. Token and cache totals are grouped by model so model changes can be inspected independently. Failures before routing appear under Gateway rejections. Global **Reset stats** clears Worker counters, hourly trend buckets, recent upstream attempts, recent errors, and Gateway rejections.
 
 ## 8. Connect OpenCode
 
@@ -226,10 +227,11 @@ Skip step 3 when Clash is not used. HTTP/SOCKS proxies still need the real-egres
 
 - `data/settings.json`: Workers, keys, proxies, subscriptions, Admin settings, and each proxy's last successful public egress IP; sensitive. A failed probe does not erase the last successful egress, while **Remove all** removes it with the proxy pool.
 - `data/probe-state.json`: sanitized proxy probe results and the latest batch state.
-- `data/worker-stats.json`: usage and attempt statistics.
+- `data/worker-stats.json`: cumulative usage, recent attempts, and an optional per-Worker hourly timeline (up to 168 UTC buckets).
 - `data/free-models.json`: rebuildable free-model cache.
 
 Older `worker-stats.json` files remain readable. Historical totals created before usage coverage and per-model token tracking do not gain those details retroactively; only new responses add them. A legacy cache value that represented uncached input is migrated to cache misses rather than being reported as an explicit cache write.
+The hourly timeline is bounded and is rebuilt from new events after an upgrade; old cumulative totals remain valid even when no timeline was persisted by an older build. Probe/test requests are excluded from the usage trend. Token and missing-usage events are assigned to the current UTC hour because upstream responses do not carry a separate accounting timestamp.
 
 `OPENCODE_MANAGER_SETTINGS_PATH` overrides `settings.json`; `probe-state.json` and `free-models.json` follow it into the same directory. `OPENCODE_MANAGER_STATS_PATH` independently overrides `worker-stats.json`. Stop the service before copying the resulting data files for backup or migration.
 
@@ -278,6 +280,6 @@ Subscription URLs normally contain access tokens. Do not publish complete URLs, 
 
 - Zen only; OpenCode Go is unsupported.
 - One shared Clash Selector cannot safely sustain simultaneous distinct egresses. Use independent Mihomo inbounds or instances for true concurrency.
-- Normal upstream relay requests do not yet have a unified request timeout; a severely stalled upstream can wait for an extended period.
+- Upstream relay attempts have a 120-second timeout. A stalled upstream is retried on another ready Worker when one is available, then returned as a bounded `502 upstream_error`.
 - Admin has no separate authentication and must be protected by local binding, network isolation, or a reverse proxy.
 - The official free-model catalog refreshes on startup and every 15 minutes; Admin can request an immediate refresh. A validated last-success cache is used when the catalog is temporarily unavailable.

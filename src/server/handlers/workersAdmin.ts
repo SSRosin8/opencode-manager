@@ -89,6 +89,7 @@ export async function handleWorkersAdmin(
       ok: true,
       workers: workerStats.listForAccounts(accountIds),
       usageTotals: workerStats.totals(accountIds),
+      usageTimeline: workerStats.usageTimeline(accountIds),
     });
     return true;
   }

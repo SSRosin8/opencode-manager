@@ -111,6 +111,24 @@ ${ADMIN_GETTING_STARTED}
             </div>
             <div class="collapsible-body" id="ov-worker-usage-body">
               <div class="usage-summary" id="ov-usage-summary"></div>
+              <section class="usage-timeline" aria-labelledby="usage-timeline-title">
+                <div class="usage-timeline-head">
+                  <div>
+                    <h3 id="usage-timeline-title" data-i18n="usageTrend">Usage trend</h3>
+                    <p class="panel-sub" data-i18n="usageTrendSub">Upstream attempts and reported token usage by hour.</p>
+                  </div>
+                  <div class="segmented usage-range" role="group" aria-label="Usage trend range">
+                    <button type="button" class="segment active" data-timeline-hours="24" data-i18n="last24Hours">24h</button>
+                    <button type="button" class="segment" data-timeline-hours="168" data-i18n="last7Days">7d</button>
+                  </div>
+                </div>
+                <div id="ov-usage-chart" class="usage-chart" role="img" aria-live="polite"></div>
+                <div id="ov-usage-timeline-summary" class="usage-timeline-summary"></div>
+                <div class="usage-timeline-legend" id="ov-usage-timeline-legend" aria-hidden="true">
+                  <span><i class="usage-legend-dot success"></i><span data-i18n="trendSuccess">Success</span></span>
+                  <span><i class="usage-legend-dot failure"></i><span data-i18n="trendFailure">Failure</span></span>
+                </div>
+              </section>
               <div class="table-wrap">
                 <table class="nodes overview-workers-table">
                 <thead>
@@ -449,7 +467,7 @@ ${ADMIN_MODELS_MARKUP}        <!-- Client usage -->
     </div>
   </div>
 
-  <div class="toast" id="toast">
+  <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true">
     <span id="toast-icon">✓</span>
     <span id="toast-msg"></span>
     <button type="button" class="x" id="toast-close">×</button>
@@ -468,9 +486,9 @@ ${ADMIN_GUIDE_MODAL}
     </div>
   </div>
 
-  <div class="modal-root" id="modal-proxy">
-    <div class="modal form">
-      <h3 data-i18n="addProxy">Add Proxy</h3>
+  <div class="modal-root" id="modal-proxy" role="presentation" aria-hidden="true">
+    <div class="modal form" role="dialog" aria-modal="true" aria-labelledby="modal-proxy-title" tabindex="-1">
+      <h3 id="modal-proxy-title" data-i18n="addProxy">Add Proxy</h3>
       <div class="row two">
         <div>
           <label class="field" for="pxName" data-i18n="colName">Name</label>
@@ -513,9 +531,9 @@ ${ADMIN_GUIDE_MODAL}
     </div>
   </div>
 
-  <div class="modal-root" id="modal-sub">
-    <div class="modal form">
-      <h3 data-i18n="addSubscription">Add Subscription</h3>
+  <div class="modal-root" id="modal-sub" role="presentation" aria-hidden="true">
+    <div class="modal form" role="dialog" aria-modal="true" aria-labelledby="modal-sub-title" tabindex="-1">
+      <h3 id="modal-sub-title" data-i18n="addSubscription">Add Subscription</h3>
       <div class="row">
         <div>
           <label class="field" for="subName" data-i18n="colName">Name</label>

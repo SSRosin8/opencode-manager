@@ -7,6 +7,21 @@ type ClashHints = {
   selectorGroups?: string[];
 };
 
+function safeLocalController(value: string): string | null {
+  try {
+    const parsed = new URL(value.includes("://") ? value : `http://${value}`);
+    const hostname = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+        !["localhost", "127.0.0.1", "::1"].includes(hostname) ||
+        parsed.username || parsed.password || parsed.search || parsed.hash) {
+      return null;
+    }
+    return parsed.toString().replace(/\/+$/, "");
+  } catch {
+    return null;
+  }
+}
+
 export function applyClashHintsToBridge(
   current: GatewaySettings["clashBridge"],
   hints: ClashHints | undefined
@@ -14,13 +29,14 @@ export function applyClashHintsToBridge(
   if (!hints) return current;
 
   const next = { ...current };
-  if (hints.mixedPort && hints.mixedPort > 0) {
+  if (hints.mixedPort && Number.isInteger(hints.mixedPort) && hints.mixedPort > 0 && hints.mixedPort <= 65535) {
     next.localProxyPort = hints.mixedPort;
-  } else if (hints.port && hints.port > 0 && !current.enabled) {
+  } else if (hints.port && Number.isInteger(hints.port) && hints.port > 0 && hints.port <= 65535 && !current.enabled) {
     next.localProxyPort = hints.port;
   }
-  if (hints.externalController) {
-    next.apiBase = hints.externalController.replace(/\/+$/, "");
+  if (hints.externalController && !current.enabled) {
+    const controller = safeLocalController(hints.externalController);
+    if (controller) next.apiBase = controller;
   }
 
   if (hints.selectorGroups?.length) {

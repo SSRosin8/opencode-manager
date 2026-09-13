@@ -332,7 +332,8 @@ describe("WorkerStatsStore", () => {
     const dir = await mkdtemp(join(tmpdir(), "opencode-manager-ws-"));
     try {
       const path = join(dir, "stats.json");
-      const a = new WorkerStatsStore({ path, persist: true });
+      const fixedNow = Date.parse("2026-08-19T01:30:00.000Z");
+      const a = new WorkerStatsStore({ path, persist: true, now: () => fixedNow });
       a.recordRequest("acc", { kind: "chat", status: 200 });
       a.recordAttempt(
         attempt({ accountId: "acc", requestId: "persisted-attempt" }),
@@ -347,7 +348,7 @@ describe("WorkerStatsStore", () => {
         cacheMissTokens: 3,
       }, "big-pickle");
       await a.persist();
-      const b = new WorkerStatsStore({ path, persist: true });
+      const b = new WorkerStatsStore({ path, persist: true, now: () => fixedNow });
       await b.load();
       expect(b.get("acc").totalTokens).toBe(7);
       expect(b.get("acc").chatCount).toBe(2);
@@ -358,6 +359,7 @@ describe("WorkerStatsStore", () => {
       expect(b.get("acc").cacheWriteTokens).toBe(2);
       expect(b.get("acc").cacheMissTokens).toBe(3);
       expect(b.get("acc").modelTokenUsage["big-pickle"]?.totalTokens).toBe(7);
+      expect(b.usageTimeline(["acc"], 1)[0]).toMatchObject({ requestCount: 2, successCount: 2, totalTokens: 7, usageReportedCount: 1 });
       expect(b.recentAttempts()).toEqual([
         expect.objectContaining({
           requestId: "persisted-attempt",
