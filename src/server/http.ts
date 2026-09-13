@@ -311,6 +311,13 @@ export function listen(app: App): Promise<void> {
 }
 
 export function close(app: App): Promise<void> {
+  // Flush routing-only affinity before draining: throttled saves can lag
+  // restarts and drop the newest bindings onto new workers.
+  try {
+    app.upstream.flushAffinity();
+  } catch {
+    // Persistence must never break shutdown.
+  }
   const closeServer = new Promise<void>((resolve, reject) => {
     app.store.setRunning(false);
     app.server.close((error) => (error ? reject(error) : resolve()));

@@ -9,6 +9,7 @@ import { join } from "node:path";
 import {
   AccountRotator,
   DEFAULT_SESSION_AFFINITY_TTL_MS,
+  containsStaleReasoningMessage,
   extractEncryptedBlobHashes,
   isStaleReasoningError,
 } from "../src/relay/index.js";
@@ -110,6 +111,14 @@ describe("isStaleReasoningError", () => {
     expect(isStaleReasoningError(400, "")).toBe(false);
     expect(isStaleReasoningError(400, "bad max_tokens value")).toBe(false);
   });
+
+  it("matches stale messages without a status gate for SSE payloads", () => {
+    expect(
+      containsStaleReasoningMessage("reasoning `encrypted_content` was not issued to this caller")
+    ).toBe(true);
+    expect(containsStaleReasoningMessage("")).toBe(false);
+    expect(containsStaleReasoningMessage("bad max_tokens value")).toBe(false);
+  });
 });
 
 describe("rotator affinity snapshots and blob hints", () => {
@@ -178,6 +187,18 @@ describe("rotator affinity snapshots and blob hints", () => {
     expect(rot.pick("s-b", 1_000).id).toBe("k2");
     rot.unbindSession("s-a");
     expect(rot.snapshotSessions().map((entry) => entry.key)).toEqual(["s-b"]);
+  });
+
+  it("forgets blob hints without touching other mappings", () => {
+    const rot = twoWorkers();
+    const hashA = extractEncryptedBlobHashes(blobBody(BLOB_A));
+    const hashB = extractEncryptedBlobHashes(blobBody(BLOB_B));
+    rot.learnBlobWorkers(hashA, "k1", 1_000);
+    rot.learnBlobWorkers(hashB, "k2", 1_000);
+    rot.forgetBlobWorkers(hashA);
+    expect(rot.findBlobWorker(hashA, 1_000)).toBeNull();
+    expect(rot.findBlobWorker(hashB, 1_000)?.id).toBe("k2");
+    expect(() => rot.forgetBlobWorkers([])).not.toThrow();
   });
 });
 
@@ -268,6 +289,134 @@ describe("upstream stale-reasoning escape", () => {
     });
     expect(client.rotator.snapshotSessions().map((entry) => entry.key)).toEqual(["steady"]);
     expect(k1.consecutiveFails).toBe(0);
+  });
+
+  it("detects stale 400s without content-length (chunked) and keeps the body intact", async () => {
+    const text = JSON.stringify(staleBody);
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(text, {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        })
+    );
+    const client = new UpstreamClient(baseSettings(), fetchImpl);
+    const failed = await client.chatCompletions({
+      body: blobBody(BLOB_A),
+      stream: false,
+      clientHeaders: { "x-session-id": "chunked-poisoned" },
+    });
+    expect(failed.status).toBe(400);
+    expect(await new Response(failed.body).text()).toBe(text);
+    expect(client.rotator.snapshotSessions()).toEqual([]);
+  });
+
+  it("detects stale 400s wrapped as SSE", async () => {
+    const frames = `data: ${JSON.stringify(staleBody)}\n\n`;
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(frames, {
+          status: 400,
+          headers: { "Content-Type": "text/event-stream" },
+        })
+    );
+    const client = new UpstreamClient(baseSettings(), fetchImpl);
+    const failed = await client.chatCompletions({
+      body: blobBody(BLOB_A),
+      stream: false,
+      clientHeaders: { "x-session-id": "sse-poisoned" },
+    });
+    expect(failed.status).toBe(400);
+    expect(await new Response(failed.body).text()).toBe(frames);
+    expect(client.rotator.snapshotSessions()).toEqual([]);
+  });
+
+  it("passes over-budget 400 bodies through complete and keeps affinity", async () => {
+    const big = `{"error":{"message":"reasoning \`encrypted_content\` was not issued to this caller","pad":"${"p".repeat(40_000)}"}}`;
+    const fetchImpl = vi.fn(
+      async () => new Response(big, { status: 400, headers: { "Content-Type": "application/json" } })
+    );
+    const client = new UpstreamClient(baseSettings(), fetchImpl);
+    const failed = await client.chatCompletions({
+      body: blobBody(BLOB_A),
+      stream: false,
+      clientHeaders: { "x-session-id": "big-error" },
+    });
+    expect(failed.status).toBe(400);
+    expect(await new Response(failed.body).text()).toBe(big);
+    expect(client.rotator.snapshotSessions().map((entry) => entry.key)).toEqual(["big-error"]);
+  });
+
+  it("forgets blob hints when a turn goes stale", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, { choices: [] }))
+      .mockResolvedValueOnce(jsonResponse(400, staleBody));
+    const client = new UpstreamClient(baseSettings(), fetchImpl);
+    const body = blobBody(BLOB_A);
+    const headers = { "x-session-id": "s-forget" };
+    const first = await client.chatCompletions({ body, stream: false, clientHeaders: headers });
+    expect(first.status).toBe(200);
+    const hashes = extractEncryptedBlobHashes(body);
+    expect(client.rotator.findBlobWorker(hashes)?.id).toBe(first.accountId);
+    const failed = await client.chatCompletions({ body, stream: false, clientHeaders: headers });
+    expect(failed.status).toBe(400);
+    expect(client.rotator.snapshotSessions()).toEqual([]);
+    expect(client.rotator.findBlobWorker(hashes)).toBeNull();
+  });
+
+  it("defers blob learning for streams and settles after piping", async () => {
+    const frames =
+      'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n' + "data: [DONE]\n\n";
+    const fetchImpl = vi.fn(
+      async () => new Response(frames, { status: 200, headers: { "Content-Type": "text/event-stream" } })
+    );
+    const client = new UpstreamClient(baseSettings(), fetchImpl);
+    const body = blobBody(BLOB_A);
+    const headers = { "x-session-id": "s-stream" };
+    const result = await client.chatCompletions({ body, stream: true, clientHeaders: headers });
+    expect(result.status).toBe(200);
+    const hashes = extractEncryptedBlobHashes(body);
+    // HTTP 200 alone proves nothing for streams: learning waits for settle.
+    expect(client.rotator.findBlobWorker(hashes)).toBeNull();
+    client.settleStreamBlobs({
+      body,
+      clientHeaders: headers,
+      accountId: result.accountId,
+      status: 200,
+      sseText: frames,
+    });
+    expect(client.rotator.findBlobWorker(hashes)?.id).toBe(result.accountId);
+  });
+
+  it("unbinds and forgets blobs when SSE embeds a stale-reasoning rejection", async () => {
+    const frames =
+      'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n' + "data: [DONE]\n\n";
+    const fetchImpl = vi.fn(
+      async () => new Response(frames, { status: 200, headers: { "Content-Type": "text/event-stream" } })
+    );
+    const client = new UpstreamClient(baseSettings(), fetchImpl);
+    const body = blobBody(BLOB_A);
+    const headers = { "x-session-id": "s-sse-stale" };
+    const result = await client.chatCompletions({ body, stream: true, clientHeaders: headers });
+    client.settleStreamBlobs({
+      body,
+      clientHeaders: headers,
+      accountId: result.accountId,
+      status: 200,
+      sseText: frames,
+    });
+    const hashes = extractEncryptedBlobHashes(body);
+    expect(client.rotator.findBlobWorker(hashes)?.id).toBe(result.accountId);
+    client.settleStreamBlobs({
+      body,
+      clientHeaders: headers,
+      accountId: result.accountId,
+      status: 200,
+      sseText: `data: ${JSON.stringify(staleBody)}\n\n`,
+    });
+    expect(client.rotator.snapshotSessions().map((entry) => entry.key)).not.toContain("s-sse-stale");
+    expect(client.rotator.findBlobWorker(hashes)).toBeNull();
   });
 
   it("follows blob hints for keyless turns", async () => {
