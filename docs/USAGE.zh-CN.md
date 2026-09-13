@@ -170,7 +170,9 @@ Worker 卡片可从当前检测到的免费模型集合中选择测试模型。�
 - 登录 Zen 优先：先用登录 Zen，再回退到匿名 Worker。
 - 混合轮询：按 Worker 配置顺序选择。
 
-网关会保持 OpenCode 会话与 Worker 的粘性，以提高缓存命中；遇到 401、403、429、5xx 或传输错误时切换 Worker 并进入冷却。
+网关会保持 OpenCode 会话与 Worker 的严格粘性，以保证缓存命中与推理连续性：只要绑定的 Worker 可用，会话绝不会中途切换，即使策略优先的 Worker 恢复可用也一样；只有遇到 401、403、429、5xx 或传输错误时才切换并进入冷却。会话标识取自 `x-session-id` / `x-opencode-session` / `x-session-affinity` 请求头，Responses 接口还会使用 `previous_response_id`。
+
+亲和关系在重启后仍然有效：会话→Worker 绑定与加密推理指纹（仅 sha256 摘要，不存任何消息内容）会落盘到 `data/session-affinity.json`，TTL 为 24 小时。回放了别的调用者签发的推理（`encrypted_content was not issued to this caller`）的请求会原样返回上游 400，但坏绑定会被丢弃而不是钉死，下一轮会重新选择 Worker。修复前就已中毒的历史会话仍需在 OpenCode 里新开会话。
 
 总览会区分客户端生成请求和每个 Worker 的实际上游尝试。同一重试链只算一个客户端请求，但每次实际路由仍会记录到对应 Worker；只有最终 2xx 响应算成功。全局模型分布按请求链去重，各 Worker 则展示自己实际尝试过的模型。Token 只累计成功上游响应实际报告的 `usage`。流式请求会要求上游附带 usage，但缺失时不会估算，而会反映在 usage 覆盖详情中。缓存命中率是“缓存读取输入 Token / 总输入 Token”；未缓存输入与明确的缓存写入是两个独立数值。Token 和缓存会按模型分别聚合，切换模型后仍可独立核对。路由前失败会进入网关拒绝列表。全局“重置统计”会清除 Worker 计数、最近上游尝试、最近错误和网关拒绝记录。
 
@@ -272,6 +274,10 @@ npm start
 ### Worker 测试失败
 
 根据结果区分出口探测失败、401/403 Key 无效、429 额度耗尽和 5xx 临时故障。登录 Worker 的 Key 与匿名 Zen 额度是分别测试的。
+
+### `encrypted_content was not issued to this caller`
+
+被恢复的会话回放了别的 Worker/出口签发的推理（常见于长时间中断、更换节点或重启之后）。在 OpenCode 里新开会话即可；网关会自动丢弃中毒的绑定。
 
 ### Controller 连接失败
 

@@ -11,6 +11,7 @@ import { UpstreamClient } from "../proxy/upstream.js";
 import { SettingsStore } from "../settings/store.js";
 import { WorkerStatsStore } from "../settings/workerStats.js";
 import { ProbeStateStore } from "../settings/probeState.js";
+import { SessionAffinityStore } from "../settings/sessionAffinity.js";
 import { ADMIN_HTML } from "./adminHtml.js";
 import { newBatchProbeProgress, type RequestContext } from "./context.js";
 import { BatchProbeControl } from "./batchProbeControl.js";
@@ -49,7 +50,32 @@ export async function createApp(opts?: {
   await store.load();
   const settings = store.get();
   const clashProbeQueue = new ClashSwitchQueue();
-  const upstream = new UpstreamClient(settings, opts?.fetchImpl, undefined, clashProbeQueue);
+  // Session affinity survives restarts via a routing-only snapshot (session
+  // ids + blob digests, no message content). Disabled under test runners so
+  // relay tests stay hermetic.
+  const sessionAffinity = process.env.VITEST ? null : new SessionAffinityStore(store.path);
+  const upstream = new UpstreamClient(
+    settings,
+    opts?.fetchImpl,
+    undefined,
+    clashProbeQueue,
+    undefined,
+    sessionAffinity
+      ? {
+          save: (snapshot) => {
+            void sessionAffinity.save(snapshot).catch(() => undefined);
+          },
+        }
+      : null
+  );
+  if (sessionAffinity) {
+    await sessionAffinity
+      .load(new Set(settings.accounts.map((account) => account.id)))
+      .then(
+        (loaded) => upstream.restoreAffinity(loaded),
+        () => undefined
+      );
+  }
   store.updateReadyCount(upstream.rotator.readyCount(), upstream.rotator.getAccounts().length);
   const probes = opts?.probes ?? new ProbeResultCache();
   const probeState = new ProbeStateStore(store.path);

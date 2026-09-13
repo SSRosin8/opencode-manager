@@ -11,10 +11,17 @@ import {
   buildResponsesUrl,
   buildModelsUrl,
   buildUpstreamHeaders,
+  DEFAULT_SESSION_AFFINITY_TTL_MS,
+  extractEncryptedBlobHashes,
+  isStaleReasoningError,
+  resolveSessionKey,
   transformRequestBody,
   transformResponsesRequestBody,
   type AccountConfig,
   type AccountProxy,
+  type PersistedAffinityEntry,
+  type SessionAffinitySink,
+  type SessionAffinitySnapshot,
 } from "../relay/index.js";
 import type { AccountKind } from "../relay/accounts.js";
 import type { GatewaySettings } from "../settings/store.js";
@@ -108,16 +115,12 @@ function retryableStatus(status: number): "rate_limit" | "auth" | "failure" | nu
 // connections (and Clash selector slots) indefinitely.
 const UPSTREAM_REQUEST_TIMEOUT_MS = 120_000;
 
-function sessionKeyFromHeaders(headers?: Record<string, string>): string | undefined {
-  if (!headers) return undefined;
-  for (const [name, value] of Object.entries(headers)) {
-    const lower = name.toLowerCase();
-    if ((lower === "x-session-id" || lower === "x-opencode-session") && value.trim()) {
-      return value.trim();
-    }
-  }
-  return undefined;
-}
+// Only small JSON error bodies are peeked for stale-reasoning classification;
+// anything larger (or without a declared small size) passes through untouched.
+const MAX_ERROR_PEEK_BYTES = 32 * 1024;
+
+/** Minimum gap between affinity snapshot persists (change hook is hot). */
+const AFFINITY_SAVE_MIN_INTERVAL_MS = 5_000;
 
 export class UpstreamClient {
   readonly rotator = new AccountRotator();
@@ -126,13 +129,16 @@ export class UpstreamClient {
   private clashQueue: ClashSwitchQueue;
   private bridgeFetch: typeof fetch;
   private attemptObserver?: UpstreamAttemptObserver;
+  private affinitySink: SessionAffinitySink | null;
+  private affinityLastSave = 0;
 
   constructor(
     settings: GatewaySettings,
     fetchImpl?: ProxyFetch,
     bridgeFetch?: typeof fetch,
     clashQueue?: ClashSwitchQueue,
-    attemptObserver?: UpstreamAttemptObserver
+    attemptObserver?: UpstreamAttemptObserver,
+    affinitySink?: SessionAffinitySink | null
   ) {
     this.settings = settings;
     this.syncFromSettings(settings);
@@ -143,6 +149,8 @@ export class UpstreamClient {
     this.bridgeFetch = bridgeFetch ?? globalThis.fetch;
     this.clashQueue = clashQueue ?? new ClashSwitchQueue();
     this.attemptObserver = attemptObserver;
+    this.affinitySink = affinitySink ?? null;
+    this.rotator.onAffinityChange = () => this.scheduleAffinitySave();
   }
 
   setAttemptObserver(observer?: UpstreamAttemptObserver): void {
@@ -176,6 +184,65 @@ export class UpstreamClient {
   syncAccounts(accounts: AccountConfig[]): void {
     this.settings = { ...this.settings, accounts };
     this.syncFromSettings(this.settings);
+  }
+
+  /**
+   * Re-apply persisted affinity after boot. Entries naming removed workers
+   * or older than the TTL are dropped by the rotator.
+   */
+  restoreAffinity(
+    snapshot: SessionAffinitySnapshot | { sessions?: PersistedAffinityEntry[]; blobs?: PersistedAffinityEntry[] },
+    now = Date.now(),
+    ttlMs = DEFAULT_SESSION_AFFINITY_TTL_MS
+  ): void {
+    this.rotator.restoreSessions(snapshot?.sessions, now, ttlMs);
+    this.rotator.restoreBlobs(snapshot?.blobs, now, ttlMs);
+  }
+
+  private scheduleAffinitySave(now = Date.now()): void {
+    const sink = this.affinitySink;
+    if (!sink || now - this.affinityLastSave < AFFINITY_SAVE_MIN_INTERVAL_MS) return;
+    this.affinityLastSave = now;
+    try {
+      sink.save({
+        sessions: this.rotator.snapshotSessions(),
+        blobs: this.rotator.snapshotBlobs(),
+      });
+    } catch {
+      // Persistence must never break relay traffic.
+    }
+  }
+
+  /**
+   * Peek at small JSON 400 bodies to recognize stale encrypted reasoning.
+   * Returns the original response untouched unless it was buffered, in which
+   * case an equivalent rebuilt response is returned for downstream piping.
+   */
+  private async peekStaleReasoningError(
+    response: Response
+  ): Promise<{ stale: boolean; response: Response }> {
+    const passthrough = { stale: false, response };
+    try {
+      if (response.status !== 400) return passthrough;
+      const contentType = response.headers.get("content-type") ?? "";
+      if (!contentType.includes("application/json")) return passthrough;
+      const declared = Number(response.headers.get("content-length") ?? "");
+      if (!Number.isFinite(declared) || declared <= 0 || declared > MAX_ERROR_PEEK_BYTES) {
+        return passthrough;
+      }
+      // Classify on text but rebuild from the original bytes so the
+      // downstream body stays bit-identical even for non-UTF8 payloads.
+      const bytes = await response.arrayBuffer();
+      const text = new TextDecoder().decode(bytes);
+      const rebuilt = new Response(bytes, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      });
+      return { stale: isStaleReasoningError(response.status, text), response: rebuilt };
+    } catch {
+      return passthrough;
+    }
   }
 
   /** Send one real request through exactly one configured worker without rotation/cooldown changes. */
@@ -416,10 +483,16 @@ export class UpstreamClient {
     const requestId = randomUUID();
     let last: UpstreamResult | null = null;
     let lastError: Error | null = null;
-    const sessionKey = opts.sessionKey ?? sessionKeyFromHeaders(opts.clientHeaders);
+    const sessionKey = resolveSessionKey({
+      sessionKey: opts.sessionKey,
+      clientHeaders: opts.clientHeaders,
+      body: opts.body,
+      protocol: operation,
+    });
+    const blobHashes = extractEncryptedBlobHashes(opts.body);
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const account = this.rotator.pick(sessionKey);
+      const account = this.rotator.pickWithHint(sessionKey ?? "", blobHashes);
       const startedAt = Date.now();
       const headers = this.buildHeaders(
         effectiveApiKey(account.apiKey, account.kind),
@@ -492,6 +565,30 @@ export class UpstreamClient {
           continue;
         }
 
+        if (response.status === 400) {
+          const checked = await this.peekStaleReasoningError(response);
+          last = {
+            status: checked.response.status,
+            headers: checked.response.headers,
+            body: checked.response.body,
+            accountId: account.id,
+            proxyId: account.proxyId,
+            clashNodeName: account.clashNodeName,
+          };
+          if (checked.stale) {
+            // The session history replays reasoning issued to another caller;
+            // keeping the binding (or marking success) would pin every future
+            // turn to the same failure. Drop the binding and surface the
+            // upstream error so the client starts a fresh turn.
+            this.rotator.unbindSession(sessionKey ?? "");
+            return last;
+          }
+        }
+
+        // Only successful service proves the worker accepts these blobs.
+        if (last.status >= 200 && last.status < 300 && blobHashes.length) {
+          this.rotator.learnBlobWorkers(blobHashes, account.id);
+        }
         this.rotator.markSuccess(account);
         return last;
       } catch (err) {
