@@ -128,11 +128,21 @@ const STALE_REASONING_PATTERNS = [
 ];
 
 /**
+ * Status-agnostic check for caller-bound reasoning rejections. Streaming
+ * upstreams can embed the failure inside an HTTP 200 SSE payload, where the
+ * status gate in isStaleReasoningError would miss it.
+ */
+export function containsStaleReasoningMessage(bodyText: string): boolean {
+  if (!bodyText) return false;
+  return STALE_REASONING_PATTERNS.some((pattern) => pattern.test(bodyText));
+}
+
+/**
  * Recognize upstream 400s caused by replaying encrypted reasoning that was
  * issued to a different caller. Only the status + message shape is matched;
  * the body itself is passed through untouched.
  */
 export function isStaleReasoningError(status: number, bodyText: string): boolean {
-  if (status !== 400 || !bodyText) return false;
-  return STALE_REASONING_PATTERNS.some((pattern) => pattern.test(bodyText));
+  if (status !== 400) return false;
+  return containsStaleReasoningMessage(bodyText);
 }

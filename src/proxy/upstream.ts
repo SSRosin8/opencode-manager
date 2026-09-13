@@ -11,6 +11,7 @@ import {
   buildResponsesUrl,
   buildModelsUrl,
   buildUpstreamHeaders,
+  containsStaleReasoningMessage,
   DEFAULT_SESSION_AFFINITY_TTL_MS,
   extractEncryptedBlobHashes,
   isStaleReasoningError,
@@ -115,9 +116,24 @@ function retryableStatus(status: number): "rate_limit" | "auth" | "failure" | nu
 // connections (and Clash selector slots) indefinitely.
 const UPSTREAM_REQUEST_TIMEOUT_MS = 120_000;
 
-// Only small JSON error bodies are peeked for stale-reasoning classification;
-// anything larger (or without a declared small size) passes through untouched.
+// Only small error bodies are peeked for stale-reasoning classification;
+// anything larger passes through untouched but stays byte-identical.
 const MAX_ERROR_PEEK_BYTES = 32 * 1024;
+
+/** Error payload shapes worth peeking (plain JSON or SSE-wrapped errors). */
+const PEEKABLE_ERROR_CONTENT_TYPES = ["application/json", "text/event-stream"];
+
+function concatBytes(chunks: Uint8Array[]): Uint8Array<ArrayBuffer> {
+  let size = 0;
+  for (const chunk of chunks) size += chunk.byteLength;
+  const out = new Uint8Array(size);
+  let at = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, at);
+    at += chunk.byteLength;
+  }
+  return out;
+}
 
 /** Minimum gap between affinity snapshot persists (change hook is hot). */
 const AFFINITY_SAVE_MIN_INTERVAL_MS = 5_000;
@@ -214,7 +230,57 @@ export class UpstreamClient {
   }
 
   /**
-   * Peek at small JSON 400 bodies to recognize stale encrypted reasoning.
+   * Persist affinity immediately, bypassing the change throttle. Best-effort
+   * hook for graceful shutdown: throttled saves can otherwise lag restarts
+   * and drop the newest bindings, which re-picks sessions onto new workers.
+   */
+  flushAffinity(): void {
+    const sink = this.affinitySink;
+    if (!sink) return;
+    this.affinityLastSave = Date.now();
+    try {
+      sink.save({
+        sessions: this.rotator.snapshotSessions(),
+        blobs: this.rotator.snapshotBlobs(),
+      });
+    } catch {
+      // Persistence must never break shutdown.
+    }
+  }
+
+  /**
+   * Settle blob affinity after a streamed body was piped downstream. HTTP 200
+   * proves nothing by itself: caller-bound reasoning rejections can arrive
+   * embedded in the SSE payload, in which case learning the blobs would pin
+   * future turns to the failing worker.
+   */
+  settleStreamBlobs(opts: {
+    body: unknown;
+    clientHeaders?: Record<string, string>;
+    protocol?: "chat" | "responses";
+    accountId: string;
+    status: number;
+    sseText: string;
+  }): void {
+    const blobHashes = extractEncryptedBlobHashes(opts.body);
+    if (!blobHashes.length) return;
+    if (containsStaleReasoningMessage(opts.sseText)) {
+      const sessionKey = resolveSessionKey({
+        clientHeaders: opts.clientHeaders,
+        body: opts.body,
+        protocol: opts.protocol,
+      });
+      this.rotator.unbindSession(sessionKey ?? "");
+      this.rotator.forgetBlobWorkers(blobHashes);
+      return;
+    }
+    if (opts.status >= 200 && opts.status < 300) {
+      this.rotator.learnBlobWorkers(blobHashes, opts.accountId);
+    }
+  }
+
+  /**
+   * Peek at small 400 bodies to recognize stale encrypted reasoning.
    * Returns the original response untouched unless it was buffered, in which
    * case an equivalent rebuilt response is returned for downstream piping.
    */
@@ -225,24 +291,110 @@ export class UpstreamClient {
     try {
       if (response.status !== 400) return passthrough;
       const contentType = response.headers.get("content-type") ?? "";
-      if (!contentType.includes("application/json")) return passthrough;
-      const declared = Number(response.headers.get("content-length") ?? "");
-      if (!Number.isFinite(declared) || declared <= 0 || declared > MAX_ERROR_PEEK_BYTES) {
+      if (!PEEKABLE_ERROR_CONTENT_TYPES.some((known) => contentType.includes(known))) {
         return passthrough;
       }
-      // Classify on text but rebuild from the original bytes so the
-      // downstream body stays bit-identical even for non-UTF8 payloads.
-      const bytes = await response.arrayBuffer();
-      const text = new TextDecoder().decode(bytes);
-      const rebuilt = new Response(bytes, {
-        status: response.status,
-        statusText: response.statusText,
-        headers: response.headers,
-      });
-      return { stale: isStaleReasoningError(response.status, text), response: rebuilt };
+      const declared = Number(response.headers.get("content-length") ?? "");
+      // Fast path: honestly-sized bodies buffer in one shot.
+      if (Number.isFinite(declared) && declared > 0 && declared <= MAX_ERROR_PEEK_BYTES) {
+        // Classify on text but rebuild from the original bytes so the
+        // downstream body stays bit-identical even for non-UTF8 payloads.
+        const bytes = await response.arrayBuffer();
+        const rebuilt = new Response(bytes, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: response.headers,
+        });
+        return { stale: isStaleReasoningError(response.status, new TextDecoder().decode(bytes)), response: rebuilt };
+      }
+      // Slow path: missing or untrusted length (chunked). Bounded peek so a
+      // misbehaving upstream cannot force unbounded buffering here.
+      const peeked = await this.peekBoundedErrorBody(response);
+      if (!peeked || peeked.bytes === null) {
+        return peeked ? { stale: false, response: peeked.response } : passthrough;
+      }
+      return {
+        stale: isStaleReasoningError(response.status, new TextDecoder().decode(peeked.bytes)),
+        response: peeked.response,
+      };
     } catch {
       return passthrough;
     }
+  }
+
+  /**
+   * Buffer an error body up to the peek budget and rebuild an equivalent
+   * response. Over-budget bodies replay the buffered prefix and keep
+   * streaming the remainder, so downstream stays complete (`bytes` is null).
+   */
+  private async peekBoundedErrorBody(
+    response: Response
+  ): Promise<{ bytes: Uint8Array<ArrayBuffer> | null; response: Response } | null> {
+    if (!response.body) return null;
+    const meta = {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    };
+    let reader: ReadableStreamDefaultReader<Uint8Array>;
+    try {
+      reader = response.body.getReader();
+    } catch {
+      return null;
+    }
+    const release = (): void => {
+      try {
+        reader.releaseLock();
+      } catch {
+        // A released or errored reader needs no further cleanup.
+      }
+    };
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    let done = false;
+    try {
+      while (!done && size <= MAX_ERROR_PEEK_BYTES) {
+        const next = await reader.read();
+        done = next.done;
+        if (next.value) {
+          chunks.push(next.value);
+          size += next.value.byteLength;
+        }
+      }
+    } catch {
+      release();
+      return null;
+    }
+    const prefix = concatBytes(chunks);
+    if (done && size <= MAX_ERROR_PEEK_BYTES) {
+      release();
+      return { bytes: prefix, response: new Response(prefix, meta) };
+    }
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(prefix);
+        if (done) {
+          controller.close();
+          release();
+          return;
+        }
+        void (async () => {
+          try {
+            for (;;) {
+              const next = await reader.read();
+              if (next.done) break;
+              if (next.value) controller.enqueue(next.value);
+            }
+            controller.close();
+          } catch (error) {
+            controller.error(error);
+          } finally {
+            release();
+          }
+        })();
+      },
+    });
+    return { bytes: null, response: new Response(stream, meta) };
   }
 
   /** Send one real request through exactly one configured worker without rotation/cooldown changes. */
@@ -578,15 +730,19 @@ export class UpstreamClient {
           if (checked.stale) {
             // The session history replays reasoning issued to another caller;
             // keeping the binding (or marking success) would pin every future
-            // turn to the same failure. Drop the binding and surface the
-            // upstream error so the client starts a fresh turn.
+            // turn to the same failure. Drop the binding and the wrong blob
+            // hints, then surface the upstream error so the client starts a
+            // fresh turn.
             this.rotator.unbindSession(sessionKey ?? "");
+            this.rotator.forgetBlobWorkers(blobHashes);
             return last;
           }
         }
 
         // Only successful service proves the worker accepts these blobs.
-        if (last.status >= 200 && last.status < 300 && blobHashes.length) {
+        // Streams settle after the body is piped downstream: an SSE-embedded
+        // rejection still arrives with HTTP 200 (see settleStreamBlobs).
+        if (!opts.stream && last.status >= 200 && last.status < 300 && blobHashes.length) {
           this.rotator.learnBlobWorkers(blobHashes, account.id);
         }
         this.rotator.markSuccess(account);

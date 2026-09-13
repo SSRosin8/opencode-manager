@@ -35,6 +35,7 @@ export {
   buildModelsUrl,
 } from "./url.js";
 export {
+  containsStaleReasoningMessage,
   extractEncryptedBlobHashes,
   isStaleReasoningError,
   resolveSessionKey,

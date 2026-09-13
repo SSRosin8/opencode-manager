@@ -282,6 +282,20 @@ export class AccountRotator {
   }
 
   /**
+   * Drop encrypted-reasoning hints that pointed at the wrong worker. Used
+   * when a turn fails as caller-bound stale reasoning: keeping the mapping
+   * would route the next turn carrying the same blobs back to the failure.
+   */
+  forgetBlobWorkers(hashes: string[]): void {
+    if (!hashes.length) return;
+    let changed = false;
+    for (const hash of hashes) {
+      if (this.blobWorkers.delete(hash)) changed = true;
+    }
+    if (changed) this.notifyAffinityChange();
+  }
+
+  /**
    * Hint worker for keyless turns carrying known encrypted reasoning.
    * Returns a worker only on a unanimous, fresh mapping to a ready account.
    */

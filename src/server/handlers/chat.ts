@@ -68,10 +68,11 @@ export async function handleChat(
     }
 
     try {
+      const clientHeaders = clientHeadersFrom(req);
       const result = await upstream.chatCompletions({
         body,
         stream,
-        clientHeaders: clientHeadersFrom(req),
+        clientHeaders,
         protocol: isResponses ? "responses" : "chat",
       });
       store.recordRequest(
@@ -122,6 +123,17 @@ export async function handleChat(
         const usage = parseUsageFromSseBuffer(sseText);
         if (usage) workerStats.addTokens(result.accountId, usage, reqModel);
         else if (result.status >= 200 && result.status < 300) workerStats.recordMissingUsage(result.accountId);
+        // Streams learn blob affinity only here: an SSE-embedded
+        // caller-bound rejection arrives with HTTP 200 and must unbind
+        // instead of teaching the hint index the failing worker.
+        upstream.settleStreamBlobs({
+          body,
+          clientHeaders,
+          protocol: isResponses ? "responses" : "chat",
+          accountId: result.accountId,
+          status: result.status,
+          sseText,
+        });
       } else {
         await pipeUpstream(res, result);
       }
